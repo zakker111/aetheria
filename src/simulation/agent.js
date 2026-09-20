@@ -36,6 +36,11 @@ export class Agent {
     this.currentAction = null;
     this.goals = [];
     
+    // Lifecycle
+    this.age = 0;
+    this.maxAge = 80 + Math.floor(Math.random() * 40); // 80-120 days
+    this.children = 0;
+    
     // Movement
     this.speed = 1;
     this.path = null;
@@ -43,13 +48,19 @@ export class Agent {
 
   // Update needs over time (doc 03A: update urgent needs)
   updateNeeds() {
-    this.needs.food = Math.max(0, this.needs.food - 0.1);
-    this.needs.water = Math.max(0, this.needs.water - 0.12);
-    this.needs.rest = Math.max(0, this.needs.rest - 0.05);
+    this.needs.food = Math.max(0, this.needs.food - 0.08);
+    this.needs.water = Math.max(0, this.needs.water - 0.1);
+    this.needs.rest = Math.max(0, this.needs.rest - 0.04);
     this.needs.social = Math.max(0, this.needs.social - 0.02);
     
-    // Death from starvation/dehydration
+    // Aging
+    this.age += 0.001; // Age increases slowly
+    
+    // Death from starvation/dehydration or old age
     if (this.needs.food <= 0 || this.needs.water <= 0) {
+      this.alive = false;
+    }
+    if (this.age >= this.maxAge) {
       this.alive = false;
     }
   }
@@ -91,19 +102,26 @@ export class Agent {
     this.goals = [];
     
     // Urgent needs generate high-priority goals
-    if (this.needs.food < 30) {
+    if (this.needs.food < 40) {
       this.goals.push({ type: "find_food", priority: 100 - this.needs.food });
     }
-    if (this.needs.water < 30) {
+    if (this.needs.water < 40) {
       this.goals.push({ type: "find_water", priority: 100 - this.needs.water });
     }
-    if (this.needs.rest < 20) {
+    if (this.needs.rest < 30) {
       this.goals.push({ type: "rest", priority: 80 - this.needs.rest });
     }
     
-    // Lower priority goals
-    if (this.needs.social < 40) {
+    // Social goal - important for reproduction
+    if (this.needs.social < 50 && this.personality.social > 0.3) {
       this.goals.push({ type: "socialize", priority: 50 });
+    }
+    
+    // Reproduction goal (adults with good needs can reproduce)
+    if (this.age > 20 && this.age < this.maxAge - 20 && 
+        this.needs.food > 70 && this.needs.water > 70 && 
+        this.needs.social > 60 && this.children < 5) {
+      this.goals.push({ type: "reproduce", priority: 40 });
     }
     
     // Default goal: wander/explore
@@ -155,11 +173,26 @@ export class Agent {
           
         case "socialize":
           for (const agent of perception.nearbyAgents) {
-            if (agent.alive) {
+            if (agent.alive && agent !== this) {
               actions.push({
                 type: "socialize",
                 target: agent,
                 score: goal.priority * this.personality.social
+              });
+            }
+          }
+          break;
+          
+        case "reproduce":
+          // Find a suitable mate
+          for (const agent of perception.nearbyAgents) {
+            if (agent.alive && agent !== this && 
+                agent.age > 20 && agent.age < agent.maxAge - 20 &&
+                agent.needs.food > 60 && agent.needs.water > 60) {
+              actions.push({
+                type: "reproduce",
+                target: agent,
+                score: goal.priority * (this.personality.social + 0.5)
               });
             }
           }
@@ -194,7 +227,7 @@ export class Agent {
 
   // Execute action for one tick (doc 03A: execute only the amount of work possible this step)
   executeAction(action, world, eventBus) {
-    if (!action) return;
+    if (!action) return null;
     
     this.currentAction = action;
     
@@ -241,12 +274,47 @@ export class Agent {
         if (this.distanceTo(action.target) < 2) {
           this.needs.social = Math.min(100, this.needs.social + 10);
           action.target.needs.social = Math.min(100, action.target.needs.social + 10);
+          
+          // Build relationship
+          const relKey = `${action.target.id}`;
+          const currentRel = this.relationships.get(relKey) || 0;
+          this.relationships.set(relKey, Math.min(100, currentRel + 5));
+          
           eventBus.emit("RELATIONSHIP_CHANGED", {
             agentId1: this.id,
             agentId2: action.target.id,
-            change: 1
+            change: 5
           });
           this.currentAction = null;
+        } else {
+          this.moveToward(action.target, world);
+        }
+        break;
+        
+      case "reproduce":
+        if (this.distanceTo(action.target) < 2) {
+          // Successfully reproduce!
+          this.needs.social = Math.min(100, this.needs.social + 20);
+          this.needs.food = Math.max(0, this.needs.food - 15);
+          this.needs.water = Math.max(0, this.needs.water - 15);
+          this.children++;
+          
+          action.target.children++;
+          action.target.needs.social = Math.min(100, action.target.needs.social + 20);
+          
+          // Create baby agent nearby
+          const babyX = this.x + (Math.random() - 0.5) * 3;
+          const babyY = this.y + (Math.random() - 0.5) * 3;
+          
+          eventBus.emit("AGENT_BORN", {
+            parentId1: this.id,
+            parentId2: action.target.id,
+            x: babyX,
+            y: babyY
+          });
+          
+          this.currentAction = null;
+          return { type: "birth", x: babyX, y: babyY };
         } else {
           this.moveToward(action.target, world);
         }
@@ -268,6 +336,8 @@ export class Agent {
         }
         break;
     }
+    
+    return null;
   }
 
   moveToward(target, world) {
@@ -295,6 +365,9 @@ export class Agent {
       x: this.x,
       y: this.y,
       alive: this.alive,
+      age: this.age,
+      maxAge: this.maxAge,
+      children: this.children,
       needs: { ...this.needs },
       personality: { ...this.personality },
       skills: { ...this.skills }
@@ -305,6 +378,9 @@ export class Agent {
     const agent = new Agent(data.x, data.y, idGen);
     agent.id = data.id;
     agent.alive = data.alive;
+    agent.age = data.age || 0;
+    agent.maxAge = data.maxAge || (80 + Math.floor(Math.random() * 40));
+    agent.children = data.children || 0;
     agent.needs = { ...data.needs };
     agent.personality = { ...data.personality };
     agent.skills = { ...data.skills };
