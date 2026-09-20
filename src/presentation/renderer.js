@@ -23,6 +23,7 @@ export class CanvasRenderer {
     let lastY = 0;
     
     this.canvas.addEventListener("mousedown", (e) => {
+      e.preventDefault();
       isDragging = true;
       lastX = e.clientX;
       lastY = e.clientY;
@@ -30,6 +31,7 @@ export class CanvasRenderer {
     
     this.canvas.addEventListener("mousemove", (e) => {
       if (isDragging) {
+        e.preventDefault();
         const dx = e.clientX - lastX;
         const dy = e.clientY - lastY;
         this.camera.x -= dx / this.camera.zoom;
@@ -39,7 +41,12 @@ export class CanvasRenderer {
       }
     });
     
-    this.canvas.addEventListener("mouseup", () => {
+    this.canvas.addEventListener("mouseup", (e) => {
+      e.preventDefault();
+      isDragging = false;
+    });
+    
+    this.canvas.addEventListener("mouseleave", () => {
       isDragging = false;
     });
     
@@ -49,17 +56,18 @@ export class CanvasRenderer {
       const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
       this.camera.zoom *= zoomFactor;
       this.camera.zoom = Math.max(2, Math.min(20, this.camera.zoom));
-    });
+    }, { passive: false });
     
     // Click to use god powers
     this.canvas.addEventListener("click", (e) => {
+      e.preventDefault();
       const rect = this.canvas.getBoundingClientRect();
       const screenX = e.clientX - rect.left;
       const screenY = e.clientY - rect.top;
       const worldPos = this.screenToWorld(screenX, screenY);
       
-      // Emit click event for interaction layer to handle
-      this.canvas.dispatchEvent(new CustomEvent("worldclick", {
+      // Dispatch custom event on window to ensure it's caught
+      window.dispatchEvent(new CustomEvent("worldclick", {
         detail: { x: worldPos.x, y: worldPos.y }
       }));
     });
