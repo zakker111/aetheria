@@ -1,0 +1,14 @@
+node_modules/
+package-lock.json
+dist/
+build/
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+.env
+.env.local
