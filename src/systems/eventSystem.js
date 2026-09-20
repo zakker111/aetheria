@@ -192,7 +192,7 @@ export class EventSystem {
     // Select random event
     const selected = availableEvents[Math.floor(Math.random() * availableEvents.length)];
     
-    return this.createEvent(selected);
+    return this.createEvent(selected, tick);
   }
   
   // Get events that make sense given current state
@@ -239,7 +239,7 @@ export class EventSystem {
   }
   
   // Create event instance
-  createEvent(eventDef) {
+  createEvent(eventDef, currentTick = 0) {
     const event = {
       id: `event_${Date.now()}`,
       eventId: eventDef.id,
@@ -248,8 +248,9 @@ export class EventSystem {
       severity: eventDef.severity,
       description: eventDef.description,
       startedAt: Date.now(),
+      startedAtTick: currentTick,
       duration: eventDef.duration,
-      endsAtTick: this.getNextTickFromDuration(eventDef.duration),
+      endsAtTick: currentTick + eventDef.duration,
       effects: { ...eventDef.effects },
       affectedAgents: new Set(),
       affectedSettlements: new Set(),
@@ -272,7 +273,7 @@ export class EventSystem {
   }
   
   getNextTickFromDuration(durationTicks) {
-    // Simplified - would need clock reference in real implementation
+    // This method is deprecated - use currentTick + duration instead
     return durationTicks;
   }
   
@@ -456,7 +457,6 @@ export class EventSystem {
   applyMigrationEffect(event, simulation) {
     // Spawn new agents at edge of map
     const { agents, world, idGen } = simulation;
-    const AgentClass = require('../simulation/agent.js').Agent;
     
     const migrantCount = event.effects.populationIncrease;
     
@@ -467,20 +467,17 @@ export class EventSystem {
       const y = world.height / 2 + Math.sin(angle) * distance;
       
       if (world.isWalkable(Math.floor(x), Math.floor(y))) {
-        const migrant = new AgentClass(x, y, idGen);
+        const migrant = simulation.spawnAgent(x, y);
         // Give migrants varied skills
         migrant.skills.gather = 1 + Math.random() * 2;
         migrant.skills.build = 1 + Math.random() * 2;
         migrant.skills.social = 1 + Math.random() * 2;
-        agents.push(migrant);
-        world.addToSpatialIndex(Math.floor(x), Math.floor(y), migrant);
         event.affectedAgents.add(migrant.id);
       }
     }
   }
   
   applyResourceDiscoveryEffect(event, world, simulation) {
-    const { x, y } = event.effects;
     const resources = event.effects.spawnResources;
     const amount = event.effects.amount;
     
@@ -489,10 +486,7 @@ export class EventSystem {
       const y = Math.random() * world.height;
       
       if (world.isWalkable(Math.floor(x), Math.floor(y))) {
-        const ResourceClass = require('../simulation/resource.js').Resource;
-        const resource = new ResourceClass(x, y, resourceType, amount, simulation.idGen);
-        simulation.resources.push(resource);
-        world.addToSpatialIndex(Math.floor(x), Math.floor(y), resource);
+        simulation.createResource(x, y, resourceType, amount);
       }
     }
   }
@@ -559,21 +553,23 @@ export class EventSystem {
     // Remove completed events
     this.activeEvents = this.activeEvents.filter(event => {
       if (tick >= event.endsAtTick) {
-        this.resolveEvent(event);
+        this.resolveEvent(event, simulation);
         return false;
       }
       return true;
     });
   }
   
-  resolveEvent(event) {
+  resolveEvent(event, simulation) {
     // Clean up temporary effects
-    for (const agentId of event.affectedAgents) {
-      const agent = simulation?.agents?.find(a => a.id === agentId);
-      if (agent) {
-        agent.productivityMultiplier = 1.0;
-        agent.currentAction = null;
-        agent.fleeTarget = null;
+    if (simulation && simulation.agents) {
+      for (const agentId of event.affectedAgents) {
+        const agent = simulation.agents.find(a => a.id === agentId);
+        if (agent) {
+          agent.productivityMultiplier = 1.0;
+          agent.currentAction = null;
+          agent.fleeTarget = null;
+        }
       }
     }
     

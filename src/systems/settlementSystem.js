@@ -288,7 +288,8 @@ export class SettlementSystem {
         id,
         {
           ...s,
-          agentIds: Array.from(s.agentIds)
+          agentIds: Array.from(s.agentIds),
+          previousPopulation: s.previousPopulation || s.population
         }
       ]),
       agentSettlementMap: Array.from(this.agentSettlementMap.entries()),

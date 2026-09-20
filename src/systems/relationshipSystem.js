@@ -86,15 +86,43 @@ export class RelationshipSystem {
     
     this.setRelationship(agentId1, agentId2, updated);
     
-    // Reciprocal relationship (weaker effect)
-    const reciprocalChanges = {
-      friendship: changes.friendship ? changes.friendship * 0.7 : 0,
-      rivalry: changes.rivalry ? changes.rivalry * 0.7 : 0,
-      romance: changes.romance ? changes.romance * 0.8 : 0,
-      trust: changes.trust ? changes.trust * 0.6 : 0
-    };
-    this.modifyRelationship(agentId2, agentId1, reciprocalChanges);
+    // Reciprocal relationship (weaker effect) - only if not already familial
+    if (!updated.familial && changes.friendship !== undefined) {
+      const reciprocalChanges = {
+        friendship: changes.friendship * 0.7,
+        trust: changes.trust ? changes.trust * 0.6 : 0
+      };
+      const existingRecip = this.getRelationship(agentId2, agentId1);
+      if (!existingRecip || !existingRecip.familial) {
+        this.modifyRelationshipDirect(agentId2, agentId1, reciprocalChanges);
+      }
+    }
     
+    return updated;
+  }
+  
+  // Direct modification without reciprocal (to prevent infinite recursion)
+  modifyRelationshipDirect(agentId1, agentId2, changes) {
+    const current = this.getRelationship(agentId1, agentId2) || {};
+    const updated = { ...current };
+
+    if (changes.friendship !== undefined) {
+      updated.friendship = Math.max(-100, Math.min(100, (updated.friendship || 0) + changes.friendship));
+    }
+    if (changes.rivalry !== undefined) {
+      updated.rivalry = Math.max(-100, Math.min(100, (updated.rivalry || 0) + changes.rivalry));
+    }
+    if (changes.romance !== undefined) {
+      updated.romance = Math.max(-100, Math.min(100, (updated.romance || 0) + changes.romance));
+    }
+    if (changes.trust !== undefined) {
+      updated.trust = Math.max(0, Math.min(100, (updated.trust || 50) + changes.trust));
+    }
+    
+    updated.interactions = (updated.interactions || 0) + 1;
+    updated.lastInteraction = Date.now();
+    
+    this.setRelationship(agentId1, agentId2, updated);
     return updated;
   }
   

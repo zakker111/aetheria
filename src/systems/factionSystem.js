@@ -478,7 +478,7 @@ export class FactionSystem {
       community: value > 0.7 ? 'Collectivist' : value < 0.3 ? 'Individualist' : 'Communal',
       innovation: value > 0.7 ? 'Innovative' : value < 0.3 ? 'Conservative' : 'Pragmatic'
     };
-    return labels[beliefs] || belief;
+    return labels[belief] || belief;
   }
   
   serialize() {
