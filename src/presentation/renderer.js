@@ -119,7 +119,11 @@ export class CanvasRenderer {
       grassland: "#16a34a",
       forest: "#15803d",
       desert: "#fbbf24",
-      mountain: "#78716c"
+      mountain: "#78716c",
+      snow: "#f0f9ff",
+      tundra: "#a8a29e",
+      savanna: "#84cc16",
+      jungle: "#065f46"
     };
     return colors[type] || "#000";
   }
@@ -162,19 +166,49 @@ export class CanvasRenderer {
       if (!agent.alive) continue;
       
       const screen = this.worldToScreen(agent.x, agent.y);
+      const size = this.camera.zoom * 0.4;
       
-      // Agent body
-      this.ctx.fillStyle = "#fbbf24";
+      // Agent body - color based on current action
+      let bodyColor = "#fbbf24"; // default yellow
+      if (agent.currentAction) {
+        switch(agent.currentAction.type) {
+          case "gather_food": bodyColor = "#22c55e"; break;
+          case "drink_water": bodyColor = "#3b82f6"; break;
+          case "rest": bodyColor = "#a855f7"; break;
+          case "socialize": bodyColor = "#ec4899"; break;
+          case "reproduce": bodyColor = "#f472b6"; break;
+        }
+      }
+      
+      this.ctx.fillStyle = bodyColor;
       this.ctx.beginPath();
-      this.ctx.arc(screen.x, screen.y, this.camera.zoom * 0.4, 0, Math.PI * 2);
+      this.ctx.arc(screen.x, screen.y, size, 0, Math.PI * 2);
       this.ctx.fill();
       
-      // Needs indicator (food level as color intensity)
+      // Needs indicator (food level as inner circle opacity)
       const foodLevel = agent.needs.food / 100;
-      this.ctx.fillStyle = `rgba(255, 255, 255, ${foodLevel})`;
+      this.ctx.fillStyle = `rgba(255, 255, 255, ${foodLevel * 0.8})`;
       this.ctx.beginPath();
-      this.ctx.arc(screen.x, screen.y, this.camera.zoom * 0.2, 0, Math.PI * 2);
+      this.ctx.arc(screen.x, screen.y, size * 0.5, 0, Math.PI * 2);
       this.ctx.fill();
+      
+      // Show action text above agent (when zoomed in)
+      if (this.camera.zoom > 5 && agent.currentAction) {
+        this.ctx.fillStyle = "#fff";
+        this.ctx.font = `${Math.max(8, this.camera.zoom)}px monospace`;
+        const actionText = agent.currentAction.type.replace('_', ' ');
+        this.ctx.textAlign = "center";
+        this.ctx.fillText(actionText, screen.x, screen.y - size - 2);
+      }
+      
+      // Age indicator for old agents
+      if (agent.age > agent.maxAge * 0.8) {
+        this.ctx.strokeStyle = "#fff";
+        this.ctx.lineWidth = 1;
+        this.ctx.beginPath();
+        this.ctx.arc(screen.x, screen.y, size + 2, 0, Math.PI * 2);
+        this.ctx.stroke();
+      }
     }
   }
 
@@ -187,5 +221,46 @@ export class CanvasRenderer {
     this.ctx.fillText(`Agents: ${this.simulation.agents.length}`, 10, 40);
     this.ctx.fillText(`Resources: ${this.simulation.resources.length}`, 10, 60);
     this.ctx.fillText(`Zoom: ${this.camera.zoom.toFixed(1)}x`, 10, 80);
+    
+    // Show births/deaths counter if available
+    if (this.simulation.birthsThisSession) {
+      this.ctx.fillText(`Births: ${this.simulation.birthsThisSession}`, 10, 100);
+    }
+    if (this.simulation.deathsThisSession) {
+      this.ctx.fillText(`Deaths: ${this.simulation.deathsThisSession}`, 10, 120);
+    }
+    
+    // Phase 2: Show settlements
+    let yOffset = 150;
+    for (const settlement of this.simulation.settlementSystem.settlements.values()) {
+      this.ctx.fillStyle = "#fbbf24";
+      this.ctx.fillText(`${settlement.name} (${settlement.population})`, 10, yOffset);
+      yOffset += 20;
+      
+      // Show growth trend
+      this.ctx.fillStyle = settlement.growthTrend === 'growing' ? '#22c55e' : 
+                           settlement.growthTrend === 'declining' ? '#dc2626' : '#fff';
+      this.ctx.fillText(`  ${settlement.growthTrend}`, 20, yOffset);
+      yOffset += 25;
+    }
+    
+    // Show job statistics if agents have jobs
+    const jobStats = {};
+    for (const agentId of this.simulation.agents.map(a => a.id)) {
+      const jobData = this.simulation.economySystem.getAgentJob(agentId);
+      if (jobData && jobData.job !== 'unemployed') {
+        jobStats[jobData.job] = (jobStats[jobData.job] || 0) + 1;
+      }
+    }
+    
+    if (Object.keys(jobStats).length > 0) {
+      this.ctx.fillStyle = "#fff";
+      this.ctx.fillText("Jobs:", 10, yOffset + 10);
+      yOffset += 30;
+      for (const [job, count] of Object.entries(jobStats)) {
+        this.ctx.fillText(`  ${job}: ${count}`, 20, yOffset);
+        yOffset += 18;
+      }
+    }
   }
 }
