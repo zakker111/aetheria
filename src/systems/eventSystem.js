@@ -199,14 +199,19 @@ export class EventSystem {
   getAvailableEvents(agents, settlements, world) {
     const available = [];
     
+    // Ensure settlements is an array
+    const settlementArray = Array.isArray(settlements) ? settlements : Array.from(settlements || []);
+    
     // Context-aware event filtering
-    const hasWaterNearby = settlements.some(s => {
+    const hasWaterNearby = settlementArray.some(s => {
+      if (!s || !s.center) return false;
       const entities = world.getEntitiesAt(Math.floor(s.center.x), Math.floor(s.center.y));
       return entities.some(e => e.type === 'resource' && e.resourceType === 'water');
     });
     
     const highPopulation = agents.filter(a => a.alive).length > 30;
-    const lowFood = settlements.some(s => {
+    const lowFood = settlementArray.some(s => {
+      if (!s) return false;
       const stats = { food: 0 }; // Would need actual stats
       return stats.food < 20;
     });
@@ -279,7 +284,10 @@ export class EventSystem {
   
   // Apply event effects to the simulation
   applyEventEffects(event, simulation) {
-    const { agents, settlements, world } = simulation;
+    const { agents, world } = simulation;
+    // Get settlements from settlementSystem if available, otherwise use empty array
+    const settlements = simulation.settlementSystem ? 
+      Array.from(simulation.settlementSystem.settlements.values()) : [];
     
     switch (event.eventId) {
       case 'fire':
