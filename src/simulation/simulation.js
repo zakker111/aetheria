@@ -12,6 +12,7 @@ import { SettlementSystem } from "../systems/settlementSystem.js";
 import { EconomySystem } from "../systems/economySystem.js";
 import { EventSystem } from "../systems/eventSystem.js";
 import { FactionSystem } from "../systems/factionSystem.js";
+import { CraftingSystem } from "../systems/craftingSystem.js";
 
 export class Simulation {
   constructor(seed = Date.now()) {
@@ -29,6 +30,7 @@ export class Simulation {
     this.relationshipSystem = new RelationshipSystem();
     this.settlementSystem = new SettlementSystem();
     this.economySystem = new EconomySystem();
+    this.craftingSystem = new CraftingSystem(this);
     
     // Phase 3 Systems
     this.eventSystem = new EventSystem();
@@ -137,6 +139,7 @@ export class Simulation {
     this.updateRelationships();
     this.updateSettlements();
     this.updateEconomy();
+    this.updateCrafting();
     
     // Phase 3: Update advanced systems
     this.updateEvents();
@@ -179,7 +182,7 @@ export class Simulation {
     // Assign jobs to unemployed agents in settlements
     if (this.clock.tick % 20 === 0) {
       for (const settlement of this.settlementSystem.settlements.values()) {
-        const availableJobs = ['gatherer', 'farmer', 'lumberjack', 'miner', 'builder'];
+        const availableJobs = ['gatherer', 'farmer', 'lumberjack', 'miner', 'builder', 'craftsman'];
         
         for (const agentId of settlement.agentIds) {
           const agent = this.agents.find(a => a.id === agentId);
@@ -207,6 +210,30 @@ export class Simulation {
         }
       }
       this.economySystem.updateMarketPrices(settlementResources);
+    }
+  }
+  
+  updateCrafting() {
+    // Update all workshops and crafting progress
+    this.craftingSystem.update();
+    
+    // Auto-assign craftsmen to workshops every 30 ticks
+    if (this.clock.tick % 30 === 0) {
+      this.craftingSystem.workshops.forEach((workshop, workshopId) => {
+        // Find unemployed agents with crafting skills in this settlement
+        const settlement = this.settlementSystem.getAgentSettlement(workshop.assignedWorkers[0]);
+        if (settlement) {
+          for (const agentId of settlement.agentIds) {
+            const agent = this.agents.find(a => a.id === agentId);
+            if (agent && agent.alive && !agent.workplace) {
+              const jobInfo = this.economySystem.getAgentJob(agentId);
+              if (jobInfo && jobInfo.job === 'craftsman') {
+                this.craftingSystem.assignWorker(workshopId, agentId);
+              }
+            }
+          }
+        }
+      });
     }
   }
   
@@ -270,7 +297,6 @@ export class Simulation {
   }
 
   updateAgents() {
-    const allEntities = [...this.agents, ...this.resources, ...this.buildings];
     const births = [];
     
     for (const agent of this.agents) {
@@ -279,8 +305,8 @@ export class Simulation {
       // Update needs (includes aging and death check)
       agent.updateNeeds();
       
-      // Perceive world
-      const perception = agent.perceive(this.world, allEntities);
+      // Perceive world using spatial index (much more efficient than passing all entities)
+      const perception = agent.perceive(this.world, []);
       
       // Generate goals
       agent.generateGoals();
@@ -289,8 +315,8 @@ export class Simulation {
       const actions = agent.generateActions(perception);
       const chosenAction = agent.chooseAction(actions);
       
-      // Execute action
-      const result = agent.executeAction(chosenAction, this.world, this.eventBus);
+      // Execute action with crafting system reference
+      const result = agent.executeAction(chosenAction, this.world, this.eventBus, this.craftingSystem);
       
       // Handle birth result
       if (result && result.type === "birth") {
@@ -385,6 +411,7 @@ export class Simulation {
       relationships: this.relationshipSystem.serialize(),
       settlements: this.settlementSystem.serialize(),
       economy: this.economySystem.serialize(),
+      crafting: this.craftingSystem.serialize(),
       // Phase 3 systems
       events: this.eventSystem.serialize(),
       factions: this.factionSystem.serialize()
@@ -429,6 +456,9 @@ export class Simulation {
     }
     if (data.economy) {
       sim.economySystem = EconomySystem.deserialize(data.economy);
+    }
+    if (data.crafting) {
+      sim.craftingSystem = CraftingSystem.deserialize(data.crafting, sim);
     }
     
     // Restore Phase 3 systems

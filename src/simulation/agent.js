@@ -28,7 +28,25 @@ export class Agent {
     this.skills = {
       gather: 1.0,
       build: 1.0,
-      farm: 1.0
+      farm: 1.0,
+      carpentry: 0,
+      smithing: 0,
+      milling: 0,
+      cooking: 0
+    };
+    
+    // Inventory for crafted items and resources
+    this.inventory = {
+      wood_log: 0,
+      wood_plank: 0,
+      ore_iron: 0,
+      iron_ingot: 0,
+      wheat: 0,
+      flour: 0,
+      tool_handle: 0,
+      pickaxe: 0,
+      bread: 0,
+      capacity: 10
     };
     
     this.memory = [];
@@ -44,6 +62,10 @@ export class Agent {
     // Movement
     this.speed = 1;
     this.path = null;
+    
+    // Job and workplace
+    this.job = null;
+    this.workplace = null;
   }
 
   // Update needs over time (doc 03A: update urgent needs)
@@ -75,8 +97,13 @@ export class Agent {
       opportunities: []
     };
     
-    const radius = 10;
-    for (const entity of entities) {
+    // Larger perception radius for better resource finding
+    const radius = 25;
+    
+    // Use spatial index for efficient lookup instead of iterating all entities
+    const nearby = world.getEntitiesNear(Math.floor(this.x), Math.floor(this.y), Math.ceil(radius));
+    
+    for (const entity of nearby) {
       if (entity.id === this.id) continue;
       
       const dx = entity.x - this.x;
@@ -101,9 +128,19 @@ export class Agent {
   generateGoals() {
     this.goals = [];
     
+    // If agent has a job, prioritize work goals
+    if (this.job === 'craftsman' && this.workplace) {
+      this.goals.push({ type: "go_to_work", priority: 80 });
+    }
+    
     // Urgent needs generate high-priority goals
     if (this.needs.food < 40) {
-      this.goals.push({ type: "find_food", priority: 100 - this.needs.food });
+      // Check if we have food in inventory
+      if (this.inventory.bread > 0 || this.inventory.wheat > 0) {
+        this.goals.push({ type: "eat_from_inventory", priority: 100 - this.needs.food });
+      } else {
+        this.goals.push({ type: "find_food", priority: 100 - this.needs.food });
+      }
     }
     if (this.needs.water < 40) {
       this.goals.push({ type: "find_water", priority: 100 - this.needs.water });
@@ -139,6 +176,24 @@ export class Agent {
     
     for (const goal of this.goals) {
       switch (goal.type) {
+        case "go_to_work":
+          // Go to workplace
+          if (this.workplace) {
+            actions.push({
+              type: "go_to_workplace",
+              workplaceId: this.workplace,
+              score: goal.priority
+            });
+          }
+          break;
+          
+        case "eat_from_inventory":
+          actions.push({
+            type: "eat_from_inventory",
+            score: goal.priority
+          });
+          break;
+          
         case "find_food":
           // Find nearby food resources
           for (const resource of perception.nearbyResources) {
@@ -226,23 +281,54 @@ export class Agent {
   }
 
   // Execute action for one tick (doc 03A: execute only the amount of work possible this step)
-  executeAction(action, world, eventBus) {
+  executeAction(action, world, eventBus, craftingSystem) {
     if (!action) return null;
     
     this.currentAction = action;
     
     switch (action.type) {
+      case "go_to_workplace":
+        // Find workshop and move to it
+        const workshop = craftingSystem ? craftingSystem.workshops.get(action.workplaceId) : null;
+        if (workshop) {
+          const workshopEntity = { x: workshop.x + 1, y: workshop.y + 1 }; // Center of workshop
+          if (this.distanceTo(workshopEntity) < 2) {
+            // Arrived at workplace - start working
+            this.currentAction = null;
+          } else {
+            this.moveToward(workshopEntity, world);
+          }
+        }
+        break;
+        
+      case "eat_from_inventory":
+        // Eat food from inventory
+        if (this.inventory.bread > 0) {
+          this.inventory.bread--;
+          this.needs.food = Math.min(100, this.needs.food + 40);
+          this.currentAction = null;
+        } else if (this.inventory.wheat > 0) {
+          this.inventory.wheat--;
+          this.needs.food = Math.min(100, this.needs.food + 15);
+          this.currentAction = null;
+        }
+        break;
+        
       case "gather_food":
         if (this.distanceTo(action.target) < 1.5) {
-          // Gather food
-          action.target.amount -= 1;
-          this.needs.food = Math.min(100, this.needs.food + 30);
-          eventBus.emit("RESOURCE_GATHERED", { 
-            agentId: this.id, 
-            resourceType: "food",
-            x: action.target.x,
-            y: action.target.y
-          });
+          // Gather food - add to inventory if space available
+          const totalItems = Object.values(this.inventory).reduce((a, b) => typeof b === 'number' ? a + b : a, 0);
+          if (totalItems < this.inventory.capacity) {
+            action.target.amount -= 1;
+            this.inventory.wheat = (this.inventory.wheat || 0) + 1;
+            this.needs.food = Math.min(100, this.needs.food + 30);
+            eventBus.emit("RESOURCE_GATHERED", { 
+              agentId: this.id, 
+              resourceType: "wheat",
+              x: action.target.x,
+              y: action.target.y
+            });
+          }
           this.currentAction = null;
         } else {
           // Move toward target
@@ -346,15 +432,44 @@ export class Agent {
     const dist = Math.sqrt(dx * dx + dy * dy);
     
     if (dist > 0.1) {
-      const newX = this.x + (dx / dist) * this.speed;
-      const newY = this.y + (dy / dist) * this.speed;
+      // Increase speed based on urgency of needs
+      let effectiveSpeed = this.speed;
+      if (this.needs.food < 30 || this.needs.water < 30) {
+        effectiveSpeed = this.speed * 1.5; // Move faster when desperate
+      }
+      
+      const newX = this.x + (dx / dist) * effectiveSpeed;
+      const newY = this.y + (dy / dist) * effectiveSpeed;
       
       // Check if walkable
-      if (world.isWalkable(Math.floor(newX), Math.floor(newY))) {
-        world.removeFromSpatialIndex(Math.floor(this.x), Math.floor(this.y), this);
+      const newTileX = Math.floor(newX);
+      const newTileY = Math.floor(newY);
+      
+      if (world.isWalkable(newTileX, newTileY)) {
+        // Only update spatial index if we actually moved to a different tile
+        const oldTileX = Math.floor(this.x);
+        const oldTileY = Math.floor(this.y);
+        
+        if (oldTileX !== newTileX || oldTileY !== newTileY) {
+          world.removeFromSpatialIndex(oldTileX, oldTileY, this);
+          world.addToSpatialIndex(newTileX, newTileY, this);
+        }
+        
         this.x = newX;
         this.y = newY;
-        world.addToSpatialIndex(Math.floor(this.x), Math.floor(this.y), this);
+      } else {
+        // Try to find alternative path - move perpendicular
+        const altX = this.x + (-dy / dist) * effectiveSpeed * 0.5;
+        const altY = this.y + (dx / dist) * effectiveSpeed * 0.5;
+        const altTileX = Math.floor(altX);
+        const altTileY = Math.floor(altY);
+        
+        if (world.isWalkable(altTileX, altTileY)) {
+          world.removeFromSpatialIndex(Math.floor(this.x), Math.floor(this.y), this);
+          this.x = altX;
+          this.y = altY;
+          world.addToSpatialIndex(Math.floor(this.x), Math.floor(this.y), this);
+        }
       }
     }
   }
@@ -370,7 +485,10 @@ export class Agent {
       children: this.children,
       needs: { ...this.needs },
       personality: { ...this.personality },
-      skills: { ...this.skills }
+      skills: { ...this.skills },
+      inventory: { ...this.inventory },
+      job: this.job,
+      workplace: this.workplace
     };
   }
 
@@ -384,6 +502,20 @@ export class Agent {
     agent.needs = { ...data.needs };
     agent.personality = { ...data.personality };
     agent.skills = { ...data.skills };
+    agent.inventory = { ...data.inventory } || {
+      wood_log: 0,
+      wood_plank: 0,
+      ore_iron: 0,
+      iron_ingot: 0,
+      wheat: 0,
+      flour: 0,
+      tool_handle: 0,
+      pickaxe: 0,
+      bread: 0,
+      capacity: 10
+    };
+    agent.job = data.job || null;
+    agent.workplace = data.workplace || null;
     return agent;
   }
 }
