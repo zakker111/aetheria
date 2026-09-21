@@ -291,7 +291,7 @@ export class EventSystem {
     
     switch (event.eventId) {
       case 'fire':
-        this.applyFireEffect(event, agents, settlements, world);
+        this.applyFireEffect(event, agents, settlements, world, simulation);
         break;
       case 'flood':
         this.applyFloodEffect(event, agents, settlements, world);
@@ -320,7 +320,7 @@ export class EventSystem {
     event.completed = true;
   }
   
-  applyFireEffect(event, agents, settlements, world) {
+  applyFireEffect(event, agents, settlements, world, simulation) {
     // Find agents near fire zone
     const fireZone = {
       x: Math.random() * world.width,
@@ -359,7 +359,7 @@ export class EventSystem {
     }
     
     // Destroy resources in area
-    const resources = simulation.resources || [];
+    const resources = simulation ? simulation.resources : [];
     for (const resource of resources) {
       const dx = resource.x - fireZone.x;
       const dy = resource.y - fireZone.y;
