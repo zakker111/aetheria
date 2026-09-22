@@ -458,6 +458,17 @@ export class WorldState {
     return entities;
   }
 
+  // Helper methods for systems to query nearby entities
+  getNearbyAgents(x, y, radius) {
+    const entities = this.getEntitiesNear(Math.floor(x), Math.floor(y), Math.ceil(radius));
+    return entities.filter(e => e.type === 'agent' && e.alive);
+  }
+  
+  getNearbyBuildings(x, y, radius) {
+    const entities = this.getEntitiesNear(Math.floor(x), Math.floor(y), Math.ceil(radius));
+    return entities.filter(e => e.type === 'building');
+  }
+
   serialize() {
     return {
       width: this.width,

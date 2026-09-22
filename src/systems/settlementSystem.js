@@ -126,6 +126,12 @@ export class SettlementSystem {
             wood: 0,
             ore: 0
           },
+          stockpile: { // Alias for compatibility with trade system
+            food: 0,
+            wood: 0,
+            stone: 0,
+            ore: 0
+          },
           leadership: null,
           culture: {
             traditions: [],
@@ -151,6 +157,17 @@ export class SettlementSystem {
           this.agentSettlementMap.delete(agentId);
         }
         this.settlements.delete(id);
+      } else {
+        // Sync stockpile with resources for existing settlements
+        const updated = newSettlements.get(id);
+        if (updated && !updated.stockpile) {
+          updated.stockpile = {
+            food: updated.resources?.food || 0,
+            wood: updated.resources?.wood || 0,
+            stone: updated.resources?.stone || 0,
+            ore: updated.resources?.ore || 0
+          };
+        }
       }
     }
     
@@ -279,6 +296,24 @@ export class SettlementSystem {
       buildingCount: settlement.buildings.length,
       homeCount: settlement.buildings.filter(b => b.type === 'house').length
     };
+  }
+  
+  // Estimate resource consumption rate based on population
+  getConsumptionRate(settlementId, resourceType) {
+    const settlement = this.settlements.get(settlementId);
+    if (!settlement) return 0;
+    
+    const pop = settlement.population || 1;
+    
+    // Base consumption per agent per tick
+    const baseRates = {
+      food: 0.01,   // Each agent consumes 0.01 food per tick
+      wood: 0.005,  // Wood for heating/maintenance
+      stone: 0.002, // Stone for construction
+      ore: 0.003    // Ore for tools/weapons
+    };
+    
+    return pop * (baseRates[resourceType] || 0);
   }
   
   // Serialize for save/load
