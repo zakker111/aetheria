@@ -13,6 +13,13 @@ import { EconomySystem } from "../systems/economySystem.js";
 import { EventSystem } from "../systems/eventSystem.js";
 import { FactionSystem } from "../systems/factionSystem.js";
 import { CraftingSystem } from "../systems/craftingSystem.js";
+import { CombatSystem } from "../systems/combatSystem.js";
+import { ConstructionSystem } from "../systems/constructionSystem.js";
+import { ReligionSystem } from "../systems/religionSystem.js";
+import { TradeSystem } from "../systems/tradeSystem.js";
+import { AgeSystem } from "../systems/ageSystem.js";
+import { FormationSystem } from "../systems/formationSystem.js";
+import { InfrastructureSystem } from "../systems/infrastructureSystem.js";
 
 export class Simulation {
   constructor(seed = Date.now()) {
@@ -26,15 +33,26 @@ export class Simulation {
     this.resources = [];
     this.buildings = [];
     
-    // Phase 2 Systems
+    // Phase 1 Systems (Complete with Trade)
     this.relationshipSystem = new RelationshipSystem();
     this.settlementSystem = new SettlementSystem();
     this.economySystem = new EconomySystem();
     this.craftingSystem = new CraftingSystem(this);
+    this.tradeSystem = new TradeSystem(this); // NEW: Automated caravans
     
-    // Phase 3 Systems
+    // Phase 2 Systems (Complete with Age/Lifecycle)
+    this.ageSystem = new AgeSystem(this); // NEW: Child/elder behaviors
+    
+    // Phase 3 Systems (Complete with Formations)
     this.eventSystem = new EventSystem();
     this.factionSystem = new FactionSystem();
+    this.formationSystem = new FormationSystem(this); // NEW: Military formations
+    
+    // Phase 4-6: New Systems (Construction, Combat, Religion, Infrastructure)
+    this.combatSystem = new CombatSystem(this.world);
+    this.constructionSystem = new ConstructionSystem(this.world);
+    this.religionSystem = new ReligionSystem(this.world);
+    this.infrastructureSystem = new InfrastructureSystem(this); // NEW: Roads/bridges
     
     // Session statistics
     this.birthsThisSession = 0;
@@ -42,6 +60,15 @@ export class Simulation {
     
     this.initializeWorld();
     this.setupEventListeners();
+    this.initializeNewSystems();
+  }
+  
+  initializeNewSystems() {
+    // Initialize combat stats for existing agents
+    for (const agent of this.agents) {
+      this.combatSystem.initCombatEntity(agent);
+      this.religionSystem.initReligionEntity(agent);
+    }
   }
 
   setupEventListeners() {
@@ -140,13 +167,57 @@ export class Simulation {
     this.updateSettlements();
     this.updateEconomy();
     this.updateCrafting();
+    this.updateTrade(); // NEW: Trade caravans
+    this.updateAging(); // NEW: Age/lifecycle
     
     // Phase 3: Update advanced systems
     this.updateEvents();
     this.updateFactions();
+    this.updateFormations(); // NEW: Military formations
+    
+    // Phase 4-6: Update new systems
+    this.updateCombat();
+    this.updateConstruction();
+    this.updateReligion();
+    this.updateInfrastructure(); // NEW: Roads/bridges
     
     // Process events
     this.processEvents();
+  }
+  
+  updateTrade() {
+    // Update trade caravans and routes
+    this.tradeSystem.update();
+  }
+  
+  updateAging() {
+    // Update agent aging and lifecycle events
+    this.ageSystem.update();
+  }
+  
+  updateFormations() {
+    // Update military formations and territories
+    this.formationSystem.update();
+  }
+  
+  updateInfrastructure() {
+    // Update roads, irrigation, bridges
+    this.infrastructureSystem.update();
+  }
+  
+  updateCombat() {
+    // Update combat AI and battles
+    this.combatSystem.update();
+  }
+  
+  updateConstruction() {
+    // Update building construction progress
+    this.constructionSystem.update();
+  }
+  
+  updateReligion() {
+    // Update faith, priests, and rituals
+    this.religionSystem.update();
   }
 
   updateEnvironment() {
@@ -407,14 +478,29 @@ export class Simulation {
       agents: this.agents.map(a => a.serialize()),
       resources: this.resources.map(r => r.serialize()),
       buildings: this.buildings.map(b => b.serialize()),
-      // Phase 2 systems
+      // Phase 1 systems (Complete)
       relationships: this.relationshipSystem.serialize(),
       settlements: this.settlementSystem.serialize(),
       economy: this.economySystem.serialize(),
       crafting: this.craftingSystem.serialize(),
-      // Phase 3 systems
+      trade: this.tradeSystem.serialize(), // NEW: Trade routes/caravans
+      // Phase 2 systems (Complete)
+      age: this.ageSystem.serialize(), // NEW: Aging/lifecycle
+      // Phase 3 systems (Complete)
       events: this.eventSystem.serialize(),
-      factions: this.factionSystem.serialize()
+      factions: this.factionSystem.serialize(),
+      formations: this.formationSystem.serialize(), // NEW: Military formations
+      // Phase 4-6 systems (Complete)
+      combat: { combatants: Array.from(this.combatSystem.combatants) },
+      construction: { 
+        pendingBuildings: this.constructionSystem.pendingBuildings.map(b => ({...b})),
+        queue: Array.from(this.constructionSystem.constructionQueue.entries())
+      },
+      religion: {
+        priests: Array.from(this.religionSystem.priests),
+        activeRituals: Array.from(this.religionSystem.activeRituals.entries())
+      },
+      infrastructure: this.infrastructureSystem.serialize() // NEW: Roads/bridges
     };
   }
 
@@ -447,7 +533,7 @@ export class Simulation {
       sim.world.addToSpatialIndex(Math.floor(building.x), Math.floor(building.y), building);
     }
     
-    // Restore Phase 2 systems
+    // Restore Phase 1 systems (Complete)
     if (data.relationships) {
       sim.relationshipSystem = RelationshipSystem.deserialize(data.relationships);
     }
@@ -460,13 +546,44 @@ export class Simulation {
     if (data.crafting) {
       sim.craftingSystem = CraftingSystem.deserialize(data.crafting, sim);
     }
+    if (data.trade) {
+      sim.tradeSystem = TradeSystem.deserialize(data.trade);
+    }
     
-    // Restore Phase 3 systems
+    // Restore Phase 2 systems (Complete)
+    if (data.age) {
+      sim.ageSystem = AgeSystem.deserialize(data.age);
+    }
+    
+    // Restore Phase 3 systems (Complete)
     if (data.events) {
       sim.eventSystem = EventSystem.deserialize(data.events);
     }
     if (data.factions) {
       sim.factionSystem = FactionSystem.deserialize(data.factions);
+    }
+    if (data.formations) {
+      sim.formationSystem = FormationSystem.deserialize(data.formations);
+    }
+    
+    // Restore Phase 4-6 systems (Complete)
+    if (data.combat) {
+      sim.combatSystem.combatants = new Set(data.combat.combatants);
+    }
+    if (data.construction) {
+      sim.constructionSystem.pendingBuildings = data.construction.pendingBuildings;
+      sim.constructionSystem.constructionQueue = new Map(data.construction.queue);
+    }
+    if (data.religion) {
+      sim.religionSystem.priests = new Set(data.religion.priests);
+      sim.religionSystem.activeRituals = new Map(data.religion.activeRituals);
+    }
+    if (data.infrastructure) {
+      sim.infrastructureSystem = InfrastructureSystem.deserialize(data.infrastructure);
+    }
+    if (data.religion) {
+      sim.religionSystem.priests = new Set(data.religion.priests);
+      sim.religionSystem.activeRituals = new Map(data.religion.activeRituals);
     }
     
     return sim;

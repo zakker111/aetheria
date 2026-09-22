@@ -1,10 +1,24 @@
 // Event bus for decoupled communication (doc 02: events are inputs to reactive systems)
+
+let instance = null;
+
 export class EventBus {
   constructor() {
+    if (instance) {
+      return instance;
+    }
     this.listeners = new Map();
     this.history = [];
+    instance = this;
   }
-
+  
+  static getInstance() {
+    if (!instance) {
+      instance = new EventBus();
+    }
+    return instance;
+  }
+  
   on(eventType, callback) {
     if (!this.listeners.has(eventType)) {
       this.listeners.set(eventType, []);
