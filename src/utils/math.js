@@ -58,15 +58,15 @@ export function normalizeAngle(angle) {
 /**
  * Random integer between min and max (inclusive)
  */
-export function randomInt(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+export function randomInt(min, max, rng = null) {
+  return Math.floor((rng ? rng.next() : Math.random()) * (max - min + 1)) + min;
 }
 
 /**
  * Random float between min and max
  */
-export function randomFloat(min, max) {
-  return Math.random() * (max - min) + min;
+export function randomFloat(min, max, rng = null) {
+  return (rng ? rng.next() : Math.random()) * (max - min) + min;
 }
 
 /**

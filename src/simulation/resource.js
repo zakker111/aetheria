@@ -1,6 +1,6 @@
 // Resource entities (trees, water sources, food, ore, etc.)
 export class Resource {
-  constructor(x, y, resourceType, amount = 40, idGen = { next: () => Math.floor(Math.random() * 1000000) }) {
+  constructor(x, y, resourceType, amount = 40, idGen = { next: () => ++Resource._fallbackId }) {
     this.id = idGen.next();
     this.type = "resource";
     this.x = x;

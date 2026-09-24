@@ -205,7 +205,7 @@ export class Interaction {
       case "build_workshop":
       case "build_farm":
       case "build_temple": {
-        const type = this.currentTool.replace("build_", "");
+        const type = String(this.currentTool ?? '').replace("build_", "");
         if (this.simulation.world.isWalkable(tx, ty)) {
           const b = new Building(tx, ty, type, this.simulation.idGen);
           b.constructionProgress = 0;

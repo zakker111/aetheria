@@ -47,7 +47,7 @@ export class SettlementSystem {
   // Explicitly found a settlement at a given coordinate with founding agents
   foundSettlement(x, y, foundingAgents = [], nameOverride = null) {
     const id = this.nextSettlementId++;
-    const name = nameOverride || this.generateSetName();
+    const name = nameOverride || this.generateSetName(foundingAgents);
     const banner = this.settlementBanners[(id - 1) % this.settlementBanners.length];
     
     const pop = Math.max(1, foundingAgents.length);
@@ -271,12 +271,33 @@ export class SettlementSystem {
     }
   }
   
-  // Generate unique settlement name
-  generateSetName() {
-    const baseName = this.settlementNames[Math.floor(Math.random() * this.settlementNames.length)];
+  // Generate unique settlement name.
+  // Deterministic by default: derives an index from the founder ids (or the
+  // settlement counter) so identical worlds produce identical names without
+  // perturbing the shared seeded RNG stream. Pass { rng } to opt into random names.
+  generateSetName(foundingAgents = [], opts = {}) {
+    let idx;
+    if (opts.rng) {
+      idx = Math.floor(opts.rng.next() * this.settlementNames.length);
+    } else {
+      const seedStr = (foundingAgents && foundingAgents.length)
+        ? foundingAgents.map(a => a.id ?? a).join('-')
+        : `settlement-${this.nextSettlementId}`;
+      let h = 0;
+      for (let i = 0; i < seedStr.length; i++) {
+        h = ((h << 5) - h + seedStr.charCodeAt(i)) | 0; // djb2-ish hash
+      }
+      idx = Math.abs(h) % this.settlementNames.length;
+    }
+    const baseName = this.settlementNames[idx];
     const suffixes = ['', ' Village', ' Town', ' Hold', ' Keep', ' Landing', ' Valley', ' Haven'];
-    const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
-    return `${baseName}${suffix}`;
+    let sIdx;
+    if (opts.rng) {
+      sIdx = Math.floor(opts.rng.next() * suffixes.length);
+    } else {
+      sIdx = (idx + this.nextSettlementId) % suffixes.length;
+    }
+    return `${baseName}${suffixes[sIdx]}`;
   }
 
   // Stockpile operations: communal sharing for societies

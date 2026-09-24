@@ -161,9 +161,9 @@ export class AgeSystem {
         }
         
         // Children play (random movement when close to parent)
-        if (Math.random() < 0.05) {
-            agent.x += (Math.random() - 0.5) * 2;
-            agent.y += (Math.random() - 0.5) * 2;
+        if (this.sim.world.rng.next() < 0.05) {
+            agent.x += (this.sim.world.rng.next() - 0.5) * 2;
+            agent.y += (this.sim.world.rng.next() - 0.5) * 2;
         }
         
         agent.state = 'playing';
@@ -171,7 +171,7 @@ export class AgeSystem {
 
     updateElderBehavior(agent) {
         // Elders rest more, move slower, advise younger agents
-        if (Math.random() < 0.1) {
+        if (this.sim.world.rng.next() < 0.1) {
             agent.state = 'resting';
             return;
         }
@@ -194,7 +194,7 @@ export class AgeSystem {
         }
         
         // Chance to mentor nearby young agents
-        if (Math.random() < 0.02) {
+        if (this.sim.world.rng.next() < 0.02) {
             this.mentorNearby(agent);
         }
     }
@@ -246,9 +246,9 @@ export class AgeSystem {
             
             // Inherit some traits
             child.personality = {
-                intelligence: (parentA.personality.intelligence + parentB.personality.intelligence) / 2 + (Math.random() - 0.5) * 2,
-                strength: (parentA.personality.strength + parentB.personality.strength) / 2 + (Math.random() - 0.5) * 2,
-                charisma: (parentA.personality.charisma + parentB.personality.charisma) / 2 + (Math.random() - 0.5) * 2
+                intelligence: (parentA.personality.intelligence + parentB.personality.intelligence) / 2 + (this.sim.world.rng.next() - 0.5) * 2,
+                strength: (parentA.personality.strength + parentB.personality.strength) / 2 + (this.sim.world.rng.next() - 0.5) * 2,
+                charisma: (parentA.personality.charisma + parentB.personality.charisma) / 2 + (this.sim.world.rng.next() - 0.5) * 2
             };
             
             // Add to family trees

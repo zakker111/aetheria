@@ -9,6 +9,9 @@ import { distance } from '../utils/math.js';
 export class ConstructionSystem {
     constructor(worldState) {
         this.worldState = worldState;
+        // Back-reference to the Simulation (set by simulation.js) so construction
+        // can consult settlementSystem/diplomacySystem for territorial rules.
+        this.simulation = null;
         this.pendingBuildings = []; // Buildings waiting to be constructed
         this.constructionQueue = new Map(); // buildingId -> {progress, requiredResources}
     }
@@ -98,7 +101,7 @@ export class ConstructionSystem {
     /**
      * Create a new building blueprint
      */
-    createBlueprint(type, x, y, factionId, rotation = 0) {
+    createBlueprint(type, x, y, factionId, rotation = 0, settlementId = null) {
         const validation = this.validatePlacement(type, x, y, rotation);
         if (!validation.valid) {
             return { success: false, error: validation.reason };
@@ -108,7 +111,7 @@ export class ConstructionSystem {
         const footprint = this.getBuildingFootprint(type, rotation);
         
         const building = {
-            id: `building_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: `building_${Date.now()}_${(worldState && worldState.rng ? worldState.rng : { next: Math.random }).next().toString(36).substr(2, 9)}`,
             type: ENTITY_TYPES.BUILDING,
             buildingType: type,
             x: x,
@@ -117,6 +120,7 @@ export class ConstructionSystem {
             factionId: factionId,
             width: footprint.width,
             height: footprint.height,
+            settlementId: settlementId ?? null,
             
             // Construction state
             isComplete: false,
@@ -219,6 +223,28 @@ export class ConstructionSystem {
         const builders = (this.worldState.agents || []).filter(a => 
             a.job === JOB_TYPES.BUILDER && !a.dead && !a.currentJob
         );
+
+        // Resolve an agent's home settlement for territorial assignment rules
+        const sim = this.simulation || this.worldState.simulation;
+        const settleSys = sim?.settlementSystem;
+        const homeOf = (agent) => {
+            if (agent.settlementId != null) return agent.settlementId;
+            return settleSys?.agentSettlementMap?.get(agent.id) ?? null;
+        };
+        // Friendly check: same community, unowned site, or diplomatic score >= 40 and not at war
+        const diplomacy = sim?.diplomacySystem;
+        const mayServe = (agent, building) => {
+            const siteSid = building.settlementId ?? null;
+            if (siteSid == null) return true;               // unowned site: anyone
+            const homeSid = homeOf(agent);
+            if (homeSid == null) return false;              // homeless agents skip owned sites
+            if (siteSid === homeSid) return true;           // own community always
+            if (!diplomacy) return true;                    // no diplomacy layer: all friendly
+            try {
+                const rel = diplomacy.getRelation(homeSid, siteSid);
+                return !!rel && rel.status !== 'war' && rel.score >= 40;
+            } catch { return false; }
+        };
         
         for (const building of this.pendingBuildings) {
             if (building.isComplete) continue;
@@ -231,8 +257,11 @@ export class ConstructionSystem {
             const maxWorkers = Math.min(3, Math.ceil(building.width * building.height / 2));
             if (currentWorkers >= maxWorkers) continue;
             
-            // Find nearby idle builder
-            const nearbyBuilder = builders.find(b => {
+            // Find nearby idle builder allowed on this site.
+            // Own-community builders are preferred; friendly settlements' builders
+            // may assist only when no local worker qualifies (cooperative labor).
+            const eligible = builders.filter(b => mayServe(b, building));
+            const nearbyBuilder = eligible.find(b => {
                 const d = distance(b.x, b.y, building.x, building.y);
                 return d < 15; // Aggro radius for jobs
             });

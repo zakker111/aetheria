@@ -259,7 +259,7 @@ export class ReligionSystem {
                     f1.adjustRelation(f2.id, -0.1);
                     
                     // Chance of holy war declaration if relations very bad
-                    if (currentRelation < -80 && Math.random() < 0.001) {
+                    if (currentRelation < -80 && (worldState && worldState.rng ? worldState.rng : { next: Math.random }).next() < 0.001) {
                         this.declareHolyWar(f1, f2);
                     }
                 }
