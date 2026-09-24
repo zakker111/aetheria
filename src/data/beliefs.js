@@ -135,15 +135,16 @@ export function getBelief(id) {
 /**
  * Get random belief
  */
-export function getRandomBelief() {
+export function getRandomBelief(rng = null) {
     const beliefs = Object.values(BELIEFS);
-    return beliefs[Math.floor(Math.random() * beliefs.length)];
+    const r = rng ? rng.next() : Math.random();
+    return beliefs[Math.floor(r * beliefs.length)];
 }
 
 /**
  * Get beliefs compatible with faction personality
  */
-export function getCompatibleBeliefs(factionPersonality) {
+export function getCompatibleBeliefs(factionPersonality, rng = null) {
     const compatible = [];
     
     if (factionPersonality.aggressive > 7) {
@@ -163,8 +164,9 @@ export function getCompatibleBeliefs(factionPersonality) {
     }
     
     // Always add some random options
-    const randomCount = Math.floor(Math.random() * 3) + 2;
-    const shuffled = Object.values(BELIEFS).sort(() => Math.random() - 0.5);
+    const rnd = () => (rng ? rng.next() : Math.random());
+    const randomCount = Math.floor(rnd() * 3) + 2;
+    const shuffled = Object.values(BELIEFS).sort(() => rnd() - 0.5);
     
     for (const belief of shuffled) {
         if (!compatible.includes(belief) && compatible.length < 5) {

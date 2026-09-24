@@ -95,11 +95,11 @@ export class CultureSystem {
     const ethos = this.culturalEthos[ethosIndex] || this.culturalEthos[0];
 
     const values = {
-      industriousness: Math.min(1.0, Math.max(0.1, ethos.values.industriousness + (Math.random() - 0.5) * 0.2)),
-      belligerence: Math.min(1.0, Math.max(0.1, ethos.values.belligerence + (Math.random() - 0.5) * 0.2)),
-      spirituality: Math.min(1.0, Math.max(0.1, ethos.values.spirituality + (Math.random() - 0.5) * 0.2)),
-      cooperation: Math.min(1.0, Math.max(0.1, ethos.values.cooperation + (Math.random() - 0.5) * 0.2)),
-      traditionalism: Math.min(1.0, Math.max(0.1, ethos.values.traditionalism + (Math.random() - 0.5) * 0.2))
+      industriousness: Math.min(1.0, Math.max(0.1, ethos.values.industriousness + ((this.simulation?._rng?.().next?.() ?? Math.random()) - 0.5) * 0.2)),
+      belligerence: Math.min(1.0, Math.max(0.1, ethos.values.belligerence + ((this.simulation?._rng?.().next?.() ?? Math.random()) - 0.5) * 0.2)),
+      spirituality: Math.min(1.0, Math.max(0.1, ethos.values.spirituality + ((this.simulation?._rng?.().next?.() ?? Math.random()) - 0.5) * 0.2)),
+      cooperation: Math.min(1.0, Math.max(0.1, ethos.values.cooperation + ((this.simulation?._rng?.().next?.() ?? Math.random()) - 0.5) * 0.2)),
+      traditionalism: Math.min(1.0, Math.max(0.1, ethos.values.traditionalism + ((this.simulation?._rng?.().next?.() ?? Math.random()) - 0.5) * 0.2))
     };
 
     const traditions = [ethos.favoredTradition];

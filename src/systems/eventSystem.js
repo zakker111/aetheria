@@ -4,7 +4,8 @@
 import { IDGenerator } from "../core/idGen.js";
 
 export class EventSystem {
-  constructor() {
+  constructor(sim = null) {
+    this.sim = sim;
     this.eventDefinitions = {
       // Natural Disasters
       'fire': {
@@ -179,7 +180,7 @@ export class EventSystem {
   checkForNewEvents(tick, agents, settlements, world) {
     if (tick % this.nextEventCheck !== 0) return null;
     
-    const roll = Math.random();
+    const roll = world.rng.next();
     const threshold = 0.15; // 15% chance of any event
     
     if (roll > threshold) return null;
@@ -190,7 +191,7 @@ export class EventSystem {
     if (availableEvents.length === 0) return null;
     
     // Select random event
-    const selected = availableEvents[Math.floor(Math.random() * availableEvents.length)];
+    const selected = availableEvents[Math.floor(world.rng.next() * availableEvents.length)];
     
     return this.createEvent(selected, tick);
   }
@@ -301,7 +302,7 @@ export class EventSystem {
         break;
       case 'plague':
       case 'mild_illness':
-        this.applyDiseaseEffect(event, agents);
+        this.applyDiseaseEffect(event, agents, world);
         break;
       case 'bountiful_harvest':
         this.applyHarvestEffect(event, settlements);
@@ -323,8 +324,8 @@ export class EventSystem {
   applyFireEffect(event, agents, settlements, world, simulation) {
     // Find agents near fire zone
     const fireZone = {
-      x: Math.random() * world.width,
-      y: Math.random() * world.height,
+      x: world.rng.next() * world.width,
+      y: world.rng.next() * world.height,
       radius: 15
     };
     
@@ -339,7 +340,7 @@ export class EventSystem {
         event.affectedAgents.add(agent.id);
         
         // Chance of injury/death
-        const damageRoll = Math.random();
+        const damageRoll = world.rng.next();
         if (damageRoll < 0.1) {
           agent.alive = false; // 10% fatality
         } else if (damageRoll < 0.4) {
@@ -349,8 +350,8 @@ export class EventSystem {
           });
         }
         
-        // Force flee behavior
-        agent.currentAction = 'flee';
+        // Force flee behavior (keep object shape so consumers reading .type don't crash)
+        agent.currentAction = { type: 'flee' };
         agent.fleeTarget = {
           x: fireZone.x + (dx / dist) * 20,
           y: fireZone.y + (dy / dist) * 20
@@ -374,8 +375,8 @@ export class EventSystem {
   applyFloodEffect(event, agents, settlements, world) {
     // Similar to fire but water-based
     const floodZone = {
-      x: Math.random() * world.width,
-      y: Math.random() * world.height,
+      x: world.rng.next() * world.width,
+      y: world.rng.next() * world.height,
       radius: 12
     };
     
@@ -389,9 +390,9 @@ export class EventSystem {
       if (dist < floodZone.radius) {
         event.affectedAgents.add(agent.id);
         
-        if (Math.random() < 0.05) {
+        if (world.rng.next() < 0.05) {
           agent.alive = false;
-        } else if (Math.random() < 0.3) {
+        } else if (world.rng.next() < 0.3) {
           this.injuredAgents.set(agent.id, {
             injury: 30,
             healingRate: 3
@@ -423,13 +424,13 @@ export class EventSystem {
     }
   }
   
-  applyDiseaseEffect(event, agents) {
+  applyDiseaseEffect(event, agents, world) {
     const infectionRate = event.effects.infectionRate;
     
     for (const agent of agents) {
       if (!agent.alive || this.infectedAgents.has(agent.id)) continue;
       
-      if (Math.random() < infectionRate) {
+      if (world.rng.next() < infectionRate) {
         event.affectedAgents.add(agent.id);
         this.infectedAgents.set(agent.id, {
           disease: event.eventId,
@@ -469,7 +470,7 @@ export class EventSystem {
     const migrantCount = event.effects.populationIncrease;
     
     for (let i = 0; i < migrantCount; i++) {
-      const angle = Math.random() * Math.PI * 2;
+      const angle = world.rng.next() * Math.PI * 2;
       const distance = Math.min(world.width, world.height) * 0.4;
       const x = world.width / 2 + Math.cos(angle) * distance;
       const y = world.height / 2 + Math.sin(angle) * distance;
@@ -477,9 +478,9 @@ export class EventSystem {
       if (world.isWalkable(Math.floor(x), Math.floor(y))) {
         const migrant = simulation.spawnAgent(x, y);
         // Give migrants varied skills
-        migrant.skills.gather = 1 + Math.random() * 2;
-        migrant.skills.build = 1 + Math.random() * 2;
-        migrant.skills.social = 1 + Math.random() * 2;
+        migrant.skills.gather = 1 + world.rng.next() * 2;
+        migrant.skills.build = 1 + world.rng.next() * 2;
+        migrant.skills.social = 1 + world.rng.next() * 2;
         event.affectedAgents.add(migrant.id);
       }
     }
@@ -490,8 +491,8 @@ export class EventSystem {
     const amount = event.effects.amount;
     
     for (const resourceType of resources) {
-      const x = Math.random() * world.width;
-      const y = Math.random() * world.height;
+      const x = world.rng.next() * world.width;
+      const y = world.rng.next() * world.height;
       
       if (world.isWalkable(Math.floor(x), Math.floor(y))) {
         simulation.createResource(x, y, resourceType, amount);
@@ -542,7 +543,7 @@ export class EventSystem {
       
       // Mortality check
       const event = this.activeEvents.find(e => e.eventId === diseaseData.disease);
-      if (event && Math.random() < event.effects.mortalityRate / event.duration) {
+      if (event && world.rng.next() < event.effects.mortalityRate / event.duration) {
         agent.alive = false;
         this.infectedAgents.delete(agentId);
         continue;

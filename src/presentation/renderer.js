@@ -616,7 +616,7 @@ export class CanvasRenderer {
       // 3. Agent Body - color based on role & activity
       let bodyColor = "#fbbf24"; // default warm citizen yellow
       if (agent.currentAction) {
-        switch(agent.currentAction.type) {
+        switch(typeof agent.currentAction === 'string' ? agent.currentAction : agent.currentAction.type) {
           case "chop_wood": bodyColor = "#16a34a"; break;
           case "mine_ore": bodyColor = "#94a3b8"; break;
           case "gather_food": 
@@ -767,7 +767,8 @@ export class CanvasRenderer {
         let actionLabel = agent.jobTitle || "Exploring";
         
         if (agent.currentAction) {
-          switch(agent.currentAction.type) {
+          const actionType = typeof agent.currentAction === 'string' ? agent.currentAction : agent.currentAction?.type;
+          switch(actionType) {
             case "chop_wood": actionEmoji = "🪓"; actionLabel = "Chopping Wood"; break;
             case "mine_ore": actionEmoji = "⛏️"; actionLabel = "Mining Ore"; break;
             case "gather_food": 
@@ -784,7 +785,7 @@ export class CanvasRenderer {
             case "combat": actionEmoji = "⚔️"; actionLabel = "In Combat"; break;
             case "flee": actionEmoji = "🏃"; actionLabel = "Fleeing!"; break;
             case "wander": actionEmoji = "🚶"; actionLabel = "Exploring"; break;
-            default: actionEmoji = "⚡"; actionLabel = agent.currentAction.type.replace('_', ' '); break;
+            default: actionEmoji = "⚡"; actionLabel = String(actionType ?? 'Unknown').replace(/_/g, ' '); break;
           }
         } else if (isMoving) {
           actionEmoji = "🚶";

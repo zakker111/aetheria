@@ -25,6 +25,19 @@ import { DiplomacySystem } from "../systems/diplomacySystem.js";
 import { WarfareSystem } from "../systems/warfareSystem.js";
 
 export class Simulation {
+  // Deterministic RNG helper: always routes through the seeded world RNG
+  _rng() {
+    return this.world.rng || { next: Math.random };
+  }
+
+  // Central entity intake: registers agents in the O(1) id registry so
+  // getEntityById works for every spawn path (init, god powers, births).
+  addAgent(agent) {
+    this.agents.push(agent);
+    this.world.entityRegistry.set(agent.id, agent);
+    return agent;
+  }
+
   constructor(seed = Date.now(), width = 128, height = 128) {
     this.idGen = new IDGenerator();
     this.eventBus = new EventBus();
@@ -58,7 +71,7 @@ export class Simulation {
         } else if (entity?.type === 'resource') {
           this.resources.push(entity);
         } else if (entity?.type === 'agent') {
-          this.agents.push(entity);
+          this.addAgent(entity);
         }
       }
     };
@@ -92,13 +105,14 @@ export class Simulation {
     this.ageSystem = new AgeSystem(this); // NEW: Child/elder behaviors
     
     // Phase 3 Systems (Complete with Formations)
-    this.eventSystem = new EventSystem();
-    this.factionSystem = new FactionSystem();
+    this.eventSystem = new EventSystem(this);
+    this.factionSystem = new FactionSystem(this);
     this.formationSystem = new FormationSystem(this); // NEW: Military formations
     
     // Phase 4-6: New Systems (Construction, Combat, Religion, Infrastructure)
     this.combatSystem = new CombatSystem(this.world);
     this.constructionSystem = new ConstructionSystem(this.world);
+    this.constructionSystem.simulation = this;
     this.religionSystem = new ReligionSystem(this.world);
     this.infrastructureSystem = new InfrastructureSystem(this); // NEW: Roads/bridges
     
@@ -132,24 +146,9 @@ export class Simulation {
       console.log(`Agent ${data.agentId} died at age ${data.age.toFixed(1)} days`);
     });
     
-    this.eventBus.on("AGENT_BORN", (data) => {
-      console.log(`Baby born to agents ${data.parentId1} and ${data.parentId2} at (${data.x.toFixed(1)}, ${data.y.toFixed(1)})`);
-      
-      // Initialize relationship tracking for newborn
-      this.relationshipSystem.initializeAgent(data.parentId1);
-      this.relationshipSystem.initializeAgent(data.parentId2);
-      
-      // Create baby agent first (it exists in agents array by now)
-      setTimeout(() => {
-        const baby = this.agents.find(a => Math.abs(a.x - data.x) < 0.1 && Math.abs(a.y - data.y) < 0.1);
-        if (baby) {
-          this.relationshipSystem.initializeAgent(baby.id);
-          this.relationshipSystem.addParentChild(data.parentId1, baby.id);
-          this.relationshipSystem.addParentChild(data.parentId2, baby.id);
-          this.relationshipSystem.addChildToMarriage(data.parentId1, data.parentId2, baby.id);
-        }
-      }, 10);
-    });
+    // NOTE: birth relationship linking is handled synchronously in the
+    // newborn-creation loop (see processAgents) — no setTimeout hack needed.
+
     
     // Track relationships from socializing
     this.eventBus.on("RELATIONSHIP_CHANGED", (data) => {
@@ -162,14 +161,15 @@ export class Simulation {
   initializeWorld() {
     this.world.simulation = this;
     this.world.eventBus = this.eventBus;
+    if (this.settlementSystem?.setWorld) this.settlementSystem.setWorld(this.world);
     
     // Cluster starting agents into habitable walkable centers across the 128x128 map
     const margin = 14;
     const centers = [];
     
     for (let attempt = 0; attempt < 150 && centers.length < 3; attempt++) {
-      const cx = margin + Math.random() * (this.world.width - margin * 2);
-      const cy = margin + Math.random() * (this.world.height - margin * 2);
+      const cx = margin + this._rng().next() * (this.world.width - margin * 2);
+      const cy = margin + this._rng().next() * (this.world.height - margin * 2);
       const tx = Math.floor(cx);
       const ty = Math.floor(cy);
       if (this.world.isWalkable(tx, ty)) {
@@ -193,13 +193,13 @@ export class Simulation {
     while (spawned < 20 && attempts < 600) {
       attempts++;
       const center = centers[spawned % centers.length];
-      const x = center.x + (Math.random() - 0.5) * 14;
-      const y = center.y + (Math.random() - 0.5) * 14;
+      const x = center.x + (this._rng().next() - 0.5) * 14;
+      const y = center.y + (this._rng().next() - 0.5) * 14;
       const tx = Math.floor(x);
       const ty = Math.floor(y);
       if (tx >= 3 && tx < this.world.width - 3 && ty >= 3 && ty < this.world.height - 3 && this.world.isWalkable(tx, ty)) {
-        const agent = new Agent(x, y, this.idGen);
-        this.agents.push(agent);
+        const agent = new Agent(x, y, this.idGen, this.world.rng);
+        this.addAgent(agent);
         this.world.addToSpatialIndex(tx, ty, agent);
         spawned++;
       }
@@ -229,12 +229,25 @@ export class Simulation {
       }
     }
 
-    // Seed initial building projects in each community so builders immediately construct
+    // Seed initial building projects in each community so builders immediately construct.
+    // Each project is stamped with its owning settlement/faction (territorial building).
+    const ownerForCenter = (cx, cy) => {
+      let best = null;
+      let bestD = Infinity;
+      for (const s of this.settlementSystem.settlements.values()) {
+        const d = Math.hypot(s.center.x - cx, s.center.y - cy);
+        if (d < bestD) { bestD = d; best = s; }
+      }
+      return best ? { id: best.id, factionId: best.factionId ?? null } : null;
+    };
     for (const center of centers) {
+      const owner = ownerForCenter(center.x, center.y);
+      const sid = owner ? owner.id : null;
+      const fid = owner ? owner.factionId : null;
       const hx = Math.floor(center.x + 2);
       const hy = Math.floor(center.y + 2);
       if (this.world.isWalkable(hx, hy)) {
-        const house = new Building(hx, hy, "house", this.idGen);
+        const house = new Building(hx, hy, "house", this.idGen, sid, fid);
         house.constructionProgress = 15;
         house.complete = false;
         this.buildings.push(house);
@@ -243,7 +256,7 @@ export class Simulation {
       const fx = Math.floor(center.x - 3);
       const fy = Math.floor(center.y + 2);
       if (this.world.isWalkable(fx, fy)) {
-        const farm = new Building(fx, fy, "farm", this.idGen);
+        const farm = new Building(fx, fy, "farm", this.idGen, sid, fid);
         farm.constructionProgress = 10;
         farm.complete = false;
         this.buildings.push(farm);
@@ -267,8 +280,8 @@ export class Simulation {
       for (const type of ["wood", "ore", "food"]) {
         const count = type === "wood" ? 8 : (type === "ore" ? 7 : 6);
         for (let k = 0; k < count; k++) {
-          const rx = center.x + (Math.random() - 0.5) * 18;
-          const ry = center.y + (Math.random() - 0.5) * 18;
+          const rx = center.x + (this._rng().next() - 0.5) * 18;
+          const ry = center.y + (this._rng().next() - 0.5) * 18;
           const tx = Math.floor(rx);
           const ty = Math.floor(ry);
           if (tx >= 2 && tx < this.world.width - 2 && ty >= 2 && ty < this.world.height - 2 && this.world.isWalkable(tx, ty)) {
@@ -281,8 +294,8 @@ export class Simulation {
       }
       // 5 freshwater springs near each community
       for (let k = 0; k < 5; k++) {
-        const rx = center.x + (Math.random() - 0.5) * 14;
-        const ry = center.y + (Math.random() - 0.5) * 14;
+        const rx = center.x + (this._rng().next() - 0.5) * 14;
+        const ry = center.y + (this._rng().next() - 0.5) * 14;
         const tx = Math.floor(rx);
         const ty = Math.floor(ry);
         if (tx >= 2 && tx < this.world.width - 2 && ty >= 2 && ty < this.world.height - 2 && this.world.isWalkable(tx, ty)) {
@@ -299,8 +312,8 @@ export class Simulation {
     attempts = 0;
     while (woodSpawned < 220 && attempts < 2500) {
       attempts++;
-      const x = Math.floor(Math.random() * (this.world.width - 4)) + 2;
-      const y = Math.floor(Math.random() * (this.world.height - 4)) + 2;
+      const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
+      const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
       const terrain = this.world.getTerrain(x, y);
       if (terrain && (terrain.biome === "forest" || terrain.biome === "jungle" || terrain.type === "grass") && this.world.isWalkable(x, y)) {
         const entities = this.world.getEntitiesAt(x, y);
@@ -318,8 +331,8 @@ export class Simulation {
     attempts = 0;
     while (foodSpawned < 180 && attempts < 2000) {
       attempts++;
-      const x = Math.floor(Math.random() * (this.world.width - 4)) + 2;
-      const y = Math.floor(Math.random() * (this.world.height - 4)) + 2;
+      const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
+      const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
       const terrain = this.world.getTerrain(x, y);
       if (terrain && (terrain.biome === "grassland" || terrain.biome === "savanna" || terrain.biome === "beach") && this.world.isWalkable(x, y)) {
         const entities = this.world.getEntitiesAt(x, y);
@@ -337,8 +350,8 @@ export class Simulation {
     attempts = 0;
     while (oreSpawned < 160 && attempts < 2000) {
       attempts++;
-      const x = Math.floor(Math.random() * (this.world.width - 4)) + 2;
-      const y = Math.floor(Math.random() * (this.world.height - 4)) + 2;
+      const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
+      const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
       const terrain = this.world.getTerrain(x, y);
       if (terrain && (terrain.biome === "mountain" || terrain.biome === "highland" || terrain.biome === "tundra" || terrain.type === "mountain") && this.world.isWalkable(x, y)) {
         const entities = this.world.getEntitiesAt(x, y);
@@ -353,8 +366,8 @@ export class Simulation {
 
     // 4. Freshwater sources across world - 60 water springs
     for (let i = 0; i < 60; i++) {
-      const x = Math.floor(Math.random() * (this.world.width - 4)) + 2;
-      const y = Math.floor(Math.random() * (this.world.height - 4)) + 2;
+      const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
+      const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
       if (this.world.isWalkable(x, y)) {
         const entities = this.world.getEntitiesAt(x, y);
         if (!entities.some(e => e.type === "resource")) {
@@ -532,8 +545,8 @@ export class Simulation {
           if (neededType) {
             // Find a suitable clear walkable tile near settlement center
             for (let a = 0; a < 25; a++) {
-              const ang = Math.random() * Math.PI * 2;
-              const r = 3 + Math.random() * 8;
+              const ang = this._rng().next() * Math.PI * 2;
+              const r = 3 + this._rng().next() * 8;
               const bx = Math.floor(settlement.center.x + Math.cos(ang) * r);
               const by = Math.floor(settlement.center.y + Math.sin(ang) * r);
               if (bx >= 4 && bx < this.world.width - 4 && by >= 4 && by < this.world.height - 4 && this.world.isWalkable(bx, by)) {
@@ -727,7 +740,7 @@ export class Simulation {
     // Create newborn agents
     for (const birth of births) {
       if (this.world.isWalkable(Math.floor(birth.x), Math.floor(birth.y))) {
-        const baby = new Agent(birth.x, birth.y, this.idGen, 0); // Newborn baby with age 0
+        const baby = new Agent(birth.x, birth.y, this.idGen, 0, this.world.rng); // Newborn baby with age 0
         baby.lifeStage = 'child';
         baby.parents = [birth.parentId1, birth.parentId2];
         
@@ -741,10 +754,15 @@ export class Simulation {
           baby.skills.gather = (parent1.skills.gather + parent2.skills.gather) / 2;
           baby.settlementId = parent1.settlementId || parent2.settlementId;
         }
-        this.agents.push(baby);
+        this.addAgent(baby);
         this.world.addToSpatialIndex(Math.floor(birth.x), Math.floor(birth.y), baby);
         this.birthsThisSession = (this.birthsThisSession || 0) + 1;
         this.eventBus.emit("AGENT_CREATED", { agentId: baby.id, name: baby.name, x: baby.x, y: baby.y, reason: "birth" });
+        // Synchronously link parent-child relationships (replaces old setTimeout hack)
+        this.relationshipSystem.initializeAgent(baby.id);
+        if (parent1) this.relationshipSystem.addParentChild(parent1.id, baby.id);
+        if (parent2) this.relationshipSystem.addParentChild(parent2.id, baby.id);
+        if (parent1 && parent2) this.relationshipSystem.addChildToMarriage(parent1.id, parent2.id, baby.id);
       }
     }
     
@@ -802,8 +820,8 @@ export class Simulation {
     if (woodCount < 120) {
       const needed = Math.min(8, 120 - woodCount);
       for (let k = 0; k < needed; k++) {
-        const x = Math.floor(Math.random() * (this.world.width - 4)) + 2;
-        const y = Math.floor(Math.random() * (this.world.height - 4)) + 2;
+        const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
+        const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
         const terrain = this.world.getTerrain(x, y);
         if (terrain && (terrain.biome === "forest" || terrain.biome === "jungle") && this.world.isWalkable(x, y)) {
           const entities = this.world.getEntitiesAt(x, y);
@@ -820,8 +838,8 @@ export class Simulation {
     if (foodCount < 120) {
       const needed = Math.min(8, 120 - foodCount);
       for (let k = 0; k < needed; k++) {
-        const x = Math.floor(Math.random() * (this.world.width - 4)) + 2;
-        const y = Math.floor(Math.random() * (this.world.height - 4)) + 2;
+        const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
+        const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
         const terrain = this.world.getTerrain(x, y);
         if (terrain && (terrain.biome === "grassland" || terrain.biome === "savanna" || terrain.biome === "beach") && this.world.isWalkable(x, y)) {
           const entities = this.world.getEntitiesAt(x, y);
@@ -838,8 +856,8 @@ export class Simulation {
     if (oreCount < 80) {
       const needed = Math.min(6, 80 - oreCount);
       for (let k = 0; k < needed; k++) {
-        const x = Math.floor(Math.random() * (this.world.width - 4)) + 2;
-        const y = Math.floor(Math.random() * (this.world.height - 4)) + 2;
+        const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
+        const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
         const terrain = this.world.getTerrain(x, y);
         if (terrain && (terrain.biome === "mountain" || terrain.biome === "highland" || terrain.biome === "tundra") && this.world.isWalkable(x, y)) {
           const entities = this.world.getEntitiesAt(x, y);
@@ -858,8 +876,8 @@ export class Simulation {
       building.update();
       // Completed farms cultivate food nearby
       if (building.complete && building.buildingType === "farm" && this.clock.tick % 50 === 0) {
-        const fx = Math.floor(building.x + (Math.random() - 0.5) * 4);
-        const fy = Math.floor(building.y + (Math.random() - 0.5) * 4);
+        const fx = Math.floor(building.x + (this._rng().next() - 0.5) * 4);
+        const fy = Math.floor(building.y + (this._rng().next() - 0.5) * 4);
         if (fx >= 2 && fx < this.world.width - 2 && fy >= 2 && fy < this.world.height - 2 && this.world.isWalkable(fx, fy)) {
           const entities = this.world.getEntitiesAt(fx, fy);
           const hasFood = entities.some(e => e.type === "resource" && e.resourceType === "food");
@@ -911,8 +929,8 @@ export class Simulation {
   spawnResourceCluster(cx, cy, resourceType, count = 4, radius = 3.2) {
     const spawned = [];
     for (let i = 0; i < count; i++) {
-      const rx = i === 0 ? cx : cx + (Math.random() - 0.5) * radius * 2;
-      const ry = i === 0 ? cy : cy + (Math.random() - 0.5) * radius * 2;
+      const rx = i === 0 ? cx : cx + (this._rng().next() - 0.5) * radius * 2;
+      const ry = i === 0 ? cy : cy + (this._rng().next() - 0.5) * radius * 2;
       const tx = Math.floor(rx);
       const ty = Math.floor(ry);
       if (tx >= 1 && tx < this.world.width - 1 && ty >= 1 && ty < this.world.height - 1 && this.world.isWalkable(tx, ty)) {
@@ -947,8 +965,8 @@ export class Simulation {
   }
 
   spawnAgent(x, y) {
-    const agent = new Agent(x, y, this.idGen);
-    this.agents.push(agent);
+    const agent = new Agent(x, y, this.idGen, this.world.rng);
+    this.addAgent(agent);
     this.world.addToSpatialIndex(Math.floor(x), Math.floor(y), agent);
     this.eventBus.emit("GOD_POWER_USED", { power: "spawn_agent", x, y });
     return agent;
@@ -1002,7 +1020,7 @@ export class Simulation {
     // Restore entities
     for (const agentData of data.agents) {
       const agent = Agent.deserialize(agentData, sim.idGen);
-      sim.agents.push(agent);
+      sim.addAgent(agent);
       sim.world.addToSpatialIndex(Math.floor(agent.x), Math.floor(agent.y), agent);
     }
     

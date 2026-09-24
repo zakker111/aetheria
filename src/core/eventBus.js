@@ -9,6 +9,7 @@ export class EventBus {
     }
     this.listeners = new Map();
     this.history = [];
+    this.maxHistory = 500; // cap to prevent unbounded memory growth
     instance = this;
   }
   
@@ -29,6 +30,9 @@ export class EventBus {
   emit(eventType, data = {}) {
     const event = { type: eventType, ...data, timestamp: Date.now() };
     this.history.push(event);
+    if (this.history.length > this.maxHistory) {
+      this.history.splice(0, this.history.length - this.maxHistory);
+    }
     
     const callbacks = this.listeners.get(eventType) || [];
     callbacks.forEach(cb => cb(event));

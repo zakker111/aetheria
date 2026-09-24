@@ -80,6 +80,17 @@ export class TradeSystem {
                 const s1 = settlements[i];
                 const s2 = settlements[j];
 
+                // Diplomatic gate: trade only flows in friendly relations.
+                // At-war pairs never route; hostile (low-score) pairs are blocked too.
+                const diplomacy = this.sim.diplomacySystem;
+                if (diplomacy) {
+                    try {
+                        const rel = diplomacy.getRelation(s1.id, s2.id);
+                        if (!rel || rel.status === 'war') continue;
+                        if (rel.score < 40) continue; // not friendly enough for commerce
+                    } catch { continue; }
+                }
+
                 // Check if s1 has what s2 needs and vice versa
                 const s1HasForS2 = s1.tradeProfile.surplus.find(item => 
                     s2.tradeProfile.deficit.some(d => d.resource === item.resource)
@@ -149,10 +160,11 @@ export class TradeSystem {
 
         if (caravanAgents.length > 0) {
             this.caravans.push({
-                id: `caravan_${Date.now()}`,
+                id: `caravan_${this.caravanSeq = (this.caravanSeq || 0) + 1}`,
                 routeId: route.id,
                 agents: caravanAgents,
                 progress: 0,
+                tradeTicksLeft: 0,
                 state: 'traveling_to_market' // traveling_to_market, trading, returning
             });
             
@@ -190,6 +202,24 @@ export class TradeSystem {
                 if (caravan.progress >= 1) {
                     this.executeTrade(caravan, fromSettlement, toSettlement);
                 }
+            } else if (caravan.state === 'trading') {
+                if (--caravan.tradeTicksLeft <= 0) {
+                    caravan.state = 'returning';
+                    caravan.progress = 1;
+                    const trader = this.getAgent(caravan.agents[0]);
+                    if (trader && trader.cargo && trader.cargo.amount > 0) {
+                        const cargoResource = trader.cargo.resource;
+                        const cargoAmount = trader.cargo.amount;
+                        to.stockpile[cargoResource] = (to.stockpile[cargoResource] || 0) + cargoAmount;
+                        trader.cargo.amount = 0;
+                        this.eventBus.emit('trade:completed', {
+                            from: from.name,
+                            to: to.name,
+                            resource: cargoResource,
+                            amount: cargoAmount
+                        });
+                    }
+                }
             } else if (caravan.state === 'returning') {
                 caravan.progress -= speed / dist;
                 if (caravan.progress <= 0) {
@@ -198,12 +228,18 @@ export class TradeSystem {
                 }
             }
 
-            // Update agent positions visually
+            // Update agent positions visually (keep spatial index consistent)
             caravan.agents.forEach(agentId => {
                 const agent = this.getAgent(agentId);
                 if (agent) {
                     const curX = fromSettlement.center.x + (dx * caravan.progress);
                     const curY = fromSettlement.center.y + (dy * caravan.progress);
+                    const oldTx = Math.floor(agent.x), oldTy = Math.floor(agent.y);
+                    const newTx = Math.floor(curX), newTy = Math.floor(curY);
+                    if (oldTx !== newTx || oldTy !== newTy) {
+                        this.sim.world.removeFromSpatialIndex(oldTx, oldTy, agent);
+                        this.sim.world.addToSpatialIndex(newTx, newTy, agent);
+                    }
                     agent.x = curX;
                     agent.y = curY;
                     agent.state = 'trading'; // Override state temporarily
@@ -230,26 +266,8 @@ export class TradeSystem {
             }
         }
 
-        // Simulate trade delay then return
-        setTimeout(() => {
-            if (caravan.state === 'trading') {
-                caravan.state = 'returning';
-                caravan.progress = 1;
-                
-                // Execute transfer upon arrival logic handled in completeTrade
-                if (agent && agent.cargo && agent.cargo.amount > 0) {
-                    to.stockpile[agent.cargo.resource] += agent.cargo.amount;
-                    agent.cargo.amount = 0;
-                    
-                    this.eventBus.emit('trade:completed', {
-                        from: from.name,
-                        to: to.name,
-                        resource: agent.cargo.resource,
-                        amount: agent.cargo.amount // Note: already added to stockpile
-                    });
-                }
-            }
-        }, 2000);
+        // Trade pause modeled in sim ticks (deterministic; survives save/load)
+        caravan.tradeTicksLeft = 120; // ~2s at 60tps, but driven by update loop
     }
 
     completeTrade(caravan, from, to) {

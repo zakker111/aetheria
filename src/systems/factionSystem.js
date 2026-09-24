@@ -2,7 +2,8 @@
 // Political groups with shared beliefs, diplomacy, and conflict
 
 export class FactionSystem {
-  constructor() {
+  constructor(sim = null) {
+    this.sim = sim;
     this.factions = new Map(); // factionId -> Faction
     this.agentFactionMap = new Map(); // agentId -> factionId
     this.nextFactionId = 1;
@@ -30,21 +31,27 @@ export class FactionSystem {
       'the Golden', 'the Iron', 'the Sacred', 'the Free'
     ];
   }
+
+  // Seeded RNG accessor (falls back to unseeded when standalone)
+  _rng() {
+    return (this.sim && this.sim.world && this.sim.world.rng) || { next: Math.random };
+  }
+
   
   // Create a new faction
-  createFaction(founderAgent, world) {
+  createFaction(founderAgent, world = null) {
     const id = this.nextFactionId++;
     
     // Generate name based on founder's beliefs/location
-    const prefix = this.factionPrefixes[Math.floor(Math.random() * this.factionPrefixes.length)];
-    const theme = this.factionThemes[Math.floor(Math.random() * this.factionThemes.length)];
+    const prefix = this.factionPrefixes[Math.floor(this._rng().next() * this.factionPrefixes.length)];
+    const theme = this.factionThemes[Math.floor(this._rng().next() * this.factionThemes.length)];
     const name = `${prefix} ${theme}`;
     
     // Initial beliefs based on founder's personality
     const beliefs = {
       tradition: 0.3 + (1 - founderAgent.personality.curious) * 0.4,
       prosperity: 0.3 + founderAgent.personality.industrious * 0.4,
-      piety: 0.2 + Math.random() * 0.6,
+      piety: 0.2 + this._rng().next() * 0.6,
       conquest: 0.1 + founderAgent.personality.brave * 0.5,
       isolation: 0.3 + (1 - founderAgent.personality.social) * 0.4,
       community: 0.4 + founderAgent.personality.social * 0.4,
@@ -64,7 +71,7 @@ export class FactionSystem {
       diplomaticStatus: new Map(), // factionId -> 'peace' | 'war' | 'alliance' | 'trade'
       influence: 1.0,
       foundedAt: Date.now(),
-      color: `hsl(${Math.random() * 360}, 70%, 50%)`,
+      color: `hsl(${this._rng().next() * 360}, 70%, 50%)`,
       territory: [],
       resources: { food: 0, wood: 0, ore: 0 },
       wars: [],
@@ -98,7 +105,7 @@ export class FactionSystem {
     
     const newFactions = [];
     for (const { agent } of potentialFounders.slice(0, 2)) {
-      if (Math.random() < 0.3 && this.factions.size < 5) { // Max 5 factions
+      if (this._rng().next() < 0.3 && this.factions.size < 5) { // Max 5 factions
         const faction = this.createFaction(agent, null);
         newFactions.push(faction);
       }
@@ -130,7 +137,7 @@ export class FactionSystem {
           // Check belief compatibility
           const compatibility = this.calculateBeliefCompatibility(candidate, faction);
           
-          if (compatibility > 0.6 && Math.random() < faction.influence * 0.1) {
+          if (compatibility > 0.6 && this._rng().next() < faction.influence * 0.1) {
             this.joinFaction(candidate.id, faction.id);
           }
         }
@@ -207,7 +214,7 @@ export class FactionSystem {
     // Select member with highest influence/reputation
     // Simplified: random selection for now
     const memberArray = Array.from(faction.members);
-    faction.leaderId = memberArray[Math.floor(Math.random() * memberArray.length)];
+    faction.leaderId = memberArray[Math.floor(this._rng().next() * memberArray.length)];
     
     // Choose top 3 as advisors
     faction.advisors = memberArray.slice(0, Math.min(3, memberArray.length));
@@ -288,7 +295,7 @@ export class FactionSystem {
         // Check if already at war
         if (faction.diplomaticStatus.get(enemyId) === 'war') {
           // Chance of battle
-          if (Math.random() < 0.05) {
+          if (this._rng().next() < 0.05) {
             this.resolveBattle(faction, enemyFaction, agents);
           }
         }
@@ -311,17 +318,17 @@ export class FactionSystem {
     const totalStrength = strength1 + strength2;
     const winChance1 = strength1 / totalStrength;
     
-    const winner = Math.random() < winChance1 ? faction1 : faction2;
+    const winner = this._rng().next() < winChance1 ? faction1 : faction2;
     const loser = winner === faction1 ? faction2 : faction1;
     
     // Casualties (5-15% of losing side)
-    const casualtyRate = 0.05 + Math.random() * 0.1;
+    const casualtyRate = 0.05 + this._rng().next() * 0.1;
     const casualties = Math.floor(loser.members.size * casualtyRate);
     
     // Kill random members of losing faction
     const memberArray = Array.from(loser.members);
     for (let i = 0; i < casualties && i < memberArray.length; i++) {
-      const victimId = memberArray[Math.floor(Math.random() * memberArray.length)];
+      const victimId = memberArray[Math.floor(this._rng().next() * memberArray.length)];
       const victim = agents.find(a => a.id === victimId);
       if (victim) {
         victim.alive = false;
@@ -346,7 +353,7 @@ export class FactionSystem {
     // War weariness - may lead to peace
     if (casualties > 3) {
       // High casualties increase chance of seeking peace
-      if (Math.random() < 0.3) {
+      if (this._rng().next() < 0.3) {
         this.signPeaceTreaty(winner, loser);
       }
     }

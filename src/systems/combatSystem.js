@@ -27,7 +27,8 @@ export class CombatSystem {
                 attackCooldown: 0,
                 attackSpeed: 60, // Frames between attacks
                 targetId: null,
-                isAttacking: false
+                isAttacking: false,
+                attackFlashTicks: 0
             };
         }
     }
@@ -131,6 +132,10 @@ export class CombatSystem {
 
             // Reduce cooldowns
             if (combat.attackCooldown > 0) combat.attackCooldown--;
+            if (combat.attackFlashTicks > 0) {
+                combat.attackFlashTicks--;
+                if (combat.attackFlashTicks === 0) combat.isAttacking = false;
+            }
 
             // If has target, validate it
             if (combat.targetId) {
@@ -147,7 +152,7 @@ export class CombatSystem {
                             this.dealDamage(agent, target, combat.damage);
                             combat.attackCooldown = combat.attackSpeed;
                             combat.isAttacking = true;
-                            setTimeout(() => combat.isAttacking = false, 200);
+                            combat.attackFlashTicks = 12; // cleared after ~12 sim ticks (was wall-clock setTimeout)
                         }
                     } else {
                         // Move towards target

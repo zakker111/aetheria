@@ -23,28 +23,13 @@ export class WorldState {
     // Spatial index for fast queries (doc 02: spatial indexes)
     this.spatialIndex = new Map();
 
+    // Entity registry: id -> entity (O(1) lookups; kept in sync by add/removeFromSpatialIndex)
+    this.entityRegistry = new Map();
+
     // Derived caches (doc 02: derived/temporary caches may be rebuilt)
-    this.terrainCache = new Map();
+    this._tilesCache = null;
     this.simulation = null;
     this.eventBus = null;
-
-    // Compatibility properties for combat and construction systems
-    Object.defineProperty(this, 'factions', {
-      get: () => this.simulation?.factionSystem?.factions || new Map(),
-      configurable: true
-    });
-
-    Object.defineProperty(this, 'agents', {
-      get: () => this.simulation?.agents || [],
-      configurable: true
-    });
-
-    Object.defineProperty(this, 'events', {
-      get: () => ({
-        trigger: (evt, data) => this.eventBus?.emit(evt, data)
-      }),
-      configurable: true
-    });
 
     this.generateTerrain();
   }
@@ -62,30 +47,24 @@ export class WorldState {
     return this._tilesCache;
   }
 
-  // Map compatibility interface
-  get map() {
-    return {
-      size: this.width,
-      width: this.width,
-      height: this.height,
-      getTile: (x, y) => this.getTerrain(x, y)
-    };
-  }
-
   // Helper to get single entity at tile
   getEntityAt(x, y) {
     const list = this.getEntitiesAt(x, y);
     return list && list.length > 0 ? list[0] : null;
   }
 
+  // O(1) entity lookup by id (used by combat/religion/ui systems)
+  getEntityById(id) {
+    return this.entityRegistry.get(id) || null;
+  }
+
   // Event bus triggering compatibility
   get events() {
     return {
       trigger: (eventName, data) => {
-        if (this.eventBus) {
-          this.eventBus.emit(eventName, data);
-        } else if (this.simulation && this.simulation.eventBus) {
-          this.simulation.eventBus.emit(eventName, data);
+        const bus = this.eventBus || this.simulation?.eventBus;
+        if (bus) {
+          bus.emit(eventName, data);
         }
       }
     };
@@ -119,7 +98,6 @@ export class WorldState {
     this.assignBiomes();
     
     // Step 6: Place resources based on biome
-    this.placeResources();
   }
 
   /**

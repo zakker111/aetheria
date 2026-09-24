@@ -327,7 +327,7 @@ export class WarfareSystem {
     attacker.combat.attackCooldown = attacker.combat.attackSpeed;
 
     // Damage formula
-    const rawDmg = attacker.combat.damage + (Math.random() * 4 - 2);
+    const rawDmg = attacker.combat.damage + (this.sim.world.rng.next() * 4 - 2);
     const def = defender.combat.defense || 0;
     const finalDmg = Math.max(2, Math.round(rawDmg * (1 - def)));
 

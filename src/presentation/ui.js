@@ -337,7 +337,9 @@ export class UIManager {
             html += `<div style="margin-top: 10px;"><strong>Relationships:</strong></div>`;
             const rels = Array.from(agent.relationships.entries()).slice(0, 5);
             rels.forEach(([id, data]) => {
-                html += `<div style="font-size: 11px; color: #aaa;">• ${data.type}: ${Math.round(data.value)}</div>`;
+                const relType = (data && typeof data === 'object') ? (data.type ?? 'acquaintance') : 'relationship';
+                const relValue = (data && typeof data === 'object') ? data.value : (typeof data === 'number' ? data : 0);
+                html += `<div style="font-size: 11px; color: #aaa;">• ${relType}: ${Math.round(relValue || 0)}</div>`;
             });
         }
         
@@ -345,7 +347,8 @@ export class UIManager {
         if (agent.inventory && Object.keys(agent.inventory).length > 0) {
             html += `<div style="margin-top: 10px;"><strong>Inventory:</strong></div>`;
             for (const [item, count] of Object.entries(agent.inventory)) {
-                html += `<div style="font-size: 11px;">• ${item.replace(/_/g, ' ')}: ${count}</div>`;
+                const label = String(item ?? 'unknown').replace(/_/g, ' ');
+                html += `<div style="font-size: 11px;">• ${label}: ${count}</div>`;
             }
         }
         
@@ -451,7 +454,8 @@ export class UIManager {
             return entity.job ? `${entity.job} Agent` : 'Agent';
         }
         if (entity.type === ENTITY_TYPES.BUILDING) {
-            return building.buildingType.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+            const bType = entity.buildingType || entity.type || 'building';
+            return String(bType).replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
         }
         if (entity.tile) return 'Terrain Tile';
         return 'Unknown';

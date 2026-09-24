@@ -9,21 +9,24 @@ const FIRST_NAMES = [
 ];
 
 export class Agent {
-  constructor(x, y, idGen, initialAge = null) {
+  constructor(x, y, idGen, initialAge = null, rng = null) {
     this.id = idGen.next();
+    this.rng = rng || { next: Math.random }; // deterministic when provided; fallback keeps standalone usage working
     this.type = "agent";
     this.x = x;
     this.y = y;
     this.alive = true;
     
     // Identity & Life Stage
-    this.name = FIRST_NAMES[Math.floor(Math.random() * FIRST_NAMES.length)];
+    this.name = FIRST_NAMES[Math.floor(this.rng.next() * FIRST_NAMES.length)];
+    this.surname = null;      // family lineage name; assigned at birth or founding
+    this.generation = 1;      // dynasty depth (children of surnamed parents = max+1)
     // Default initial agents are young adults (18-32), newborns are passed 0
-    this.age = initialAge !== null ? initialAge : (18 + Math.floor(Math.random() * 14));
-    this.maxAge = 75 + Math.floor(Math.random() * 25); // 75-100 years
+    this.age = initialAge !== null ? initialAge : (18 + Math.floor(this.rng.next() * 14));
+    this.maxAge = 75 + Math.floor(this.rng.next() * 25); // 75-100 years
     this.lifeStage = this.age < 18 ? "child" : (this.age >= 60 ? "elder" : "adult");
     
-    this.gender = Math.random() > 0.5 ? "male" : "female";
+    this.gender = this.rng.next() > 0.5 ? "male" : "female";
     this.children = 0;
     this.parents = [];
     this.partnerId = null;
@@ -35,18 +38,18 @@ export class Agent {
     
     // Components (doc 02: avoid giant NPC class, use components)
     this.needs = {
-      food: 90 + Math.random() * 10,
-      water: 90 + Math.random() * 10,
-      rest: 90 + Math.random() * 10,
-      social: 60 + Math.random() * 20,
+      food: 90 + this.rng.next() * 10,
+      water: 90 + this.rng.next() * 10,
+      rest: 90 + this.rng.next() * 10,
+      social: 60 + this.rng.next() * 20,
       safety: 100
     };
     
     this.personality = {
-      industrious: Math.random() * 0.5 + 0.5,
-      social: Math.random() * 0.6 + 0.3,
-      brave: Math.random(),
-      curious: Math.random()
+      industrious: this.rng.next() * 0.5 + 0.5,
+      social: this.rng.next() * 0.6 + 0.3,
+      brave: this.rng.next(),
+      curious: this.rng.next()
     };
     
     this.skills = {
@@ -214,10 +217,19 @@ export class Agent {
     let hasPendingConstruction = false;
     
     if (simulation && simulation.buildings) {
+      const homeSid = this.settlementId ||
+        (simulation.settlementSystem ? simulation.settlementSystem.agentSettlementMap.get(this.id) : null);
       for (const b of simulation.buildings) {
         if (!b.complete && (b.constructionProgress || 0) < 100) {
-          hasPendingConstruction = true;
-          break;
+          const sid = b.settlementId ?? null;
+          if (sid == null || sid === homeSid) { hasPendingConstruction = true; break; }
+          // foreign site: only counts as civic work if friendly (not at war)
+          if (homeSid != null && simulation.diplomacySystem) {
+            try {
+              const rel = simulation.diplomacySystem.getRelation(homeSid, sid);
+              if (rel && rel.status !== 'war' && rel.score >= 40) { hasPendingConstruction = true; break; }
+            } catch { /* ignore */ }
+          }
         }
       }
     }
@@ -244,7 +256,8 @@ export class Agent {
     }
     
     // 5. Reproduction & Family Life (Adults in prime age with decent needs)
-    if (this.age >= 18 && this.age <= this.maxAge - 15 && 
+    if (this.lifeStage === "adult" &&
+        this.age >= 18 && this.age <= this.maxAge - 15 && 
         (!this.reproduceCooldown || this.reproduceCooldown <= 0) &&
         this.needs.food > 45 && this.needs.water > 45 && 
         this.children < 5) {
@@ -300,13 +313,33 @@ export class Agent {
     for (const goal of this.goals) {
       switch (goal.type) {
         case "build": {
+          // Territorial building rules:
+          //  - Home settlement's projects: full priority (own builders).
+          //  - Friendly settlements' projects (peace/alliance): allowed at reduced priority.
+          //  - At-war or hostile settlements: never build for them.
+          const homeId = this.settlementId ||
+            (simulation && simulation.settlementSystem ? simulation.settlementSystem.agentSettlementMap.get(this.id) : null);
+          const isFriendlySite = (siteSid) => {
+            if (siteSid == null) return true;             // unowned site: anyone may build
+            if (homeId == null) return false;             // homeless agents only build unowned sites
+            if (siteSid === homeId) return true;          // own community always
+            if (simulation && simulation.diplomacySystem) {
+              try {
+                const rel = simulation.diplomacySystem.getRelation(homeId, siteSid);
+                if (!rel) return false;
+                if (rel.status === 'war') return false;   // never aid an enemy
+                return rel.score >= 40;                   // friendly enough => cooperative labor
+              } catch { return false; }
+            }
+            return true;                                  // no diplomacy layer: treat all as friendly
+          };
           // Check all incomplete buildings in simulation or local perception
           let candidate = null;
           let bestDist = Infinity;
           
           if (simulation && simulation.buildings) {
             for (const b of simulation.buildings) {
-              if (!b.complete && (b.constructionProgress || 0) < 100) {
+              if (!b.complete && (b.constructionProgress || 0) < 100 && isFriendlySite(b.settlementId ?? null)) {
                 const dist = this.distanceTo(b);
                 if (dist < bestDist) {
                   bestDist = dist;
@@ -317,7 +350,7 @@ export class Agent {
           }
           if (simulation && simulation.constructionSystem && simulation.constructionSystem.pendingBuildings) {
             for (const b of simulation.constructionSystem.pendingBuildings) {
-              if (!b.isComplete && (b.constructionProgress || 0) < 100) {
+              if (!b.isComplete && (b.constructionProgress || 0) < 100 && isFriendlySite(b.settlementId ?? null)) {
                 const dist = this.distanceTo(b);
                 if (dist < bestDist) {
                   bestDist = dist;
@@ -328,10 +361,12 @@ export class Agent {
           }
           
           if (candidate) {
+            // Foreign friendly sites get a cooperation penalty so home projects come first
+            const foreignPenalty = (candidate.settlementId != null && candidate.settlementId !== homeId) ? 15 : 0;
             actions.push({
               type: "build",
               target: candidate,
-              score: goal.priority + (20 - Math.min(18, bestDist))
+              score: goal.priority + (20 - Math.min(18, bestDist)) - foreignPenalty,
             });
           }
           break;
@@ -339,13 +374,29 @@ export class Agent {
         
         case "reproduce":
           for (const agent of perception.nearbyAgents) {
-            if (agent.alive && agent !== this && 
+            if (agent.alive && agent !== this &&
+                agent.lifeStage === "adult" &&
                 agent.age >= 18 && agent.age <= agent.maxAge - 15 &&
+                agent.gender !== this.gender &&
                 agent.needs.food > 40 && agent.needs.water > 40) {
+              // Incest taboo: never pursue parents / children / siblings
+              const fam = simulation && simulation.relationshipSystem
+                ? simulation.relationshipSystem.getRelatives(this.id) : null;
+              if (fam && (fam.spouse === agent.id ||
+                          fam.parents.includes(agent.id) ||
+                          fam.children.includes(agent.id) ||
+                          fam.siblings.includes(agent.id))) continue;
+              // Prefer partners we already know (bonding matters), plus compatibility
+              let bonus = 0;
+              if (simulation && simulation.relationshipSystem) {
+                const rel = simulation.relationshipSystem.getRelationship(this.id, agent.id);
+                if (rel) bonus += Math.min(8, (rel.friendship || 0) * 0.08);
+              }
+              if (this.partnerId === agent.id) bonus += 6; // established couples stay together
               actions.push({
                 type: "reproduce",
                 target: agent,
-                score: goal.priority + (10 - Math.min(9, this.distanceTo(agent)))
+                score: goal.priority + (10 - Math.min(9, this.distanceTo(agent))) + bonus
               });
             }
           }
@@ -572,8 +623,8 @@ export class Agent {
           action.target.reproduceCooldown = 150;
           action.target.needs.social = Math.min(100, action.target.needs.social + 20);
           
-          const babyX = Math.max(2, Math.min(world.width - 2, this.x + (Math.random() - 0.5) * 2));
-          const babyY = Math.max(2, Math.min(world.height - 2, this.y + (Math.random() - 0.5) * 2));
+          const babyX = Math.max(2, Math.min(world.width - 2, this.x + (this.rng.next() - 0.5) * 2));
+          const babyY = Math.max(2, Math.min(world.height - 2, this.y + (this.rng.next() - 0.5) * 2));
           
           if (eventBus) {
             eventBus.emit("AGENT_BORN", {
@@ -850,20 +901,20 @@ export class Agent {
           if (nearLeft || nearRight || nearTop || nearBottom) {
             const dirX = Math.sign(centerX - this.x);
             const dirY = Math.sign(centerY - this.y);
-            targetX = this.x + dirX * (5 + Math.random() * 6);
-            targetY = this.y + dirY * (5 + Math.random() * 6);
+            targetX = this.x + dirX * (5 + this.rng.next() * 6);
+            targetY = this.y + dirY * (5 + this.rng.next() * 6);
           } else {
             // Tethered community wander: don't drift too far from settlement
             const distFromTown = Math.hypot(this.x - centerX, this.y - centerY);
             if (distFromTown > 16) {
               const dirX = Math.sign(centerX - this.x);
               const dirY = Math.sign(centerY - this.y);
-              targetX = this.x + dirX * (3 + Math.random() * 4);
-              targetY = this.y + dirY * (3 + Math.random() * 4);
+              targetX = this.x + dirX * (3 + this.rng.next() * 4);
+              targetY = this.y + dirY * (3 + this.rng.next() * 4);
             } else {
               // Normal wander: gentle local wandering
-              const angle = Math.random() * Math.PI * 2;
-              const dist = 2 + Math.random() * 4;
+              const angle = this.rng.next() * Math.PI * 2;
+              const dist = 2 + this.rng.next() * 4;
               targetX = this.x + Math.cos(angle) * dist;
               targetY = this.y + Math.sin(angle) * dist;
             }

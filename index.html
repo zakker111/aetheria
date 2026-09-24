@@ -892,7 +892,7 @@
                 title.innerHTML = `<span>${tierIcon} ${s.name} (${tier})</span>`;
 
                 let traditionsHtml = traditions.map(t => {
-                    const label = t.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                    const label = String(t ?? 'unknown').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
                     return `<span class="inspect-badge badge-adult" style="font-size:10px; margin:2px;">📜 ${label}</span>`;
                 }).join(" ");
 
