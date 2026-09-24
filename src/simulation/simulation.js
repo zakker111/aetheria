@@ -38,13 +38,13 @@ export class Simulation {
     return agent;
   }
 
-  constructor(seed = Date.now(), width = 128, height = 128) {
+  constructor(seed = Date.now(), width = 128, height = 128, options = {}) {
     this.seed = seed;
     this.idGen = new IDGenerator();
     // Isolated per-simulation bus: no shared listeners/history across sims (determinism fix)
     this.eventBus = new EventBus({ isolated: true });
     this.clock = new SimulationClock();
-    this.world = new WorldState(width, height, seed);
+    this.world = new WorldState(width, height, seed, { skipTerrain: !!options.skipInit });
     this.entityStore = new EntityStore();
     
     this.agents = [];
@@ -122,9 +122,18 @@ export class Simulation {
     this.birthsThisSession = 0;
     this.deathsThisSession = 0;
     
-    this.initializeWorld();
+    this._skipInit = !!options.skipInit;
+    if (!this._skipInit) {
+      this.initializeWorld();
+    } else {
+      // deserialize() path: still wire cross-references without consuming RNG draws
+      this.world.simulation = this;
+      this.world.eventBus = this.eventBus;
+    }
     this.setupEventListeners();
-    this.initializeNewSystems();
+    if (!this._skipInit) {
+      this.initializeNewSystems();
+    }
   }
   
   initializeNewSystems() {
@@ -418,7 +427,14 @@ export class Simulation {
     this.updateConstruction();
     this.updateReligion();
     this.updateInfrastructure(); // NEW: Roads/bridges
-    
+
+    // Periodically rebuild spatial index to correct drift from moving agents
+    // and prune stale entries for dead/removed entities (prevents perception
+    // slowdowns and ghost entities in dense areas).
+    if (this.clock.tick % 100 === 0) {
+      this.world.rebuildSpatialIndex(this.agents, this.resources, this.buildings);
+    }
+
     // Process events
     this.processEvents();
   }
@@ -980,6 +996,7 @@ export class Simulation {
       seed: this.seed ?? this.world.seed,
       worldSeed: this.world.seed,
       rngState: this.world.rng.getState(), // determinism: restore RNG stream on load
+      world: this.world.serialize(), // terrain arrays (skipTerrain load path)
       clock: this.clock.serialize(),
       idGen: this.idGen.getState(),
       agents: this.agents.map(a => a.serialize()),
@@ -1012,9 +1029,12 @@ export class Simulation {
   }
 
   static deserialize(data) {
-    const sim = new Simulation(data.seed);
+    // skipInit: constructing a full sim would run world/entity initialization,
+    // consuming RNG draws and creating default entities that then get cleared —
+    // both a determinism hazard and wasted work. We restore everything from data.
+    const sim = new Simulation(data.seed, 128, 128, { skipInit: true });
     if (data.rngState) {
-      sim.world.rng.setState(data.rngState); // determinism: continue same RNG stream
+      sim.world.rng.setState(data.rngState);
     }
     sim.clock = SimulationClock.deserialize(data.clock);
     sim.idGen.setState(data.idGen);
@@ -1023,6 +1043,18 @@ export class Simulation {
     sim.agents = [];
     sim.resources = [];
     sim.buildings = [];
+
+    // Restore the procedural world terrain exactly as saved (constructor with
+    // skipInit did not generate it, and generation would advance the RNG).
+    if (data.world) {
+      sim.world.elevation = new Float32Array(data.world.elevation);
+      sim.world.moisture = new Float32Array(data.world.moisture);
+      sim.world.temperature = new Float32Array(data.world.temperature);
+      sim.world.waterLevel = new Float32Array(data.world.waterLevel || []);
+      sim.world.biome = data.world.biome || sim.world.biome;
+      sim.world.riverFlow = new Float32Array(data.world.riverFlow || []);
+      sim.world.isRiverSource = new Uint8Array(data.world.isRiverSource || []);
+    }
     
     // Restore entities
     for (const agentData of data.agents) {
@@ -1091,7 +1123,7 @@ export class Simulation {
     if (data.infrastructure) {
       sim.infrastructureSystem = InfrastructureSystem.deserialize(data.infrastructure, sim);
     }
-    
+
     return sim;
   }
 }
