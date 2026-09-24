@@ -22,6 +22,36 @@ export class InfrastructureSystem {
         this.UPDATE_INTERVAL = 100;
     }
 
+    getFaction(factionId) {
+        if (this.sim.factionSystem?.factions?.get) {
+            return this.sim.factionSystem.factions.get(factionId);
+        }
+        if (this.sim.factions?.get) {
+            return this.sim.factions.get(factionId);
+        }
+        return null;
+    }
+
+    getTile(x, y) {
+        if (this.sim.world?.getTile) {
+            return this.sim.world.getTile(x, y);
+        }
+        if (this.sim.worldState?.getTile) {
+            return this.sim.worldState.getTile(x, y);
+        }
+        return null;
+    }
+
+    getSettlements() {
+        if (this.sim.settlementSystem?.settlements) {
+            return Array.from(this.sim.settlementSystem.settlements.values());
+        }
+        if (this.sim.settlements) {
+            return Array.isArray(this.sim.settlements) ? this.sim.settlements : Array.from(this.sim.settlements.values());
+        }
+        return [];
+    }
+
     update() {
         const currentTick = this.sim.clock.tick;
         
@@ -37,7 +67,7 @@ export class InfrastructureSystem {
      */
     buildRoad(startX, startY, endX, endY, factionId) {
         // Validate resources
-        const faction = this.sim.factions.get(factionId);
+        const faction = this.getFaction(factionId);
         if (!faction || !this.hasResources(faction, this.ROAD_BUILD_COST)) {
             return { success: false, reason: 'insufficient_resources' };
         }
@@ -66,7 +96,7 @@ export class InfrastructureSystem {
         
         // Mark tiles as road in world state
         path.forEach(tile => {
-            const tileData = this.sim.worldState.getTile(tile.x, tile.y);
+            const tileData = this.getTile(tile.x, tile.y);
             if (tileData) {
                 tileData.road = true;
                 tileData.roadFaction = factionId;
@@ -135,13 +165,13 @@ export class InfrastructureSystem {
      * Brings water to dry farmland, improving crop yields
      */
     buildIrrigation(sourceX, sourceY, targetX, targetY, factionId) {
-        const faction = this.sim.factions.get(factionId);
+        const faction = this.getFaction(factionId);
         if (!faction || !this.hasResources(faction, this.IRRIGATION_BUILD_COST)) {
             return { success: false, reason: 'insufficient_resources' };
         }
         
         // Verify water source exists
-        const sourceTile = this.sim.worldState.getTile(sourceX, sourceY);
+        const sourceTile = this.getTile(sourceX, sourceY);
         if (!sourceTile || (sourceTile.biome !== 'water' && sourceTile.biome !== 'river')) {
             return { success: false, reason: 'no_water_source' };
         }
@@ -167,7 +197,7 @@ export class InfrastructureSystem {
         
         // Mark tiles as irrigated
         path.forEach(tile => {
-            const tileData = this.sim.worldState.getTile(tile.x, tile.y);
+            const tileData = this.getTile(tile.x, tile.y);
             if (tileData) {
                 tileData.irrigated = true;
                 tileData.irrigationSource = channel.id;
@@ -195,7 +225,7 @@ export class InfrastructureSystem {
         // Path must be downhill or flat (water flows downhill)
         let prevElevation = sourceTile.elevation;
         for (const tile of path) {
-            const tileData = this.sim.worldState.getTile(tile.x, tile.y);
+            const tileData = this.getTile(tile.x, tile.y);
             if (!tileData) return false;
             
             // Allow slight uphill with pumps (future feature), for now strict downhill
@@ -213,13 +243,13 @@ export class InfrastructureSystem {
      * Allows crossing water obstacles
      */
     buildBridge(x, y, direction, factionId) {
-        const faction = this.sim.factions.get(factionId);
+        const faction = this.getFaction(factionId);
         if (!faction || !this.hasResources(faction, this.BRIDGE_BUILD_COST)) {
             return { success: false, reason: 'insufficient_resources' };
         }
         
         // Check if tile is water
-        const centerTile = this.sim.worldState.getTile(x, y);
+        const centerTile = this.getTile(x, y);
         if (!centerTile || centerTile.biome !== 'water') {
             return { success: false, reason: 'not_over_water' };
         }
@@ -238,7 +268,7 @@ export class InfrastructureSystem {
             const ty = direction === 'vertical' ? y + i - Math.floor(span/2) : y;
             bridgeTiles.push({ x: tx, y: ty });
             
-            const tileData = this.sim.worldState.getTile(tx, ty);
+            const tileData = this.getTile(tx, ty);
             if (tileData) {
                 tileData.bridge = true;
                 tileData.bridgeFaction = factionId;
@@ -274,26 +304,26 @@ export class InfrastructureSystem {
         if (direction === 'horizontal') {
             // Scan left
             for (let i = x; i > x - maxScan; i--) {
-                const tile = this.sim.worldState.getTile(i, y);
+                const tile = this.getTile(i, y);
                 if (!tile || tile.biome !== 'water') break;
                 width++;
             }
             // Scan right
             for (let i = x; i < x + maxScan; i++) {
-                const tile = this.sim.worldState.getTile(i, y);
+                const tile = this.getTile(i, y);
                 if (!tile || tile.biome !== 'water') break;
                 width++;
             }
         } else {
             // Scan up
             for (let i = y; i > y - maxScan; i--) {
-                const tile = this.sim.worldState.getTile(x, i);
+                const tile = this.getTile(x, i);
                 if (!tile || tile.biome !== 'water') break;
                 width++;
             }
             // Scan down
             for (let i = y; i < y + maxScan; i++) {
-                const tile = this.sim.worldState.getTile(x, i);
+                const tile = this.getTile(x, i);
                 if (!tile || tile.biome !== 'water') break;
                 width++;
             }
@@ -309,7 +339,7 @@ export class InfrastructureSystem {
         // Roads boost movement speed for agents on them
         this.roads.forEach(road => {
             road.path.forEach(tile => {
-                const agents = this.sim.world.getNearbyAgents(tile.x, tile.y, 0.5);
+                const agents = this.sim.world?.getNearbyAgents ? this.sim.world.getNearbyAgents(tile.x, tile.y, 0.5) : [];
                 agents.forEach(agent => {
                     agent.speedMultiplier = (agent.speedMultiplier || 1) + 0.5; // 50% faster
                 });
@@ -321,7 +351,7 @@ export class InfrastructureSystem {
             if (!channel.active) return;
             
             channel.path.forEach(tile => {
-                const nearbyBuildings = this.sim.getNearbyBuildings(tile.x, tile.y, 2);
+                const nearbyBuildings = this.sim.world?.getNearbyBuildings ? this.sim.world.getNearbyBuildings(tile.x, tile.y, 2) : [];
                 nearbyBuildings.forEach(building => {
                     if (building.type === 'farm') {
                         building.productivity = (building.productivity || 1) + 0.5; // 50% more yield
@@ -335,7 +365,7 @@ export class InfrastructureSystem {
             if (bridge.health <= 0) {
                 // Destroyed bridge blocks movement
                 bridge.tiles.forEach(tile => {
-                    const tileData = this.sim.worldState.getTile(tile.x, tile.y);
+                    const tileData = this.getTile(tile.x, tile.y);
                     if (tileData) {
                         tileData.passable = false;
                     }
@@ -345,9 +375,9 @@ export class InfrastructureSystem {
     }
 
     hasResources(faction, cost) {
-        const settlement = Array.from(this.sim.settlements.values())
+        const settlement = this.getSettlements()
             .find(s => s.factionId === faction.id);
-        if (!settlement) return false;
+        if (!settlement || !settlement.stockpile) return false;
         
         for (const [resource, amount] of Object.entries(cost)) {
             if ((settlement.stockpile[resource] || 0) < amount) {
@@ -358,9 +388,9 @@ export class InfrastructureSystem {
     }
 
     deductResources(faction, cost) {
-        const settlement = Array.from(this.sim.settlements.values())
+        const settlement = this.getSettlements()
             .find(s => s.factionId === faction.id);
-        if (!settlement) return;
+        if (!settlement || !settlement.stockpile) return;
         
         for (const [resource, amount] of Object.entries(cost)) {
             settlement.stockpile[resource] = (settlement.stockpile[resource] || 0) - amount;
@@ -402,5 +432,11 @@ export class InfrastructureSystem {
         if (data.roads) this.roads = data.roads;
         if (data.irrigation) this.irrigation = data.irrigation;
         if (data.bridges) this.bridges = data.bridges;
+    }
+
+    static deserialize(data, sim) {
+        const sys = new InfrastructureSystem(sim);
+        sys.deserialize(data);
+        return sys;
     }
 }

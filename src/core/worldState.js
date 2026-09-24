@@ -25,8 +25,78 @@ export class WorldState {
 
     // Derived caches (doc 02: derived/temporary caches may be rebuilt)
     this.terrainCache = new Map();
+    this.simulation = null;
+    this.eventBus = null;
+
+    // Compatibility properties for combat and construction systems
+    Object.defineProperty(this, 'factions', {
+      get: () => this.simulation?.factionSystem?.factions || new Map(),
+      configurable: true
+    });
+
+    Object.defineProperty(this, 'agents', {
+      get: () => this.simulation?.agents || [],
+      configurable: true
+    });
+
+    Object.defineProperty(this, 'events', {
+      get: () => ({
+        trigger: (evt, data) => this.eventBus?.emit(evt, data)
+      }),
+      configurable: true
+    });
 
     this.generateTerrain();
+  }
+
+  // Compatibility getter for tests and external systems
+  get tiles() {
+    if (!this._tilesCache) {
+      this._tilesCache = [];
+      for (let y = 0; y < this.height; y++) {
+        for (let x = 0; x < this.width; x++) {
+          this._tilesCache.push(this.getTerrain(x, y));
+        }
+      }
+    }
+    return this._tilesCache;
+  }
+
+  // Map compatibility interface
+  get map() {
+    return {
+      size: this.width,
+      width: this.width,
+      height: this.height,
+      getTile: (x, y) => this.getTerrain(x, y)
+    };
+  }
+
+  // Helper to get single entity at tile
+  getEntityAt(x, y) {
+    const list = this.getEntitiesAt(x, y);
+    return list && list.length > 0 ? list[0] : null;
+  }
+
+  // Event bus triggering compatibility
+  get events() {
+    return {
+      trigger: (eventName, data) => {
+        if (this.eventBus) {
+          this.eventBus.emit(eventName, data);
+        } else if (this.simulation && this.simulation.eventBus) {
+          this.simulation.eventBus.emit(eventName, data);
+        }
+      }
+    };
+  }
+
+  get agents() {
+    return this.simulation ? this.simulation.agents : [];
+  }
+
+  get factions() {
+    return this.simulation && this.simulation.factionSystem ? this.simulation.factionSystem.factions : new Map();
   }
 
   /**

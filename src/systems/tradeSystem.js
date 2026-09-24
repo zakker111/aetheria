@@ -22,6 +22,16 @@ export class TradeSystem {
         this.lastCheckTick = 0;
     }
 
+    getAgent(agentId) {
+        if (this.sim.agents) {
+            return this.sim.agents.find(a => a.id === agentId);
+        }
+        if (this.sim.entities?.agents?.get) {
+            return this.sim.entities.agents.get(agentId);
+        }
+        return null;
+    }
+
     update() {
         const currentTick = this.sim.clock.tick;
         
@@ -190,7 +200,7 @@ export class TradeSystem {
 
             // Update agent positions visually
             caravan.agents.forEach(agentId => {
-                const agent = this.sim.entities.agents.get(agentId);
+                const agent = this.getAgent(agentId);
                 if (agent) {
                     const curX = fromSettlement.center.x + (dx * caravan.progress);
                     const curY = fromSettlement.center.y + (dy * caravan.progress);
@@ -206,15 +216,17 @@ export class TradeSystem {
         caravan.state = 'trading';
         
         // Identify goods
-        const agent = this.sim.entities.agents.get(caravan.agents[0]);
+        const agent = this.getAgent(caravan.agents[0]);
         if (!agent || !agent.cargo) {
             // Load goods if not loaded
             const item = from.tradeProfile.surplus[0];
             if (item) {
                 const amount = Math.min(20, from.stockpile[item.resource]);
                 from.stockpile[item.resource] -= amount;
-                agent.cargo.resource = item.resource;
-                agent.cargo.amount = amount;
+                if (agent && agent.cargo) {
+                    agent.cargo.resource = item.resource;
+                    agent.cargo.amount = amount;
+                }
             }
         }
 
@@ -225,7 +237,7 @@ export class TradeSystem {
                 caravan.progress = 1;
                 
                 // Execute transfer upon arrival logic handled in completeTrade
-                if (agent && agent.cargo.amount > 0) {
+                if (agent && agent.cargo && agent.cargo.amount > 0) {
                     to.stockpile[agent.cargo.resource] += agent.cargo.amount;
                     agent.cargo.amount = 0;
                     
@@ -243,7 +255,7 @@ export class TradeSystem {
     completeTrade(caravan, from, to) {
         // Caravan returns, agents revert to normal or stay as merchants
         caravan.agents.forEach(agentId => {
-            const agent = this.sim.entities.agents.get(agentId);
+            const agent = this.getAgent(agentId);
             if (agent) {
                 agent.state = 'idle';
                 agent.role = 'settler'; // Revert role
@@ -255,7 +267,7 @@ export class TradeSystem {
 
     dissolveCaravan(caravan) {
         caravan.agents.forEach(agentId => {
-            const agent = this.sim.entities.agents.get(agentId);
+            const agent = this.getAgent(agentId);
             if (agent) {
                 agent.state = 'idle';
                 agent.role = 'settler';
@@ -279,5 +291,11 @@ export class TradeSystem {
     deserialize(data) {
         if (data.caravans) this.caravans = data.caravans;
         if (data.tradeRoutes) this.tradeRoutes = data.tradeRoutes;
+    }
+
+    static deserialize(data, sim) {
+        const sys = new TradeSystem(sim);
+        sys.deserialize(data);
+        return sys;
     }
 }

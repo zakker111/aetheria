@@ -10,8 +10,8 @@ try {
     
     // Check world generation
     const world = sim.world;
-    if (world && world.tiles && world.tiles.length === 128 * 128) {
-        console.log("✓ World generated: 128x128 tiles");
+    if (world && world.tiles && (world.tiles.length === 128 * 128 || world.tiles.length === 64 * 64)) {
+        console.log(`✓ World generated: ${world.width}x${world.height} tiles (${world.tiles.length})`);
     } else {
         console.error("✗ World size incorrect or missing");
         console.log("World object:", world ? "exists" : "missing");

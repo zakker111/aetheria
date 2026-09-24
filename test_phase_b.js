@@ -49,6 +49,11 @@ for (let i = 0; i < 100; i++) {
 // Check agent movement
 for (const agent of sim.agents) {
     const initial = initialPositions.get(agent.id);
+    if (!initial) {
+        // Newborn agent born during simulation ticks
+        activeAgents++;
+        continue;
+    }
     const dx = agent.x - initial.x;
     const dy = agent.y - initial.y;
     const distMoved = Math.sqrt(dx * dx + dy * dy);

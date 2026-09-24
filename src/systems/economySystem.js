@@ -93,6 +93,8 @@ export class EconomySystem {
       assignedAt: Date.now()
     });
     
+    agent.job = bestJob;
+    agent.jobTitle = this.jobDefinitions[bestJob]?.name || bestJob;
     return bestJob;
   }
   

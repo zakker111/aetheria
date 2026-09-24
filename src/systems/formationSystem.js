@@ -25,6 +25,16 @@ export class FormationSystem {
         this.TERRITORY_UPDATE_INTERVAL = 500;
     }
 
+    getAgent(agentId) {
+        if (this.sim.agents) {
+            return this.sim.agents.find(a => a.id === agentId);
+        }
+        if (this.sim.entities?.agents?.get) {
+            return this.sim.entities.agents.get(agentId);
+        }
+        return null;
+    }
+
     update() {
         const currentTick = this.sim.clock.tick;
         
@@ -42,11 +52,11 @@ export class FormationSystem {
     createFormation(agentIds, type = 'line', leaderId = null) {
         if (agentIds.length < 2) return null;
         
-        const agents = agentIds.map(id => this.sim.entities.agents.get(id)).filter(a => a);
+        const agents = agentIds.map(id => this.getAgent(id)).filter(a => a);
         if (agents.length === 0) return null;
         
         const leader = leaderId ? 
-            this.sim.entities.agents.get(leaderId) : 
+            this.getAgent(leaderId) : 
             agents[0];
             
         if (!leader) return null;
@@ -89,7 +99,7 @@ export class FormationSystem {
             agent.formationOffset = offset;
             
             // Initial positioning relative to leader
-            const leader = this.sim.entities.agents.get(formation.leaderId);
+            const leader = this.getAgent(formation.leaderId);
             if (leader) {
                 agent.targetX = leader.x + offset[0];
                 agent.targetY = leader.y + offset[1];
@@ -100,7 +110,7 @@ export class FormationSystem {
     updateFormations() {
         for (let i = this.activeFormations.length - 1; i >= 0; i--) {
             const formation = this.activeFormations[i];
-            const leader = this.sim.entities.agents.get(formation.leaderId);
+            const leader = this.getAgent(formation.leaderId);
             
             // Remove if leader dead or no agents left
             if (!leader || formation.agents.length === 0) {
@@ -115,7 +125,7 @@ export class FormationSystem {
             
             // Move formation members to their positions
             formation.agents.forEach(agentId => {
-                const agent = this.sim.entities.agents.get(agentId);
+                const agent = this.getAgent(agentId);
                 if (!agent || !agent.formationOffset) return;
                 
                 const targetX = formation.targetX + agent.formationOffset[0];
@@ -157,7 +167,7 @@ export class FormationSystem {
 
     engageEnemies(formation) {
         formation.agents.forEach(agentId => {
-            const agent = this.sim.entities.agents.get(agentId);
+            const agent = this.getAgent(agentId);
             if (agent) {
                 agent.state = 'combat';
                 // Find nearest enemy and attack
@@ -194,7 +204,7 @@ export class FormationSystem {
 
     dissolveFormation(formation) {
         formation.agents.forEach(agentId => {
-            const agent = this.sim.entities.agents.get(agentId);
+            const agent = this.getAgent(agentId);
             if (agent) {
                 delete agent.formationId;
                 delete agent.formationOffset;
@@ -287,7 +297,7 @@ export class FormationSystem {
         formation.targetY = targetY;
         
         // Leader starts moving
-        const leader = this.sim.entities.agents.get(formation.leaderId);
+        const leader = this.getAgent(formation.leaderId);
         if (leader) {
             leader.targetX = targetX;
             leader.targetY = targetY;
@@ -314,5 +324,11 @@ export class FormationSystem {
         if (data.territories) {
             this.territories = new Map(data.territories);
         }
+    }
+
+    static deserialize(data, sim) {
+        const sys = new FormationSystem(sim);
+        sys.deserialize(data);
+        return sys;
     }
 }

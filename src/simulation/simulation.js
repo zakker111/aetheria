@@ -20,25 +20,73 @@ import { TradeSystem } from "../systems/tradeSystem.js";
 import { AgeSystem } from "../systems/ageSystem.js";
 import { FormationSystem } from "../systems/formationSystem.js";
 import { InfrastructureSystem } from "../systems/infrastructureSystem.js";
+import { CultureSystem } from "../systems/cultureSystem.js";
+import { DiplomacySystem } from "../systems/diplomacySystem.js";
+import { WarfareSystem } from "../systems/warfareSystem.js";
 
 export class Simulation {
-  constructor(seed = Date.now()) {
+  constructor(seed = Date.now(), width = 128, height = 128) {
     this.idGen = new IDGenerator();
     this.eventBus = new EventBus();
     this.clock = new SimulationClock();
-    this.world = new WorldState(64, 64, seed);
+    this.world = new WorldState(width, height, seed);
     this.entityStore = new EntityStore();
     
     this.agents = [];
     this.resources = [];
     this.buildings = [];
+    this.birthsThisSession = 0;
+    this.deathsThisSession = 0;
+
+    // Backward-compatibility and system cross-reference accessors
+    this.entities = {
+      agents: {
+        get: (id) => this.agents.find(a => a.id === id) || null,
+        getAll: () => this.agents
+      },
+      buildings: {
+        get: (id) => this.buildings.find(b => b.id === id) || null,
+        getAll: () => this.buildings
+      },
+      resources: {
+        get: (id) => this.resources.find(r => r.id === id) || null,
+        getAll: () => this.resources
+      },
+      push: (entity) => {
+        if (entity?.type === 'building') {
+          this.buildings.push(entity);
+        } else if (entity?.type === 'resource') {
+          this.resources.push(entity);
+        } else if (entity?.type === 'agent') {
+          this.agents.push(entity);
+        }
+      }
+    };
+
+    Object.defineProperty(this, 'worldState', {
+      get: () => this.world,
+      configurable: true
+    });
+
+    Object.defineProperty(this, 'settlements', {
+      get: () => this.settlementSystem ? this.settlementSystem.settlements : new Map(),
+      configurable: true
+    });
+
+    Object.defineProperty(this, 'factions', {
+      get: () => this.factionSystem ? this.factionSystem.factions : new Map(),
+      configurable: true
+    });
     
     // Phase 1 Systems (Complete with Trade)
     this.relationshipSystem = new RelationshipSystem();
     this.settlementSystem = new SettlementSystem();
     this.economySystem = new EconomySystem();
     this.craftingSystem = new CraftingSystem(this);
-    this.tradeSystem = new TradeSystem(this); // NEW: Automated caravans
+    this.tradeSystem = new TradeSystem(this); // Automated caravans
+    this.cultureSystem = new CultureSystem(this); // Emergent Culture & Traditions
+    this.diplomacySystem = new DiplomacySystem(this); // Inter-realm diplomacy, alliances & treaties
+    this.warfareSystem = new WarfareSystem(this); // Organized warfare, formations, sieges & plundering
     
     // Phase 2 Systems (Complete with Age/Lifecycle)
     this.ageSystem = new AgeSystem(this); // NEW: Child/elder behaviors
@@ -112,37 +160,209 @@ export class Simulation {
   }
 
   initializeWorld() {
-    // Create initial agents
-    for (let i = 0; i < 20; i++) {
-      const x = Math.random() * this.world.width;
-      const y = Math.random() * this.world.height;
-      if (this.world.isWalkable(Math.floor(x), Math.floor(y))) {
+    this.world.simulation = this;
+    this.world.eventBus = this.eventBus;
+    
+    // Cluster starting agents into habitable walkable centers across the 128x128 map
+    const margin = 14;
+    const centers = [];
+    
+    for (let attempt = 0; attempt < 150 && centers.length < 3; attempt++) {
+      const cx = margin + Math.random() * (this.world.width - margin * 2);
+      const cy = margin + Math.random() * (this.world.height - margin * 2);
+      const tx = Math.floor(cx);
+      const ty = Math.floor(cy);
+      if (this.world.isWalkable(tx, ty)) {
+        const terrain = this.world.getTerrain(tx, ty);
+        if (terrain && terrain.type !== "water" && terrain.type !== "snow") {
+          const farEnough = centers.every(c => Math.hypot(c.x - cx, c.y - cy) > 24);
+          if (farEnough) {
+            centers.push({ x: cx, y: cy });
+          }
+        }
+      }
+    }
+    
+    if (centers.length === 0) {
+      centers.push({ x: this.world.width / 2, y: this.world.height / 2 });
+    }
+    
+    // Create exactly 20 initial agents in safe walkable tiles (young adults ready to build society)
+    let spawned = 0;
+    let attempts = 0;
+    while (spawned < 20 && attempts < 600) {
+      attempts++;
+      const center = centers[spawned % centers.length];
+      const x = center.x + (Math.random() - 0.5) * 14;
+      const y = center.y + (Math.random() - 0.5) * 14;
+      const tx = Math.floor(x);
+      const ty = Math.floor(y);
+      if (tx >= 3 && tx < this.world.width - 3 && ty >= 3 && ty < this.world.height - 3 && this.world.isWalkable(tx, ty)) {
         const agent = new Agent(x, y, this.idGen);
         this.agents.push(agent);
-        this.world.addToSpatialIndex(Math.floor(x), Math.floor(y), agent);
+        this.world.addToSpatialIndex(tx, ty, agent);
+        spawned++;
       }
     }
     
-    // Create resources
-    for (let i = 0; i < 50; i++) {
-      const x = Math.random() * this.world.width;
-      const y = Math.random() * this.world.height;
-      if (this.world.isWalkable(Math.floor(x), Math.floor(y))) {
-        const types = ["food", "wood", "ore"];
-        const resourceType = types[Math.floor(Math.random() * types.length)];
-        const resource = new Resource(x, y, resourceType, 10, this.idGen);
-        this.resources.push(resource);
-        this.world.addToSpatialIndex(Math.floor(x), Math.floor(y), resource);
+    // Found initial persistent societies at community centers
+    for (let i = 0; i < centers.length; i++) {
+      const center = centers[i];
+      const group = this.agents.filter(a => Math.hypot(a.x - center.x, a.y - center.y) < 18);
+      if (group.length > 0) {
+        const s = this.settlementSystem.foundSettlement(center.x, center.y, group);
+        if (this.cultureSystem) {
+          this.cultureSystem.initSettlementCulture(s);
+        }
+      }
+    }
+
+    // Assign active initial jobs so agents immediately start working and moving
+    const startingJobs = ['lumberjack', 'miner', 'farmer', 'builder', 'gatherer', 'soldier'];
+    for (let i = 0; i < this.agents.length; i++) {
+      const agent = this.agents[i];
+      const assigned = startingJobs[i % startingJobs.length];
+      agent.job = assigned;
+      agent.jobTitle = assigned.charAt(0).toUpperCase() + assigned.slice(1);
+      if (this.economySystem) {
+        this.economySystem.agentJobs.set(agent.id, { job: assigned, salary: 12, satisfaction: 85 });
+      }
+    }
+
+    // Seed initial building projects in each community so builders immediately construct
+    for (const center of centers) {
+      const hx = Math.floor(center.x + 2);
+      const hy = Math.floor(center.y + 2);
+      if (this.world.isWalkable(hx, hy)) {
+        const house = new Building(hx, hy, "house", this.idGen);
+        house.constructionProgress = 15;
+        house.complete = false;
+        this.buildings.push(house);
+        this.world.addToSpatialIndex(hx, hy, house);
+      }
+      const fx = Math.floor(center.x - 3);
+      const fy = Math.floor(center.y + 2);
+      if (this.world.isWalkable(fx, fy)) {
+        const farm = new Building(fx, fy, "farm", this.idGen);
+        farm.constructionProgress = 10;
+        farm.complete = false;
+        this.buildings.push(farm);
+        this.world.addToSpatialIndex(fx, fy, farm);
+      }
+    }
+
+    // Initialize diplomatic network between all founded realms
+    if (this.diplomacySystem && this.settlementSystem) {
+      const allSettlements = Array.from(this.settlementSystem.settlements.values());
+      for (let a = 0; a < allSettlements.length; a++) {
+        for (let b = a + 1; b < allSettlements.length; b++) {
+          this.diplomacySystem.initRelation(allSettlements[a].id, allSettlements[b].id);
+        }
       }
     }
     
-    // Create water sources
-    for (let i = 0; i < 10; i++) {
-      const x = Math.random() * this.world.width;
-      const y = Math.random() * this.world.height;
-      const resource = new Resource(x, y, "water", 100, this.idGen);
-      this.resources.push(resource);
-      this.world.addToSpatialIndex(Math.floor(x), Math.floor(y), resource);
+    // Create resources: cluster abundant wood, water, ore, and food near communities
+    for (const center of centers) {
+      // 8 wood, 7 ore, 6 food right around each community
+      for (const type of ["wood", "ore", "food"]) {
+        const count = type === "wood" ? 8 : (type === "ore" ? 7 : 6);
+        for (let k = 0; k < count; k++) {
+          const rx = center.x + (Math.random() - 0.5) * 18;
+          const ry = center.y + (Math.random() - 0.5) * 18;
+          const tx = Math.floor(rx);
+          const ty = Math.floor(ry);
+          if (tx >= 2 && tx < this.world.width - 2 && ty >= 2 && ty < this.world.height - 2 && this.world.isWalkable(tx, ty)) {
+            const amount = type === "ore" ? 70 : (type === "wood" ? 60 : 50);
+            const res = new Resource(rx, ry, type, amount, this.idGen);
+            this.resources.push(res);
+            this.world.addToSpatialIndex(tx, ty, res);
+          }
+        }
+      }
+      // 5 freshwater springs near each community
+      for (let k = 0; k < 5; k++) {
+        const rx = center.x + (Math.random() - 0.5) * 14;
+        const ry = center.y + (Math.random() - 0.5) * 14;
+        const tx = Math.floor(rx);
+        const ty = Math.floor(ry);
+        if (tx >= 2 && tx < this.world.width - 2 && ty >= 2 && ty < this.world.height - 2 && this.world.isWalkable(tx, ty)) {
+          const res = new Resource(rx, ry, "water", 100, this.idGen);
+          this.resources.push(res);
+          this.world.addToSpatialIndex(tx, ty, res);
+        }
+      }
+    }
+    
+    // Distribute abundant biome-specific resources across the 128x128 map
+    // 1. Wood (Forests & Jungles) - 220 trees
+    let woodSpawned = 0;
+    attempts = 0;
+    while (woodSpawned < 220 && attempts < 2500) {
+      attempts++;
+      const x = Math.floor(Math.random() * (this.world.width - 4)) + 2;
+      const y = Math.floor(Math.random() * (this.world.height - 4)) + 2;
+      const terrain = this.world.getTerrain(x, y);
+      if (terrain && (terrain.biome === "forest" || terrain.biome === "jungle" || terrain.type === "grass") && this.world.isWalkable(x, y)) {
+        const entities = this.world.getEntitiesAt(x, y);
+        if (!entities.some(e => e.type === "resource")) {
+          const res = new Resource(x, y, "wood", 60, this.idGen);
+          this.resources.push(res);
+          this.world.addToSpatialIndex(x, y, res);
+          woodSpawned++;
+        }
+      }
+    }
+
+    // 2. Food (Grasslands, Savannas, Plains & Riverbanks) - 180 crops
+    let foodSpawned = 0;
+    attempts = 0;
+    while (foodSpawned < 180 && attempts < 2000) {
+      attempts++;
+      const x = Math.floor(Math.random() * (this.world.width - 4)) + 2;
+      const y = Math.floor(Math.random() * (this.world.height - 4)) + 2;
+      const terrain = this.world.getTerrain(x, y);
+      if (terrain && (terrain.biome === "grassland" || terrain.biome === "savanna" || terrain.biome === "beach") && this.world.isWalkable(x, y)) {
+        const entities = this.world.getEntitiesAt(x, y);
+        if (!entities.some(e => e.type === "resource")) {
+          const res = new Resource(x, y, "food", 50, this.idGen);
+          this.resources.push(res);
+          this.world.addToSpatialIndex(x, y, res);
+          foodSpawned++;
+        }
+      }
+    }
+
+    // 3. Ore (Mountains, Highlands & Caverns) - 160 mineral veins
+    let oreSpawned = 0;
+    attempts = 0;
+    while (oreSpawned < 160 && attempts < 2000) {
+      attempts++;
+      const x = Math.floor(Math.random() * (this.world.width - 4)) + 2;
+      const y = Math.floor(Math.random() * (this.world.height - 4)) + 2;
+      const terrain = this.world.getTerrain(x, y);
+      if (terrain && (terrain.biome === "mountain" || terrain.biome === "highland" || terrain.biome === "tundra" || terrain.type === "mountain") && this.world.isWalkable(x, y)) {
+        const entities = this.world.getEntitiesAt(x, y);
+        if (!entities.some(e => e.type === "resource")) {
+          const res = new Resource(x, y, "ore", 70, this.idGen);
+          this.resources.push(res);
+          this.world.addToSpatialIndex(x, y, res);
+          oreSpawned++;
+        }
+      }
+    }
+
+    // 4. Freshwater sources across world - 60 water springs
+    for (let i = 0; i < 60; i++) {
+      const x = Math.floor(Math.random() * (this.world.width - 4)) + 2;
+      const y = Math.floor(Math.random() * (this.world.height - 4)) + 2;
+      if (this.world.isWalkable(x, y)) {
+        const entities = this.world.getEntitiesAt(x, y);
+        if (!entities.some(e => e.type === "resource")) {
+          const resource = new Resource(x, y, "water", 100, this.idGen);
+          this.resources.push(resource);
+          this.world.addToSpatialIndex(x, y, resource);
+        }
+      }
     }
   }
 
@@ -165,6 +385,7 @@ export class Simulation {
     // Phase 2: Update emergent systems
     this.updateRelationships();
     this.updateSettlements();
+    this.updateCulture(); // Societies & Culture
     this.updateEconomy();
     this.updateCrafting();
     this.updateTrade(); // NEW: Trade caravans
@@ -173,7 +394,9 @@ export class Simulation {
     // Phase 3: Update advanced systems
     this.updateEvents();
     this.updateFactions();
-    this.updateFormations(); // NEW: Military formations
+    this.updateDiplomacy(); // NEW: Inter-settlement diplomacy, treaties, alliances & war declarations
+    this.updateWarfare(); // NEW: Warbands, tactical formations, sieges & battlefield clashes
+    this.updateFormations(); // Military formations
     
     // Phase 4-6: Update new systems
     this.updateCombat();
@@ -190,6 +413,13 @@ export class Simulation {
     this.tradeSystem.update();
   }
   
+  updateCulture() {
+    // Update cultural traditions and diffusion
+    if (this.cultureSystem) {
+      this.cultureSystem.update(this.clock.tick);
+    }
+  }
+  
   updateAging() {
     // Update agent aging and lifecycle events
     this.ageSystem.update();
@@ -198,6 +428,18 @@ export class Simulation {
   updateFormations() {
     // Update military formations and territories
     this.formationSystem.update();
+  }
+
+  updateDiplomacy() {
+    if (this.diplomacySystem) {
+      this.diplomacySystem.update(this.clock.tick);
+    }
+  }
+
+  updateWarfare() {
+    if (this.warfareSystem) {
+      this.warfareSystem.update();
+    }
   }
   
   updateInfrastructure() {
@@ -246,15 +488,85 @@ export class Simulation {
           }
         }
       }
+
+      // Autonomous civic planning & expansion for societies
+      for (const settlement of this.settlementSystem.settlements.values()) {
+        const pop = settlement.population || settlement.agentIds?.size || 0;
+        
+        // Elect elder / leader if none
+        if (!settlement.leadership && settlement.agentIds && settlement.agentIds.size > 0) {
+          const citizens = this.agents.filter(a => settlement.agentIds.has(a.id) && a.alive);
+          if (citizens.length > 0) {
+            citizens.sort((a, b) => b.age - a.age);
+            settlement.leadership = citizens[0].name;
+          }
+        }
+        
+        // Check building needs
+        const currentBuildings = this.buildings.filter(b => {
+          const dist = Math.hypot(b.x - settlement.center.x, b.y - settlement.center.y);
+          return dist < 22;
+        });
+        
+        const houses = currentBuildings.filter(b => b.buildingType === "house" && b.complete);
+        const workshops = currentBuildings.filter(b => b.buildingType === "workshop" && b.complete);
+        const farms = currentBuildings.filter(b => b.buildingType === "farm" && b.complete);
+        const temples = currentBuildings.filter(b => b.buildingType === "temple" && b.complete);
+        const pending = currentBuildings.filter(b => !b.complete);
+        
+        // Only plan up to 2 active building projects simultaneously
+        if (pending.length < 2) {
+          let neededType = null;
+          if (houses.length < Math.max(1, Math.ceil(pop / 3))) {
+            neededType = "house";
+          } else if (workshops.length === 0 && pop >= 3) {
+            neededType = "workshop";
+          } else if (farms.length === 0 && pop >= 4) {
+            neededType = "farm";
+          } else if (temples.length === 0 && pop >= 6) {
+            neededType = "temple";
+          } else if (houses.length < Math.ceil(pop / 2)) {
+            neededType = "house";
+          }
+          
+          if (neededType) {
+            // Find a suitable clear walkable tile near settlement center
+            for (let a = 0; a < 25; a++) {
+              const ang = Math.random() * Math.PI * 2;
+              const r = 3 + Math.random() * 8;
+              const bx = Math.floor(settlement.center.x + Math.cos(ang) * r);
+              const by = Math.floor(settlement.center.y + Math.sin(ang) * r);
+              if (bx >= 4 && bx < this.world.width - 4 && by >= 4 && by < this.world.height - 4 && this.world.isWalkable(bx, by)) {
+                const occupied = this.buildings.some(b => Math.abs(b.x - bx) < 2 && Math.abs(b.y - by) < 2);
+                if (!occupied) {
+                  const building = new Building(bx, by, neededType, this.idGen);
+                  building.constructionProgress = 0;
+                  building.complete = false;
+                  this.buildings.push(building);
+                  this.world.addToSpatialIndex(bx, by, building);
+                  if (!settlement.buildings) settlement.buildings = [];
+                  settlement.buildings.push(building);
+                  this.eventBus.emit("BLUEPRINT_PLACED", { 
+                    type: neededType, 
+                    settlementName: settlement.name, 
+                    x: bx, 
+                    y: by 
+                  });
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
   
   updateEconomy() {
-    // Assign jobs to unemployed agents in settlements
-    if (this.clock.tick % 20 === 0) {
+    // Assign jobs to unemployed agents in settlements and idle agents
+    if (this.clock.tick % 10 === 0) {
+      const availableJobs = ['gatherer', 'farmer', 'lumberjack', 'miner', 'builder', 'craftsman'];
       for (const settlement of this.settlementSystem.settlements.values()) {
-        const availableJobs = ['gatherer', 'farmer', 'lumberjack', 'miner', 'builder', 'craftsman'];
-        
         for (const agentId of settlement.agentIds) {
           const agent = this.agents.find(a => a.id === agentId);
           if (agent && agent.alive) {
@@ -263,6 +575,12 @@ export class Simulation {
               this.economySystem.assignJob(agent, availableJobs);
             }
           }
+        }
+      }
+      // Also ensure any unemployed agent receives a role
+      for (const agent of this.agents) {
+        if (agent.alive && (!agent.job || agent.job === 'unemployed')) {
+          this.economySystem.assignJob(agent, availableJobs);
         }
       }
     }
@@ -291,8 +609,19 @@ export class Simulation {
     // Auto-assign craftsmen to workshops every 30 ticks
     if (this.clock.tick % 30 === 0) {
       this.craftingSystem.workshops.forEach((workshop, workshopId) => {
-        // Find unemployed agents with crafting skills in this settlement
-        const settlement = this.settlementSystem.getAgentSettlement(workshop.assignedWorkers[0]);
+        // Find unemployed agents with crafting skills in or near this settlement
+        let settlement = null;
+        if (workshop.assignedWorkers.length > 0) {
+          settlement = this.settlementSystem.getAgentSettlement(workshop.assignedWorkers[0]);
+        }
+        if (!settlement) {
+          for (const s of this.settlementSystem.settlements.values()) {
+            if (Math.hypot(s.center.x - workshop.x, s.center.y - workshop.y) < 25) {
+              settlement = s;
+              break;
+            }
+          }
+        }
         if (settlement) {
           for (const agentId of settlement.agentIds) {
             const agent = this.agents.find(a => a.id === agentId);
@@ -380,14 +709,14 @@ export class Simulation {
       const perception = agent.perceive(this.world, []);
       
       // Generate goals
-      agent.generateGoals();
+      agent.generateGoals(this);
       
       // Generate and choose actions
-      const actions = agent.generateActions(perception);
+      const actions = agent.generateActions(perception, this.world, this);
       const chosenAction = agent.chooseAction(actions);
       
-      // Execute action with crafting system reference
-      const result = agent.executeAction(chosenAction, this.world, this.eventBus, this.craftingSystem);
+      // Execute action with crafting system and simulation references
+      const result = agent.executeAction(chosenAction, this.world, this.eventBus, this.craftingSystem, this);
       
       // Handle birth result
       if (result && result.type === "birth") {
@@ -398,7 +727,10 @@ export class Simulation {
     // Create newborn agents
     for (const birth of births) {
       if (this.world.isWalkable(Math.floor(birth.x), Math.floor(birth.y))) {
-        const baby = new Agent(birth.x, birth.y, this.idGen);
+        const baby = new Agent(birth.x, birth.y, this.idGen, 0); // Newborn baby with age 0
+        baby.lifeStage = 'child';
+        baby.parents = [birth.parentId1, birth.parentId2];
+        
         // Inherit some traits from parents
         const parent1 = this.agents.find(a => a.id === birth.parentId1);
         const parent2 = this.agents.find(a => a.id === birth.parentId2);
@@ -407,18 +739,38 @@ export class Simulation {
           baby.personality.social = (parent1.personality.social + parent2.personality.social) / 2;
           baby.personality.brave = (parent1.personality.brave + parent2.personality.brave) / 2;
           baby.skills.gather = (parent1.skills.gather + parent2.skills.gather) / 2;
+          baby.settlementId = parent1.settlementId || parent2.settlementId;
         }
         this.agents.push(baby);
         this.world.addToSpatialIndex(Math.floor(birth.x), Math.floor(birth.y), baby);
-        this.eventBus.emit("AGENT_CREATED", { agentId: baby.id, x: baby.x, y: baby.y, reason: "birth" });
+        this.birthsThisSession = (this.birthsThisSession || 0) + 1;
+        this.eventBus.emit("AGENT_CREATED", { agentId: baby.id, name: baby.name, x: baby.x, y: baby.y, reason: "birth" });
       }
     }
     
-    // Remove dead agents and emit death events
+    // Remove dead agents, transfer inheritance to settlement, and emit death events
     const deadAgents = this.agents.filter(a => !a.alive);
     for (const dead of deadAgents) {
-      this.eventBus.emit("AGENT_DIED", { agentId: dead.id, x: dead.x, y: dead.y, age: dead.age });
+      this.deathsThisSession = (this.deathsThisSession || 0) + 1;
+      this.eventBus.emit("AGENT_DIED", { 
+        agentId: dead.id, 
+        name: dead.name, 
+        x: dead.x, 
+        y: dead.y, 
+        age: Math.floor(dead.age),
+        cause: dead.deathCause || "natural"
+      });
       this.world.removeFromSpatialIndex(Math.floor(dead.x), Math.floor(dead.y), dead);
+      
+      // Stockpile inheritance to community
+      if (dead.settlementId && this.settlementSystem) {
+        const set = this.settlementSystem.settlements.get(dead.settlementId);
+        if (set && set.stockpile) {
+          set.stockpile.wood = (set.stockpile.wood || 0) + (dead.inventory.wood_log || 0);
+          set.stockpile.ore = (set.stockpile.ore || 0) + (dead.inventory.ore_iron || 0);
+          set.stockpile.food = (set.stockpile.food || 0) + (dead.inventory.wheat || 0) + (dead.inventory.bread || 0);
+        }
+      }
     }
     this.agents = this.agents.filter(a => a.alive);
   }
@@ -428,14 +780,118 @@ export class Simulation {
       resource.update();
     }
     
-    // Remove depleted resources
-    this.resources = this.resources.filter(r => r.amount > 0);
+    // Natural ecological replenishment: keep the world vibrant with food, wood, and ores
+    if (this.clock.tick % 40 === 0) {
+      this.maintainWorldResources();
+    }
+  }
+
+  maintainWorldResources() {
+    let foodCount = 0;
+    let woodCount = 0;
+    let oreCount = 0;
+
+    for (const r of this.resources) {
+      if (r.destroyed) continue;
+      if (r.resourceType === "food") foodCount++;
+      else if (r.resourceType === "wood") woodCount++;
+      else if (r.resourceType === "ore") oreCount++;
+    }
+
+    // Regrow wood in forests/jungles
+    if (woodCount < 120) {
+      const needed = Math.min(8, 120 - woodCount);
+      for (let k = 0; k < needed; k++) {
+        const x = Math.floor(Math.random() * (this.world.width - 4)) + 2;
+        const y = Math.floor(Math.random() * (this.world.height - 4)) + 2;
+        const terrain = this.world.getTerrain(x, y);
+        if (terrain && (terrain.biome === "forest" || terrain.biome === "jungle") && this.world.isWalkable(x, y)) {
+          const entities = this.world.getEntitiesAt(x, y);
+          if (!entities.some(e => e.type === "resource")) {
+            const res = new Resource(x, y, "wood", 50, this.idGen);
+            this.resources.push(res);
+            this.world.addToSpatialIndex(x, y, res);
+          }
+        }
+      }
+    }
+
+    // Regrow food in grasslands/savannas/plains
+    if (foodCount < 120) {
+      const needed = Math.min(8, 120 - foodCount);
+      for (let k = 0; k < needed; k++) {
+        const x = Math.floor(Math.random() * (this.world.width - 4)) + 2;
+        const y = Math.floor(Math.random() * (this.world.height - 4)) + 2;
+        const terrain = this.world.getTerrain(x, y);
+        if (terrain && (terrain.biome === "grassland" || terrain.biome === "savanna" || terrain.biome === "beach") && this.world.isWalkable(x, y)) {
+          const entities = this.world.getEntitiesAt(x, y);
+          if (!entities.some(e => e.type === "resource")) {
+            const res = new Resource(x, y, "food", 45, this.idGen);
+            this.resources.push(res);
+            this.world.addToSpatialIndex(x, y, res);
+          }
+        }
+      }
+    }
+
+    // Uncover ore deposits in mountains/highlands
+    if (oreCount < 80) {
+      const needed = Math.min(6, 80 - oreCount);
+      for (let k = 0; k < needed; k++) {
+        const x = Math.floor(Math.random() * (this.world.width - 4)) + 2;
+        const y = Math.floor(Math.random() * (this.world.height - 4)) + 2;
+        const terrain = this.world.getTerrain(x, y);
+        if (terrain && (terrain.biome === "mountain" || terrain.biome === "highland" || terrain.biome === "tundra") && this.world.isWalkable(x, y)) {
+          const entities = this.world.getEntitiesAt(x, y);
+          if (!entities.some(e => e.type === "resource")) {
+            const res = new Resource(x, y, "ore", 60, this.idGen);
+            this.resources.push(res);
+            this.world.addToSpatialIndex(x, y, res);
+          }
+        }
+      }
+    }
   }
 
   updateBuildings() {
     for (const building of this.buildings) {
       building.update();
+      // Completed farms cultivate food nearby
+      if (building.complete && building.buildingType === "farm" && this.clock.tick % 50 === 0) {
+        const fx = Math.floor(building.x + (Math.random() - 0.5) * 4);
+        const fy = Math.floor(building.y + (Math.random() - 0.5) * 4);
+        if (fx >= 2 && fx < this.world.width - 2 && fy >= 2 && fy < this.world.height - 2 && this.world.isWalkable(fx, fy)) {
+          const entities = this.world.getEntitiesAt(fx, fy);
+          const hasFood = entities.some(e => e.type === "resource" && e.resourceType === "food");
+          if (!hasFood) {
+            const crop = new Resource(fx, fy, "food", 30, this.idGen);
+            this.resources.push(crop);
+            this.world.addToSpatialIndex(fx, fy, crop);
+          }
+        }
+      }
     }
+  }
+
+  removeAgent(agentId) {
+    const idx = this.agents.findIndex(a => a.id === agentId);
+    if (idx !== -1) {
+      const agent = this.agents[idx];
+      agent.alive = false;
+      this.deathsThisSession = (this.deathsThisSession || 0) + 1;
+      this.world.removeFromSpatialIndex(Math.floor(agent.x), Math.floor(agent.y), agent);
+      this.agents.splice(idx, 1);
+      this.eventBus.emit("AGENT_DIED", { 
+        agentId: agent.id, 
+        name: agent.name, 
+        x: agent.x, 
+        y: agent.y, 
+        age: Math.floor(agent.age),
+        cause: "removed"
+      });
+      return true;
+    }
+    return false;
   }
 
   processEvents() {
@@ -447,8 +903,37 @@ export class Simulation {
     const resource = new Resource(x, y, resourceType, amount, this.idGen);
     this.resources.push(resource);
     this.world.addToSpatialIndex(Math.floor(x), Math.floor(y), resource);
-    this.eventBus.emit("GOD_POWER_USED", { power: "create_resource", x, y });
+    this.eventBus.emit("GOD_POWER_USED", { power: "create_resource", x, y, resourceType });
     return resource;
+  }
+
+  // Spawns a rich multi-node cluster of resources around a target position
+  spawnResourceCluster(cx, cy, resourceType, count = 4, radius = 3.2) {
+    const spawned = [];
+    for (let i = 0; i < count; i++) {
+      const rx = i === 0 ? cx : cx + (Math.random() - 0.5) * radius * 2;
+      const ry = i === 0 ? cy : cy + (Math.random() - 0.5) * radius * 2;
+      const tx = Math.floor(rx);
+      const ty = Math.floor(ry);
+      if (tx >= 1 && tx < this.world.width - 1 && ty >= 1 && ty < this.world.height - 1 && this.world.isWalkable(tx, ty)) {
+        const amount = resourceType === "water" ? 100 : (resourceType === "ore" ? 65 : 50);
+        const res = new Resource(rx, ry, resourceType, amount, this.idGen);
+        this.resources.push(res);
+        this.world.addToSpatialIndex(tx, ty, res);
+        spawned.push(res);
+      }
+    }
+    this.eventBus.emit("GOD_POWER_USED", { power: "spawn_resource_cluster", x: cx, y: cy, resourceType, count: spawned.length });
+    return spawned;
+  }
+
+  // Spawns a full nature bounty (wood, water, and ore together) around coordinates
+  spawnAbundantBounty(cx, cy) {
+    const w = this.spawnResourceCluster(cx - 2, cy - 1, "wood", 3, 2.5);
+    const o = this.spawnResourceCluster(cx + 2, cy + 1, "ore", 3, 2.5);
+    const s = this.spawnResourceCluster(cx, cy - 2, "water", 2, 2.0);
+    const f = this.spawnResourceCluster(cx, cy + 2, "food", 3, 2.0);
+    return [...w, ...o, ...s, ...f];
   }
 
   removeResource(x, y) {
@@ -547,12 +1032,12 @@ export class Simulation {
       sim.craftingSystem = CraftingSystem.deserialize(data.crafting, sim);
     }
     if (data.trade) {
-      sim.tradeSystem = TradeSystem.deserialize(data.trade);
+      sim.tradeSystem = TradeSystem.deserialize(data.trade, sim);
     }
     
     // Restore Phase 2 systems (Complete)
     if (data.age) {
-      sim.ageSystem = AgeSystem.deserialize(data.age);
+      sim.ageSystem = AgeSystem.deserialize(data.age, sim);
     }
     
     // Restore Phase 3 systems (Complete)
@@ -563,7 +1048,7 @@ export class Simulation {
       sim.factionSystem = FactionSystem.deserialize(data.factions);
     }
     if (data.formations) {
-      sim.formationSystem = FormationSystem.deserialize(data.formations);
+      sim.formationSystem = FormationSystem.deserialize(data.formations, sim);
     }
     
     // Restore Phase 4-6 systems (Complete)
@@ -579,11 +1064,7 @@ export class Simulation {
       sim.religionSystem.activeRituals = new Map(data.religion.activeRituals);
     }
     if (data.infrastructure) {
-      sim.infrastructureSystem = InfrastructureSystem.deserialize(data.infrastructure);
-    }
-    if (data.religion) {
-      sim.religionSystem.priests = new Set(data.religion.priests);
-      sim.religionSystem.activeRituals = new Map(data.religion.activeRituals);
+      sim.infrastructureSystem = InfrastructureSystem.deserialize(data.infrastructure, sim);
     }
     
     return sim;

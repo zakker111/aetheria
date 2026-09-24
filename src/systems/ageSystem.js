@@ -278,4 +278,10 @@ export class AgeSystem {
     deserialize(data) {
         if (data.lastAgeTick) this.lastAgeTick = data.lastAgeTick;
     }
+
+    static deserialize(data, sim) {
+        const sys = new AgeSystem(sim);
+        sys.deserialize(data);
+        return sys;
+    }
 }

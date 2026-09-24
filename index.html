@@ -4,18 +4,24 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Aetheria - God Simulation</title>
+    <meta name="description" content="A god simulation game where you observe and influence autonomous agents, resources, and civilizations.">
+    <meta property="og:title" content="Aetheria - God Simulation">
+    <meta property="og:description" content="A god simulation game where you observe and influence autonomous agents, resources, and civilizations.">
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
+            user-select: none;
         }
         
         body {
-            background: #1a1a2e;
-            color: #eee;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0f172a;
+            color: #f1f5f9;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             overflow: hidden;
+            width: 100vw;
+            height: 100vh;
         }
         
         #gameCanvas {
@@ -25,136 +31,517 @@
             cursor: crosshair;
         }
         
+        /* Top Navigation Header */
+        #topBar {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            right: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            pointer-events: none;
+            z-index: 20;
+            gap: 12px;
+        }
+
         #ui {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 15px;
-            border-radius: 8px;
-            font-size: 14px;
-            max-width: 300px;
-        }
-        
-        #tools {
-            position: absolute;
-            bottom: 10px;
-            left: 10px;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 15px;
-            border-radius: 8px;
+            background: rgba(15, 23, 42, 0.88);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 10px 16px;
+            border-radius: 12px;
+            font-size: 13px;
+            pointer-events: auto;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
             display: flex;
-            gap: 10px;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 260px;
         }
-        
-        .tool-button {
-            padding: 8px 12px;
-            background: #16213e;
-            border: 2px solid #0f3460;
-            border-radius: 4px;
-            color: #eee;
-            cursor: pointer;
-            font-size: 12px;
-            transition: all 0.2s;
-        }
-        
-        .tool-button:hover {
-            background: #0f3460;
-        }
-        
-        .tool-button.active {
-            background: #e94560;
-            border-color: #e94560;
-        }
-        
-        #controls {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 15px;
-            border-radius: 8px;
+
+        .title-row {
             display: flex;
-            gap: 10px;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 6px;
         }
-        
-        .control-button {
-            padding: 8px 16px;
-            background: #16213e;
-            border: 2px solid #0f3460;
-            border-radius: 4px;
-            color: #eee;
-            cursor: pointer;
-            font-size: 14px;
-            transition: all 0.2s;
+
+        .app-title {
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            background: linear-gradient(135deg, #f43f5e, #fb7185, #fbbf24);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
         }
-        
-        .control-button:hover {
-            background: #0f3460;
-        }
-        
-        #info {
-            position: absolute;
-            bottom: 10px;
-            right: 10px;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 15px;
-            border-radius: 8px;
-            font-size: 12px;
-            max-width: 300px;
-        }
-        
-        h3 {
-            margin-bottom: 10px;
-            color: #e94560;
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 6px 12px;
+            margin-top: 2px;
         }
         
         .stat {
-            margin: 5px 0;
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
         }
         
         .stat-label {
-            color: #888;
-            margin-right: 5px;
+            color: #94a3b8;
+        }
+
+        .stat-val {
+            font-weight: 600;
+            color: #f8fafc;
+        }
+
+        /* Top Right Controls */
+        #controls {
+            background: rgba(15, 23, 42, 0.88);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 8px 12px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            pointer-events: auto;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+            flex-wrap: wrap;
+        }
+        
+        .control-button {
+            padding: 6px 12px;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            color: #e2e8f0;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            transition: all 0.15s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .control-button:hover {
+            background: #334155;
+            color: #fff;
+            border-color: #475569;
+        }
+
+        .control-button:active {
+            transform: scale(0.96);
+        }
+
+        /* Right Side Sidebar / Panels */
+        #sidePanels {
+            position: absolute;
+            top: 76px;
+            right: 12px;
+            width: 320px;
+            max-height: calc(100vh - 170px);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            z-index: 15;
+            pointer-events: none;
+        }
+
+        .panel-card {
+            background: rgba(15, 23, 42, 0.88);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 12px;
+            padding: 12px 14px;
+            pointer-events: auto;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+            font-size: 12px;
+            max-height: 240px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .panel-card.hidden {
+            display: none;
+        }
+
+        .panel-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-weight: 600;
+            color: #38bdf8;
+            margin-bottom: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            padding-bottom: 4px;
+            font-size: 13px;
+        }
+
+        .panel-close-btn {
+            background: transparent;
+            border: none;
+            color: #64748b;
+            cursor: pointer;
+            font-size: 14px;
+            line-height: 1;
+        }
+        .panel-close-btn:hover {
+            color: #cbd5e1;
+        }
+
+        .scroll-content {
+            overflow-y: auto;
+            flex: 1;
+            padding-right: 4px;
+        }
+
+        .scroll-content::-webkit-scrollbar {
+            width: 4px;
+        }
+        .scroll-content::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 4px;
+        }
+
+        /* Society List */
+        .society-item {
+            background: rgba(30, 41, 59, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            padding: 8px 10px;
+            border-radius: 8px;
+            margin-bottom: 6px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .society-item:hover {
+            background: rgba(51, 65, 85, 0.8);
+            border-color: #38bdf8;
+        }
+        .society-name {
+            font-weight: 600;
+            color: #fbbf24;
+            display: flex;
+            justify-content: space-between;
+        }
+        .society-meta {
+            color: #94a3b8;
+            font-size: 11px;
+            margin-top: 3px;
+        }
+
+        /* Inspector Details */
+        .inspect-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge-child { background: #0369a1; color: #bae6fd; }
+        .badge-adult { background: #15803d; color: #bbf7d0; }
+        .badge-elder { background: #7c2d12; color: #fed7aa; }
+
+        .need-bar-wrap {
+            margin: 4px 0;
+        }
+        .need-bar-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: #94a3b8;
+            margin-bottom: 2px;
+        }
+        .need-bar {
+            width: 100%;
+            height: 5px;
+            background: #1e293b;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .need-fill {
+            height: 100%;
+            background: #38bdf8;
+            border-radius: 3px;
+        }
+        .need-fill.low { background: #ef4444; }
+        .need-fill.med { background: #f59e0b; }
+        .need-fill.high { background: #10b981; }
+
+        /* Event Chronicle */
+        .event-entry {
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            font-size: 11px;
+            color: #cbd5e1;
+        }
+
+        /* Bottom Floating Dock */
+        #dockWrapper {
+            position: absolute;
+            bottom: 12px;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: center;
+            pointer-events: none;
+            z-index: 20;
+        }
+
+        #tools {
+            background: rgba(15, 23, 42, 0.9);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            padding: 8px 12px;
+            border-radius: 14px;
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            pointer-events: auto;
+            max-width: 95vw;
+            overflow-x: auto;
+        }
+
+        #tools::-webkit-scrollbar {
+            display: none;
+        }
+
+        .tool-divider {
+            width: 1px;
+            height: 24px;
+            background: rgba(255, 255, 255, 0.12);
+            margin: 0 4px;
+        }
+
+        .tool-button {
+            padding: 6px 10px;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            color: #cbd5e1;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 500;
+            white-space: nowrap;
+            transition: all 0.15s ease;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .tool-button:hover {
+            background: #334155;
+            color: #fff;
+            border-color: #475569;
+        }
+        
+        .tool-button.active {
+            background: #f43f5e;
+            border-color: #fb7185;
+            color: #fff;
+            box-shadow: 0 0 12px rgba(244, 63, 94, 0.4);
+        }
+
+        /* Controls Help Modal / Card */
+        #info {
+            position: absolute;
+            bottom: 74px;
+            left: 12px;
+            background: rgba(15, 23, 42, 0.92);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 12px 16px;
+            border-radius: 12px;
+            font-size: 11px;
+            max-width: 240px;
+            color: #94a3b8;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+            z-index: 18;
+            transition: opacity 0.2s ease, transform 0.2s ease;
+        }
+
+        #info.hidden {
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(8px);
+        }
+
+        #info h3 {
+            margin-bottom: 6px;
+            color: #f43f5e;
+            font-size: 12px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        #info div {
+            margin: 3px 0;
+        }
+
+        /* Toast Notifications */
+        #gameNotification {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(244, 63, 94, 0.95);
+            backdrop-filter: blur(8px);
+            color: #fff;
+            padding: 8px 18px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            z-index: 9999;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+            transition: opacity 0.25s ease, transform 0.25s ease;
+            pointer-events: none;
+            opacity: 0;
         }
     </style>
 </head>
 <body>
     <canvas id="gameCanvas"></canvas>
     
-    <div id="ui">
-        <h3>Aetheria</h3>
-        <div class="stat"><span class="stat-label">Day:</span> <span id="day">1</span></div>
-        <div class="stat"><span class="stat-label">Hour:</span> <span id="hour">0</span></div>
-        <div class="stat"><span class="stat-label">Agents:</span> <span id="agents">0</span></div>
-        <div class="stat"><span class="stat-label">Resources:</span> <span id="resources">0</span></div>
-        <div class="stat"><span class="stat-label">Speed:</span> <span id="speed">1x</span></div>
+    <!-- Top Navigation / Status -->
+    <div id="topBar">
+        <div id="ui">
+            <div class="title-row">
+                <span class="app-title">🌍 Aetheria</span>
+                <span style="font-size:11px; color:#38bdf8;" id="mapDim">128×128 World</span>
+            </div>
+            <div class="stats-grid">
+                <div class="stat"><span class="stat-label">Day / Hour:</span> <span class="stat-val"><span id="day">1</span> : <span id="hour">0</span></span></div>
+                <div class="stat"><span class="stat-label">Agents:</span> <span class="stat-val" id="agents">0</span></div>
+                <div class="stat"><span class="stat-label">Births / Deaths:</span> <span class="stat-val"><span id="births" style="color:#22c55e">0</span> / <span id="deaths" style="color:#f43f5e">0</span></span></div>
+                <div class="stat"><span class="stat-label">Resources:</span> <span class="stat-val" id="resources">0</span></div>
+                <div class="stat"><span class="stat-label">Societies:</span> <span class="stat-val" id="settlementsCount" style="color:#fbbf24">0</span></div>
+                <div class="stat"><span class="stat-label">Speed:</span> <span class="stat-val" id="speed">1x</span></div>
+                <div class="stat" style="grid-column: span 3; display: flex; gap: 10px; font-size: 11px; color: #cbd5e1; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 5px; margin-top: 2px;">
+                    <span>🌾 Food: <b id="foodCount" style="color:#f87171">0</b></span>
+                    <span>🌲 Wood: <b id="woodCount" style="color:#4ade80">0</b></span>
+                    <span>⛏️ Ore: <b id="oreCount" style="color:#cbd5e1">0</b></span>
+                    <span>💧 Water: <b id="waterCount" style="color:#38bdf8">0</b></span>
+                </div>
+            </div>
+        </div>
+        
+        <div id="controls">
+            <button class="control-button" id="pauseBtn">⏸️ Pause</button>
+            <button class="control-button" id="speedBtn">⚡ Speed (1x)</button>
+            <button class="control-button" id="centerBtn" title="Center on civilization">🎯 Center</button>
+            <button class="control-button" id="spawnResourcesQuickBtn" style="background: rgba(34, 197, 94, 0.25); border-color: rgba(34, 197, 94, 0.5); color: #86efac;" title="Spawn Wood, Water & Ore across the map">🌱 Spawn Resources</button>
+            <button class="control-button" id="societiesBtn" title="Toggle Societies List">🏛️ Societies</button>
+            <button class="control-button" id="diplomacyBtn" title="Toggle Diplomacy & Treaties">⚔️ Diplomacy</button>
+            <button class="control-button" id="saveBtn">💾 Save</button>
+            <button class="control-button" id="loadBtn">📂 Load</button>
+            <button class="control-button" id="helpBtn">❓ Guide</button>
+        </div>
+    </div>
+
+    <!-- Right Side Information Panels -->
+    <div id="sidePanels">
+        <!-- Societies Panel -->
+        <div class="panel-card" id="societiesCard">
+            <div class="panel-head">
+                <span>🏛️ Societies & Settlements</span>
+                <button class="panel-close-btn" id="closeSocieties">✕</button>
+            </div>
+            <div class="scroll-content" id="societiesList">
+                <div style="color:#94a3b8; font-style:italic;">Detecting active tribes and settlements...</div>
+            </div>
+        </div>
+
+        <!-- Diplomacy & Warfare Panel -->
+        <div class="panel-card hidden" id="diplomacyCard">
+            <div class="panel-head">
+                <span>⚔️ Diplomacy & Warfare</span>
+                <button class="panel-close-btn" id="closeDiplomacy">✕</button>
+            </div>
+            <div class="scroll-content" id="diplomacyList">
+                <div style="color:#94a3b8; font-style:italic;">Loading inter-realm treaties and status...</div>
+            </div>
+        </div>
+
+        <!-- Inspector Panel -->
+        <div class="panel-card hidden" id="inspectorCard">
+            <div class="panel-head">
+                <span id="inspectTitle">🔍 Entity Inspector</span>
+                <button class="panel-close-btn" id="closeInspector">✕</button>
+            </div>
+            <div class="scroll-content" id="inspectorContent">
+                <!-- Dynamically populated -->
+            </div>
+        </div>
+
+        <!-- Live Chronicle -->
+        <div class="panel-card" id="chronicleCard">
+            <div class="panel-head">
+                <span>📜 World Chronicle</span>
+            </div>
+            <div class="scroll-content" id="eventFeed" style="max-height: 120px;">
+                <div class="event-entry">World awakened with 128×128 terrain and biomes.</div>
+            </div>
+        </div>
     </div>
     
-    <div id="tools">
-        <button class="tool-button active" data-tool="spawn_agent">Spawn Agent (1)</button>
-        <button class="tool-button" data-tool="create_food">Food (2)</button>
-        <button class="tool-button" data-tool="create_water">Water (3)</button>
-        <button class="tool-button" data-tool="create_wood">Wood (4)</button>
-        <button class="tool-button" data-tool="create_ore">Ore (5)</button>
-        <button class="tool-button" data-tool="remove">Remove (6)</button>
+    <!-- Bottom Centered Floating Tools Dock -->
+    <div id="dockWrapper">
+        <div id="tools">
+            <button class="tool-button active" data-tool="inspect">🔍 Inspect (1)</button>
+            <button class="tool-button" data-tool="spawn_agent">👤 Citizen (2)</button>
+            
+            <div class="tool-divider"></div>
+            
+            <button class="tool-button" data-tool="create_food">🌾 Food (3)</button>
+            <button class="tool-button" data-tool="create_water">💧 Water (4)</button>
+            <button class="tool-button" data-tool="create_wood">🌲 Wood (5)</button>
+            <button class="tool-button" data-tool="create_ore">⛏️ Ore (6)</button>
+            <button class="tool-button" data-tool="create_bounty" title="Spawn cluster of Wood, Water & Ore">✨ Bounty</button>
+            
+            <div class="tool-divider"></div>
+
+            <button class="tool-button" data-tool="build_house">🏠 House (7)</button>
+            <button class="tool-button" data-tool="build_workshop">🔨 Workshop (8)</button>
+            <button class="tool-button" data-tool="build_farm">🌾 Farm (9)</button>
+            
+            <div class="tool-divider"></div>
+
+            <button class="tool-button" data-tool="declare_war" title="Provoke war between neighboring realms">⚔️ Provoke War</button>
+            <button class="tool-button" data-tool="rally_army" title="Muster a warband from a settlement">🛡️ Muster Army</button>
+            <button class="tool-button" data-tool="enforce_peace" title="Enforce universal peace concordat">🕊️ Enforce Peace</button>
+
+            <div class="tool-divider"></div>
+
+            <button class="tool-button" data-tool="bless">✨ Bless (0)</button>
+            <button class="tool-button" data-tool="smite">⚡ Smite</button>
+            <button class="tool-button" data-tool="remove">🗑️ Remove</button>
+        </div>
     </div>
     
-    <div id="controls">
-        <button class="control-button" id="pauseBtn">Pause</button>
-        <button class="control-button" id="speedBtn">Speed</button>
-        <button class="control-button" id="saveBtn">Save</button>
-        <button class="control-button" id="loadBtn">Load</button>
+    <!-- Controls Help -->
+    <div id="info" class="hidden">
+        <h3>
+            <span>Divine Instructions</span>
+            <button class="panel-close-btn" id="closeHelp">✕</button>
+        </h3>
+        <div>• <b>Drag</b> mouse to pan the 128×128 world</div>
+        <div>• <b>Scroll wheel</b> to zoom in and out</div>
+        <div>• <b>Click</b> with tool selected to act</div>
+        <div>• <b>Keys 1-0</b> for rapid tool switching</div>
+        <div>• <b>Spacebar</b> to pause / resume time</div>
+        <div>• Click <b>Inspect</b> and tap any citizen or building</div>
     </div>
-    
-    <div id="info">
-        <h3>Controls</h3>
-        <div>Drag to pan</div>
-        <div>Scroll to zoom</div>
-        <div>Click to use tool</div>
-        <div>1-6 to select tool</div>
-        <div>Space to pause</div>
-    </div>
+
+    <!-- Notification Toast -->
+    <div id="gameNotification"></div>
 
     <script type="module">
         import { Simulation } from "./src/simulation/simulation.js";
@@ -169,8 +556,16 @@
         const renderer = new CanvasRenderer(canvas, simulation.world, simulation);
         const interaction = new Interaction(simulation, renderer);
 
+        // Center camera initially on first settlement or agent center
+        if (simulation.agents.length > 0) {
+            renderer.camera.x = simulation.agents[0].x;
+            renderer.camera.y = simulation.agents[0].y;
+            renderer.camera.zoom = 18;
+        }
+
         let lastTime = 0;
         const TICK_RATE = 100;
+        let activeEntity = null;
 
         function gameLoop(currentTime) {
             const deltaTime = currentTime - lastTime;
@@ -195,8 +590,506 @@
             document.getElementById("agents").textContent = simulation.agents.length;
             document.getElementById("resources").textContent = simulation.resources.length;
             document.getElementById("speed").textContent = simulation.clock.speed + "x";
+            
+            // Detailed resource counters
+            let foodCount = 0, woodCount = 0, oreCount = 0, waterCount = 0;
+            for (const r of simulation.resources) {
+                if (r.destroyed) continue;
+                if (r.resourceType === "food") foodCount++;
+                else if (r.resourceType === "wood") woodCount++;
+                else if (r.resourceType === "ore") oreCount++;
+                else if (r.resourceType === "water") waterCount++;
+            }
+            const foodEl = document.getElementById("foodCount");
+            if (foodEl) foodEl.textContent = foodCount;
+            const woodEl = document.getElementById("woodCount");
+            if (woodEl) woodEl.textContent = woodCount;
+            const oreEl = document.getElementById("oreCount");
+            if (oreEl) oreEl.textContent = oreCount;
+            const waterEl = document.getElementById("waterCount");
+            if (waterEl) waterEl.textContent = waterCount;
+            
+            const birthsEl = document.getElementById("births");
+            if (birthsEl) birthsEl.textContent = simulation.birthsThisSession || 0;
+            
+            const deathsEl = document.getElementById("deaths");
+            if (deathsEl) deathsEl.textContent = simulation.deathsThisSession || 0;
+
+            const settlements = Array.from(simulation.settlementSystem.settlements.values());
+            const setEl = document.getElementById("settlementsCount");
+            if (setEl) setEl.textContent = settlements.length;
+
+            // Refresh societies card
+            updateSocietiesCard(settlements);
+
+            // Refresh diplomacy card
+            updateDiplomacyCard(settlements);
+
+            // Refresh inspector if entity is active
+            if (activeEntity && activeEntity.kind === "agent") {
+                const stillAlive = simulation.agents.find(a => a.id === activeEntity.entity.id);
+                if (stillAlive) {
+                    activeEntity.entity = stillAlive;
+                    renderInspector(activeEntity);
+                }
+            }
         }
 
+        function updateSocietiesCard(settlements) {
+            const list = document.getElementById("societiesList");
+            if (!list) return;
+
+            if (settlements.length === 0) {
+                list.innerHTML = `<div style="color:#94a3b8; font-style:italic;">No settled societies yet. Citizens are clustering...</div>`;
+                return;
+            }
+
+            let html = "";
+            for (const s of settlements) {
+                const pop = s.population || (s.agentIds ? s.agentIds.size : 0);
+                const bCount = (s.buildings ? s.buildings.length : 0);
+                const leader = s.leadership ? `${s.leadershipTitle || 'Leader'}: ${s.leadership}` : "Tribal Council";
+                const wood = s.stockpile?.wood || 0;
+                const food = s.stockpile?.food || 0;
+                const ore = s.stockpile?.ore || 0;
+                const tier = s.tier || "Village";
+                const icon = s.tierIcon || "🏡";
+                const cultureTag = s.culture?.ethos ? ` • ${s.culture.symbol || '⭐'} ${s.culture.ethos}` : '';
+
+                html += `
+                    <div class="society-item" data-cx="${s.center.x}" data-cy="${s.center.y}" data-sid="${s.id}">
+                        <div class="society-name">
+                            <span>${icon} ${s.name} <small style="font-size:10px; opacity:0.8;">(${tier})</small></span>
+                            <span style="color:#22c55e;">${pop} citizens</span>
+                        </div>
+                        <div class="society-meta">${leader} • ${bCount} structures${cultureTag}</div>
+                        <div class="society-meta" style="color:#cbd5e1; font-size:10px;">Stockpile: 🌾 ${food} | 🌲 ${wood} | ⛏️ ${ore}</div>
+                    </div>
+                `;
+            }
+            list.innerHTML = html;
+
+            list.querySelectorAll(".society-item").forEach(item => {
+                item.addEventListener("click", () => {
+                    const cx = parseFloat(item.dataset.cx);
+                    const cy = parseFloat(item.dataset.cy);
+                    const sid = parseInt(item.dataset.sid);
+                    renderer.camera.x = cx;
+                    renderer.camera.y = cy;
+                    renderer.camera.zoom = 10;
+
+                    const settlement = simulation.settlementSystem.settlements.get(sid);
+                    if (settlement) {
+                        const target = {
+                            entity: {
+                                ...settlement,
+                                x: settlement.center.x,
+                                y: settlement.center.y
+                            },
+                            kind: "settlement"
+                        };
+                        renderer.selectedEntity = target;
+                        renderInspector(target);
+                    }
+                    showNotification(`View centered on ${item.querySelector('.society-name span').textContent}`);
+                });
+            });
+        }
+
+        function updateDiplomacyCard(settlements) {
+            const list = document.getElementById("diplomacyList");
+            if (!list || !simulation.diplomacySystem) return;
+
+            const diplomacy = simulation.diplomacySystem;
+            if (settlements.length < 2) {
+                list.innerHTML = `<div style="color:#94a3b8; font-style:italic; font-size:11px;">At least 2 settlements needed for inter-realm diplomacy & warfare.</div>`;
+                return;
+            }
+
+            let html = "";
+
+            // 1. Active Wars & Sieges
+            html += `<div style="font-size:11px; font-weight:700; color:#ef4444; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;">
+                <span>⚔️ ACTIVE WARS (${diplomacy.activeWars.length})</span>
+                ${diplomacy.activeWars.length > 0 ? `<button id="peaceAllBtn" style="background:#1e293b; border:1px solid #475569; color:#f8fafc; border-radius:4px; font-size:9px; padding:2px 6px; cursor:pointer;">Enforce Peace</button>` : ''}
+            </div>`;
+
+            if (diplomacy.activeWars.length === 0) {
+                html += `<div style="color:#94a3b8; font-size:11px; margin-bottom:12px; font-style:italic;">🕊️ The realms are at peace. No active hostilities.</div>`;
+            } else {
+                for (const war of diplomacy.activeWars) {
+                    const casualtiesA = war.casualties[war.attackerId] || 0;
+                    const casualtiesD = war.casualties[war.defenderId] || 0;
+                    html += `
+                        <div style="background:rgba(239, 68, 68, 0.12); border:1px solid rgba(239, 68, 68, 0.4); border-radius:8px; padding:8px; margin-bottom:8px;">
+                            <div style="display:flex; justify-content:space-between; font-weight:600; font-size:11px; color:#fca5a5;">
+                                <span>⚔️ ${war.attackerName} vs ${war.defenderName}</span>
+                                <span style="font-size:10px; color:#ef4444; font-weight:bold;">WAR</span>
+                            </div>
+                            <div style="font-size:10px; color:#cbd5e1; margin-top:3px;">Casus Belli: ${war.casusBelli}</div>
+                            <div style="font-size:10px; color:#f87171; margin-top:2px;">
+                                Casualties: ${war.attackerName} (${casualtiesA}) • ${war.defenderName} (${casualtiesD})
+                            </div>
+                            ${(war.plundered.food > 0 || war.plundered.wood > 0 || war.plundered.ore > 0) ? `
+                                <div style="font-size:10px; color:#fbbf24; margin-top:2px;">
+                                    Plundered: 🌾 ${war.plundered.food} | 🌲 ${war.plundered.wood} | ⛏️ ${war.plundered.ore}
+                                </div>` : ''}
+                            <div style="margin-top:6px; display:flex; gap:6px;">
+                                <button class="sign-peace-btn" data-s1="${war.attackerId}" data-s2="${war.defenderId}" style="background:#0f172a; border:1px solid #64748b; color:#cbd5e1; border-radius:4px; font-size:10px; padding:2px 8px; cursor:pointer;">🕊️ Sign Peace</button>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            // 2. Active Treaties & Alliances
+            html += `<div style="font-size:11px; font-weight:700; color:#22c55e; margin:10px 0 6px 0;">🤝 ALLIANCES & TREATIES (${diplomacy.treaties.length})</div>`;
+            if (diplomacy.treaties.length === 0) {
+                html += `<div style="color:#94a3b8; font-size:11px; margin-bottom:10px; font-style:italic;">No formal defensive pacts active.</div>`;
+            } else {
+                for (const t of diplomacy.treaties) {
+                    const s1 = simulation.settlementSystem.settlements.get(t.settlements[0]);
+                    const s2 = simulation.settlementSystem.settlements.get(t.settlements[1]);
+                    if (!s1 || !s2) continue;
+                    html += `
+                        <div style="background:rgba(34, 197, 94, 0.1); border:1px solid rgba(34, 197, 94, 0.3); border-radius:8px; padding:6px 8px; margin-bottom:6px; font-size:11px;">
+                            <div style="color:#86efac; font-weight:600;">🤝 ${t.title || 'Defensive Alliance'}</div>
+                            <div style="color:#cbd5e1; font-size:10px;">${s1.name} & ${s2.name}</div>
+                        </div>
+                    `;
+                }
+            }
+
+            // 3. Bilateral Diplomatic Relations Matrix
+            html += `<div style="font-size:11px; font-weight:700; color:#38bdf8; margin:10px 0 6px 0;">🌐 BILATERAL RELATIONS</div>`;
+            for (let i = 0; i < settlements.length; i++) {
+                for (let j = i + 1; j < settlements.length; j++) {
+                    const s1 = settlements[i];
+                    const s2 = settlements[j];
+                    const rel = diplomacy.getRelation(s1.id, s2.id);
+                    if (!rel) continue;
+
+                    let statusBadge = '<span style="color:#22c55e; font-weight:600;">Alliance 🤝</span>';
+                    if (rel.status === "war") statusBadge = '<span style="color:#ef4444; font-weight:600;">At War ⚔️</span>';
+                    else if (rel.status === "tension") statusBadge = '<span style="color:#f59e0b; font-weight:600;">Tension ⚠️</span>';
+                    else if (rel.status === "peace") statusBadge = '<span style="color:#94a3b8;">Peace 🕊️</span>';
+
+                    html += `
+                        <div style="background:rgba(30, 41, 59, 0.6); border:1px solid rgba(255, 255, 255, 0.06); border-radius:6px; padding:6px 8px; margin-bottom:5px; font-size:11px;">
+                            <div style="display:flex; justify-content:space-between;">
+                                <span>${s1.name} ↔ ${s2.name}</span>
+                                <span>${statusBadge}</span>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
+                                <div style="font-size:10px; color:#94a3b8;">Affinity: ${Math.round(rel.score)}/100</div>
+                                <div style="display:flex; gap:4px;">
+                                    ${rel.status !== 'war' ? `<button class="provoke-war-btn" data-s1="${s1.id}" data-s2="${s2.id}" style="background:#7f1d1d; border:none; color:#fecaca; font-size:9px; padding:2px 5px; border-radius:3px; cursor:pointer;">Provoke War</button>` : ''}
+                                    ${rel.status !== 'alliance' && rel.status !== 'war' ? `<button class="pact-alliance-btn" data-s1="${s1.id}" data-s2="${s2.id}" style="background:#14532d; border:none; color:#bbf7d0; font-size:9px; padding:2px 5px; border-radius:3px; cursor:pointer;">Ally</button>` : ''}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            list.innerHTML = html;
+
+            const peaceAll = document.getElementById("peaceAllBtn");
+            if (peaceAll) {
+                peaceAll.addEventListener("click", () => {
+                    for (const w of [...diplomacy.activeWars]) {
+                        diplomacy.signPeace(w.attackerId, w.defenderId, null);
+                    }
+                    showNotification("🕊️ Universal peace declared across all realms!");
+                });
+            }
+
+            list.querySelectorAll(".sign-peace-btn").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    const s1 = parseInt(btn.dataset.s1);
+                    const s2 = parseInt(btn.dataset.s2);
+                    diplomacy.signPeace(s1, s2, null);
+                    showNotification("🕊️ Peace concordat established!");
+                });
+            });
+
+            list.querySelectorAll(".provoke-war-btn").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    const s1 = parseInt(btn.dataset.s1);
+                    const s2 = parseInt(btn.dataset.s2);
+                    diplomacy.declareWar(s1, s2, "Territorial Expansion");
+                    showNotification("⚔️ War ignited between realms!");
+                });
+            });
+
+            list.querySelectorAll(".pact-alliance-btn").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    const s1 = parseInt(btn.dataset.s1);
+                    const s2 = parseInt(btn.dataset.s2);
+                    diplomacy.formAlliance(s1, s2, simulation.clock.tick);
+                    showNotification("🤝 Grand Alliance pact sworn!");
+                });
+            });
+        }
+
+        function renderInspector(data) {
+            const card = document.getElementById("inspectorCard");
+            const title = document.getElementById("inspectTitle");
+            const content = document.getElementById("inspectorContent");
+            if (!card || !content) return;
+
+            if (!data || !data.entity) {
+                card.classList.add("hidden");
+                return;
+            }
+
+            card.classList.remove("hidden");
+            const e = data.entity;
+
+            if (data.kind === "agent") {
+                const stageClass = e.lifeStage === "elder" ? "badge-elder" : (e.lifeStage === "child" ? "badge-child" : "badge-adult");
+                title.innerHTML = `<span>👤 Citizen: ${e.name}</span>`;
+                
+                content.innerHTML = `
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                        <span class="inspect-badge ${stageClass}">${e.lifeStage} (Age ${Math.floor(e.age)})</span>
+                        <span style="color:#fbbf24; font-weight:600;">Job: ${e.job || 'Civilian'}</span>
+                    </div>
+
+                    <div class="need-bar-wrap">
+                        <div class="need-bar-label"><span>Food</span><span>${Math.round(e.needs.food)}%</span></div>
+                        <div class="need-bar"><div class="need-fill ${e.needs.food < 30 ? 'low' : ''}" style="width: ${e.needs.food}%"></div></div>
+                    </div>
+                    <div class="need-bar-wrap">
+                        <div class="need-bar-label"><span>Water</span><span>${Math.round(e.needs.water)}%</span></div>
+                        <div class="need-bar"><div class="need-fill ${e.needs.water < 30 ? 'low' : ''}" style="width: ${e.needs.water}%"></div></div>
+                    </div>
+                    <div class="need-bar-wrap">
+                        <div class="need-bar-label"><span>Rest</span><span>${Math.round(e.needs.rest)}%</span></div>
+                        <div class="need-bar"><div class="need-fill ${e.needs.rest < 30 ? 'low' : ''}" style="width: ${e.needs.rest}%"></div></div>
+                    </div>
+                    <div class="need-bar-wrap">
+                        <div class="need-bar-label"><span>Social</span><span>${Math.round(e.needs.social)}%</span></div>
+                        <div class="need-bar"><div class="need-fill ${e.needs.social < 30 ? 'low' : ''}" style="width: ${e.needs.social}%"></div></div>
+                    </div>
+
+                    <div style="margin-top:8px; font-size:11px; color:#cbd5e1; border-top:1px solid rgba(255,255,255,0.08); padding-top:6px;">
+                        <div>📍 Position: (${e.x.toFixed(1)}, ${e.y.toFixed(1)})</div>
+                        <div>👶 Children: ${e.children || 0}</div>
+                        <div>🎒 Inventory: 🌲 ${e.inventory.wood_log || 0} | ⛏️ ${e.inventory.ore_iron || 0} | 🌾 ${e.inventory.wheat || 0}</div>
+                        <div>🧠 Action: ${e.currentAction?.type || 'observing'}</div>
+                    </div>
+                `;
+            } else if (data.kind === "settlement") {
+                const s = e;
+                const pop = s.population || (s.agentIds ? s.agentIds.size : 0);
+                const tier = s.tier || "Village";
+                const tierIcon = s.tierIcon || "🏡";
+                const culture = s.culture || {};
+                const values = culture.values || { industriousness: 0.7, cooperation: 0.8, spirituality: 0.5, belligerence: 0.3, traditionalism: 0.6 };
+                const traditions = culture.traditions || ["communal_hearth"];
+
+                title.innerHTML = `<span>${tierIcon} ${s.name} (${tier})</span>`;
+
+                let traditionsHtml = traditions.map(t => {
+                    const label = t.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                    return `<span class="inspect-badge badge-adult" style="font-size:10px; margin:2px;">📜 ${label}</span>`;
+                }).join(" ");
+
+                content.innerHTML = `
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                        <span class="inspect-badge badge-adult" style="background:${s.bannerColor || '#38bdf8'}22; border-color:${s.bannerColor || '#38bdf8'}; color:#f8fafc;">
+                            ${culture.symbol || '⭐'} ${culture.ethos || 'Emergent Clan'}
+                        </span>
+                        <span style="color:#fbbf24; font-weight:600; font-size:11px;">
+                            👑 ${s.leadershipTitle || 'Leader'}: ${s.leadership || 'Council'}
+                        </span>
+                    </div>
+
+                    <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:8px; margin-bottom:10px;">
+                        <div style="font-size:11px; font-weight:600; color:#38bdf8; margin-bottom:4px;">COMMUNAL STOCKPILE & GRANARY</div>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:11px;">
+                            <div>🌾 Food: <b style="color:#22c55e;">${s.stockpile?.food || 0}</b></div>
+                            <div>🌲 Wood: <b style="color:#f59e0b;">${s.stockpile?.wood || 0}</b></div>
+                            <div>⛏️ Ore: <b style="color:#94a3b8;">${s.stockpile?.ore || 0}</b></div>
+                            <div>🪨 Stone: <b style="color:#cbd5e1;">${s.stockpile?.stone || 0}</b></div>
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom:8px;">
+                        <div style="font-size:11px; font-weight:600; color:#cbd5e1; margin-bottom:4px;">CULTURAL DIMENSIONS</div>
+                        <div class="need-bar-wrap">
+                            <div class="need-bar-label"><span>Industriousness</span><span>${Math.round((values.industriousness || 0.5) * 100)}%</span></div>
+                            <div class="need-bar"><div class="need-fill" style="width:${Math.round((values.industriousness || 0.5) * 100)}%; background:#f59e0b;"></div></div>
+                        </div>
+                        <div class="need-bar-wrap">
+                            <div class="need-bar-label"><span>Cooperation</span><span>${Math.round((values.cooperation || 0.5) * 100)}%</span></div>
+                            <div class="need-bar"><div class="need-fill" style="width:${Math.round((values.cooperation || 0.5) * 100)}%; background:#38bdf8;"></div></div>
+                        </div>
+                        <div class="need-bar-wrap">
+                            <div class="need-bar-label"><span>Spirituality</span><span>${Math.round((values.spirituality || 0.5) * 100)}%</span></div>
+                            <div class="need-bar"><div class="need-fill" style="width:${Math.round((values.spirituality || 0.5) * 100)}%; background:#10b981;"></div></div>
+                        </div>
+                        <div class="need-bar-wrap">
+                            <div class="need-bar-label"><span>Belligerence</span><span>${Math.round((values.belligerence || 0.5) * 100)}%</span></div>
+                            <div class="need-bar"><div class="need-fill" style="width:${Math.round((values.belligerence || 0.5) * 100)}%; background:#ef4444;"></div></div>
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom:8px;">
+                        <div style="font-size:11px; font-weight:600; color:#cbd5e1; margin-bottom:4px;">ACTIVE TRADITIONS</div>
+                        <div style="display:flex; flex-wrap:wrap;">${traditionsHtml}</div>
+                    </div>
+
+                    ${(() => {
+                        const diplomacy = simulation.diplomacySystem;
+                        const warfare = simulation.warfareSystem;
+                        if (!diplomacy || !warfare) return '';
+
+                        const allies = diplomacy.getAllies(s.id).map(id => simulation.settlementSystem.settlements.get(id)?.name).filter(Boolean);
+                        const enemies = diplomacy.getEnemies(s.id).map(id => simulation.settlementSystem.settlements.get(id)?.name).filter(Boolean);
+
+                        let warband = null;
+                        for (const wb of warfare.warbands.values()) {
+                            if (wb.settlementId === s.id && wb.active) {
+                                warband = wb;
+                                break;
+                            }
+                        }
+
+                        return `
+                            <div style="margin-bottom:8px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.07); border-radius:6px; padding:6px 8px;">
+                                <div style="font-size:11px; font-weight:600; color:#cbd5e1; margin-bottom:4px;">DIPLOMACY & WARFARE</div>
+                                <div style="font-size:10px; color:#94a3b8; margin-bottom:2px;">
+                                    Allies: ${allies.length > 0 ? allies.map(a => `<span class="inspect-badge badge-adult" style="font-size:9px; margin-left:2px;">${a}</span>`).join('') : '<span style="color:#64748b;">None</span>'}
+                                </div>
+                                <div style="font-size:10px; color:#94a3b8; margin-bottom:4px;">
+                                    Hostile: ${enemies.length > 0 ? enemies.map(e => `<span class="inspect-badge badge-child" style="background:#7f1d1d; color:#fecaca; font-size:9px; margin-left:2px;">${e}</span>`).join('') : '<span style="color:#64748b;">None</span>'}
+                                </div>
+                                <div style="font-size:10px; color:#e2e8f0; border-top:1px solid rgba(255,255,255,0.06); padding-top:4px; margin-top:4px;">
+                                    Warband: ${warband ? `<b style="color:#ef4444;">${warband.soldiers.length} Soldiers (${warband.state.toUpperCase()})</b>` : '<span style="color:#64748b;">Demobilized (Peaceful)</span>'}
+                                </div>
+                                <div style="margin-top:6px; display:flex; gap:4px;">
+                                    <button id="inspectRallyBtn" data-sid="${s.id}" style="background:#dc2626; color:#fff; border:none; border-radius:4px; font-size:10px; padding:3px 7px; cursor:pointer; font-weight:600;">🛡️ Rally Warband</button>
+                                </div>
+                            </div>
+                        `;
+                    })()}
+
+                    <div style="margin-top:8px; font-size:11px; color:#cbd5e1; border-top:1px solid rgba(255,255,255,0.08); padding-top:6px; line-height:1.6;">
+                        <div>👥 Population: <b>${pop}</b> citizens (${s.growthTrend || 'stable'})</div>
+                        <div>🏛️ Buildings: <b>${s.buildings ? s.buildings.length : 0}</b> registered structures</div>
+                        <div>📍 Center: (${Math.floor(s.center.x)}, ${Math.floor(s.center.y)})</div>
+                    </div>
+                `;
+
+                const rallyBtn = content.querySelector("#inspectRallyBtn");
+                if (rallyBtn) {
+                    rallyBtn.addEventListener("click", () => {
+                        const sid = parseInt(rallyBtn.dataset.sid);
+                        const enemies = simulation.diplomacySystem ? simulation.diplomacySystem.getEnemies(sid) : [];
+                        const targetId = enemies.length > 0 ? enemies[0] : null;
+                        const wb = simulation.warfareSystem.mobilizeWarband(sid, targetId, targetId ? "assault" : "defense");
+                        if (wb) {
+                            showNotification(`🛡️ Warband mobilized for ${s.name} (${wb.soldiers.length} soldiers)!`);
+                            renderInspector(data);
+                        } else {
+                            showNotification(`Not enough healthy adult citizens in ${s.name}.`);
+                        }
+                    });
+                }
+            } else if (data.kind === "building") {
+                title.innerHTML = `<span>🏛️ Building: ${e.buildingType || e.type}</span>`;
+                const pct = Math.min(100, Math.floor(e.constructionProgress || (e.complete ? 100 : 0)));
+                content.innerHTML = `
+                    <div style="margin-bottom:8px;">
+                        <span class="inspect-badge ${e.complete ? 'badge-adult' : 'badge-child'}">${e.complete ? 'COMPLETED' : 'UNDER CONSTRUCTION'}</span>
+                    </div>
+                    <div class="need-bar-wrap">
+                        <div class="need-bar-label"><span>Construction</span><span>${pct}%</span></div>
+                        <div class="need-bar"><div class="need-fill" style="width: ${pct}%"></div></div>
+                    </div>
+                    <div style="margin-top:8px; font-size:11px; color:#cbd5e1;">
+                        <div>📍 Position: (${e.x}, ${e.y})</div>
+                    </div>
+                `;
+            } else if (data.kind === "resource") {
+                const icon = e.resourceType === "food" ? "🌾" : e.resourceType === "wood" ? "🌲" : e.resourceType === "ore" ? "⛏️" : "💧";
+                const label = e.label || (e.resourceType.toUpperCase());
+                const max = e.maxAmount || 40;
+                const pct = Math.min(100, Math.max(0, Math.round((e.amount / max) * 100)));
+                title.innerHTML = `<span>${icon} ${label}</span>`;
+                content.innerHTML = `
+                    <div style="margin-bottom:8px;">
+                        <span class="inspect-badge badge-adult">${e.resourceType.toUpperCase()} DEPOSIT</span>
+                    </div>
+                    <div class="need-bar-wrap">
+                        <div class="need-bar-label"><span>Harvestable Reserve</span><span>${Math.round(e.amount)} / ${max}</span></div>
+                        <div class="need-bar"><div class="need-fill" style="width: ${pct}%"></div></div>
+                    </div>
+                    <div style="margin-top:8px; font-size:11px; color:#cbd5e1; line-height: 1.6;">
+                        <div>📍 Location: (${Math.floor(e.x)}, ${Math.floor(e.y)})</div>
+                        <div>🌱 Regrowth: Natural ecological replenishment</div>
+                    </div>
+                `;
+            }
+        }
+
+        // Live Event Feed Listener
+        function addEventLog(text) {
+            const feed = document.getElementById("eventFeed");
+            if (!feed) return;
+            const item = document.createElement("div");
+            item.className = "event-entry";
+            item.textContent = text;
+            feed.prepend(item);
+            while (feed.children.length > 25) {
+                feed.removeChild(feed.lastChild);
+            }
+        }
+
+        simulation.eventBus.on("AGENT_CREATED", (e) => {
+            const name = e.name || `Citizen #${e.agentId}`;
+            addEventLog(`👶 Newborn: ${name} entered the world.`);
+        });
+
+        simulation.eventBus.on("AGENT_DIED", (e) => {
+            const name = e.name || `Citizen #${e.agentId}`;
+            addEventLog(`🕊️ Death: ${name} passed away at age ${e.age || 'natural'} (${e.cause || 'natural'}).`);
+        });
+
+        simulation.eventBus.on("CONSTRUCTION_COMPLETED", (e) => {
+            addEventLog(`🏛️ Building completed: ${e.buildingType} at (${e.x}, ${e.y})!`);
+        });
+
+        simulation.eventBus.on("BLUEPRINT_PLACED", (e) => {
+            addEventLog(`📐 New blueprint: ${e.type} planned in ${e.settlementName || 'society'}.`);
+        });
+
+        simulation.eventBus.on("DIPLOMATIC_EVENT", (e) => {
+            addEventLog(`${e.title}: ${e.description}`);
+            showNotification(e.title);
+        });
+
+        simulation.eventBus.on("WARBAND_MOBILIZED", (e) => {
+            addEventLog(`🛡️ ${e.settlementName} mobilized a ${e.role} warband of ${e.size} warriors!`);
+        });
+
+        simulation.eventBus.on("SETTLEMENT_PLUNDERED", (e) => {
+            addEventLog(`🔥 ${e.attackerName} sacked ${e.defenderName} and plundered stockpiles!`);
+            showNotification(`🔥 ${e.attackerName} sacked ${e.defenderName}!`);
+        });
+
+        window.addEventListener("entity_inspected", (e) => {
+            activeEntity = e.detail;
+            renderInspector(activeEntity);
+        });
+
+        window.addEventListener("show_notification", (e) => {
+            showNotification(e.detail);
+        });
+
+        // Tool Selection
         document.querySelectorAll(".tool-button").forEach(btn => {
             btn.addEventListener("click", () => {
                 document.querySelectorAll(".tool-button").forEach(b => b.classList.remove("active"));
@@ -205,13 +1098,14 @@
             });
         });
 
+        // Top Controls
         document.getElementById("pauseBtn").addEventListener("click", () => {
             if (simulation.clock.speed > 0) {
                 simulation.clock.pause();
-                document.getElementById("pauseBtn").textContent = "Play";
+                document.getElementById("pauseBtn").innerHTML = "▶️ Play";
             } else {
                 simulation.clock.setSpeed(1);
-                document.getElementById("pauseBtn").textContent = "Pause";
+                document.getElementById("pauseBtn").innerHTML = "⏸️ Pause";
             }
         });
 
@@ -219,13 +1113,90 @@
             const speeds = [1, 2, 5, 10];
             const currentIdx = speeds.indexOf(simulation.clock.speed);
             const nextIdx = (currentIdx + 1) % speeds.length;
-            simulation.clock.setSpeed(speeds[nextIdx]);
+            const newSpeed = speeds[nextIdx];
+            simulation.clock.setSpeed(newSpeed);
+            document.getElementById("speedBtn").innerHTML = `⚡ Speed (${newSpeed}x)`;
         });
+
+        document.getElementById("centerBtn").addEventListener("click", () => {
+            if (simulation.agents.length > 0) {
+                // Average agent location
+                let ax = 0, ay = 0;
+                for (const a of simulation.agents) {
+                    ax += a.x; ay += a.y;
+                }
+                renderer.camera.x = ax / simulation.agents.length;
+                renderer.camera.y = ay / simulation.agents.length;
+                renderer.camera.zoom = 18;
+                showNotification("🎯 Camera centered on citizens!");
+            }
+        });
+
+        document.getElementById("spawnResourcesQuickBtn").addEventListener("click", () => {
+            const cx = renderer.camera.x;
+            const cy = renderer.camera.y;
+            simulation.spawnAbundantBounty(cx, cy);
+            
+            // Also replenish bountiful clusters around all realms
+            for (const s of simulation.settlementSystem.settlements.values()) {
+                if (s.center) {
+                    simulation.spawnResourceCluster(s.center.x - 3, s.center.y, "wood", 4, 3.0);
+                    simulation.spawnResourceCluster(s.center.x + 3, s.center.y, "ore", 4, 3.0);
+                    simulation.spawnResourceCluster(s.center.x, s.center.y + 3, "water", 3, 2.5);
+                }
+            }
+            showNotification("🌱 Abundant Wood, Water & Ore sprouted across the realm!");
+        });
+
+        document.getElementById("societiesBtn").addEventListener("click", () => {
+            const card = document.getElementById("societiesCard");
+            card.classList.toggle("hidden");
+        });
+
+        document.getElementById("closeSocieties").addEventListener("click", () => {
+            document.getElementById("societiesCard").classList.add("hidden");
+        });
+
+        document.getElementById("diplomacyBtn").addEventListener("click", () => {
+            const card = document.getElementById("diplomacyCard");
+            card.classList.toggle("hidden");
+        });
+
+        document.getElementById("closeDiplomacy").addEventListener("click", () => {
+            document.getElementById("diplomacyCard").classList.add("hidden");
+        });
+
+        document.getElementById("closeInspector").addEventListener("click", () => {
+            document.getElementById("inspectorCard").classList.add("hidden");
+            activeEntity = null;
+            if (renderer) renderer.selectedEntity = null;
+        });
+
+        document.getElementById("helpBtn").addEventListener("click", () => {
+            document.getElementById("info").classList.toggle("hidden");
+        });
+
+        document.getElementById("closeHelp").addEventListener("click", () => {
+            document.getElementById("info").classList.add("hidden");
+        });
+
+        function showNotification(msg) {
+            const notification = document.getElementById("gameNotification");
+            if (!notification) return;
+            notification.textContent = msg;
+            notification.style.opacity = "1";
+            notification.style.transform = "translateX(-50%) translateY(0)";
+            clearTimeout(notification._timeout);
+            notification._timeout = setTimeout(() => {
+                notification.style.opacity = "0";
+                notification.style.transform = "translateX(-50%) translateY(-10px)";
+            }, 2500);
+        }
 
         document.getElementById("saveBtn").addEventListener("click", () => {
             const data = simulation.serialize();
             localStorage.setItem("aetheria_save", JSON.stringify(data));
-            alert("Game saved!");
+            showNotification("Game progress saved to local storage!");
         });
 
         document.getElementById("loadBtn").addEventListener("click", () => {
@@ -233,9 +1204,9 @@
             if (data) {
                 const loaded = Simulation.deserialize(JSON.parse(data));
                 Object.assign(simulation, loaded);
-                alert("Game loaded!");
+                showNotification("Saved world loaded successfully!");
             } else {
-                alert("No save found!");
+                showNotification("No previous save file found!");
             }
         });
 
@@ -253,7 +1224,7 @@
 
         requestAnimationFrame(gameLoop);
 
-        console.log("Aetheria initialized!");
+        console.log("Aetheria initialized with 128x128 world and streamlined non-overlapping UI!");
     </script>
 </body>
 </html>

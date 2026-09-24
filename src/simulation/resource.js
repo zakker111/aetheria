@@ -1,24 +1,42 @@
 // Resource entities (trees, water sources, food, ore, etc.)
 export class Resource {
-  constructor(x, y, resourceType, amount, idGen) {
+  constructor(x, y, resourceType, amount = 40, idGen = { next: () => Math.floor(Math.random() * 1000000) }) {
     this.id = idGen.next();
     this.type = "resource";
     this.x = x;
     this.y = y;
     this.resourceType = resourceType; // "food", "water", "wood", "ore"
     this.amount = amount;
-    this.maxAmount = amount;
-    this.regrowRate = 0.01; // resources regrow slowly
+    this.maxAmount = Math.max(amount, 40);
+    this.destroyed = false;
+
+    // Regrowth rates tailored per resource type
+    if (resourceType === "food") {
+      this.regrowRate = 0.05; // Wild crops & berry bushes regrow quickly
+      this.label = "Wild Food";
+    } else if (resourceType === "wood") {
+      this.regrowRate = 0.03; // Trees regrow steadily
+      this.label = "Timber Grove";
+    } else if (resourceType === "ore") {
+      this.regrowRate = 0.02; // Ore veins slowly replenish
+      this.label = "Mineral Ore Deposit";
+    } else {
+      this.regrowRate = 0.1; // Water springs bubble continuously
+      this.label = "Freshwater Spring";
+    }
   }
 
   update() {
-    // Resources slowly regrow
+    if (this.destroyed) return;
+    
+    // Resources naturally regrow and replenish
     if (this.amount < this.maxAmount) {
       this.amount = Math.min(this.maxAmount, this.amount + this.regrowRate);
     }
   }
 
   consume(amount) {
+    if (this.destroyed) return false;
     this.amount = Math.max(0, this.amount - amount);
     return this.amount > 0;
   }
@@ -30,7 +48,9 @@ export class Resource {
       y: this.y,
       resourceType: this.resourceType,
       amount: this.amount,
-      maxAmount: this.maxAmount
+      maxAmount: this.maxAmount,
+      destroyed: this.destroyed,
+      label: this.label
     };
   }
 
@@ -38,6 +58,9 @@ export class Resource {
     const resource = new Resource(data.x, data.y, data.resourceType, data.amount, idGen);
     resource.id = data.id;
     resource.maxAmount = data.maxAmount;
+    resource.destroyed = data.destroyed || false;
+    if (data.label) resource.label = data.label;
     return resource;
   }
 }
+
