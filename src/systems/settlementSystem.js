@@ -2,7 +2,8 @@
 // Fulfills Phase 2 & Phase 5 City Building & Society Pillars
 
 export class SettlementSystem {
-  constructor() {
+  constructor(sim = null) {
+    this.sim = sim;
     // All settlements: settlementId -> settlement data
     this.settlements = new Map();
     
@@ -63,7 +64,7 @@ export class SettlementSystem {
       bannerSymbol: banner.symbol,
       population: pop,
       agentIds: new Set(foundingAgents.map(a => a.id)),
-      foundedAt: Date.now(),
+      foundedAt: this.sim?.clock?.tick ?? Date.now(),
       abandonedTicks: 0,
       growthTrend: 'stable',
       previousPopulation: pop,
@@ -327,7 +328,7 @@ export class SettlementSystem {
     this.homes.set(agentId, {
       x,
       y,
-      settledAt: Date.now(),
+      settledAt: this.sim?.clock?.tick ?? Date.now(),
       level: 1,
       storage: {
         food: 0,

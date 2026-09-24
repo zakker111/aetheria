@@ -472,6 +472,25 @@ export class WorldState {
     return Math.abs(this.elevation[idx1] - this.elevation[idx2]);
   }
 
+  /**
+   * Tile accessor used by infrastructure systems. Returns terrain data plus a
+   * normalized slope (0..1 over the 0-100 elevation scale) and passability.
+   */
+  getTile(x, y) {
+    const t = this.getTerrain(x, y);
+    if (!t) return null;
+    let slope = 0;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const n = this.getTerrain(x + dx, y + dy);
+      if (n) slope = Math.max(slope, Math.abs(n.elevation - t.elevation));
+    }
+    return {
+      ...t,
+      slope: slope / 100,
+      passable: t.type !== 'water' && t.waterLevel < 0.5
+    };
+  }
+
   // Spatial indexing for fast entity lookup
   addToSpatialIndex(x, y, entity) {
     const key = `${x},${y}`;

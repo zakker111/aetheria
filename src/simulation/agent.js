@@ -11,7 +11,10 @@ const FIRST_NAMES = [
 export class Agent {
   constructor(x, y, idGen, initialAge = null, rng = null) {
     this.id = idGen.next();
-    this.rng = rng || { next: Math.random }; // deterministic when provided; fallback keeps standalone usage working
+    // Determinism guard: prefer the injected seeded RNG. The Math.random
+    // fallback only applies to standalone (non-sim) usage; inside a
+    // Simulation every construction site passes world.rng explicitly.
+    this.rng = rng || { next: Math.random };
     this.type = "agent";
     this.x = x;
     this.y = y;
@@ -1062,8 +1065,9 @@ export class Agent {
     };
   }
 
-  static deserialize(data, idGen) {
-    const agent = new Agent(data.x, data.y, idGen, data.age);
+  static deserialize(data, idGen, rng = null) {
+    // Determinism fix: pass a seeded RNG so restore-time random fields never touch Math.random.
+    const agent = new Agent(data.x, data.y, idGen, data.age ?? null, rng || { next: () => 0.5 });
     agent.id = data.id;
     agent.name = data.name || "Villager";
     agent.alive = data.alive !== undefined ? data.alive : true;

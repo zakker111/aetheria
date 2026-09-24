@@ -99,7 +99,7 @@ class CraftingSystem {
      * Create a workshop entity in the world
      */
     createWorkshop(x, y, type, name) {
-        const id = `workshop_${Date.now()}_${(this.simulation?.world?.rng ?? { next: Math.random }).next().toString(36).slice(2, 11)}`;
+        const id = `workshop_${this.simulation?.clock?.tick ?? 0}_${(this.workshopSeq = (this.workshopSeq || 0) + 1)}`;
         const workshop = {
             id,
             type: 'workshop',

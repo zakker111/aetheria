@@ -85,7 +85,7 @@ export class InfrastructureSystem {
         
         // Create road object
         const road = {
-            id: `road_${Date.now()}`,
+            id: `road_r${this.sim.clock.tick}_${(this.roadSeq = (this.roadSeq || 0) + 1)}`,
             factionId: factionId,
             path: path, // Array of {x, y} coordinates
             length: path.length,
@@ -185,7 +185,7 @@ export class InfrastructureSystem {
         this.deductResources(faction, this.IRRIGATION_BUILD_COST);
         
         const channel = {
-            id: `irrigation_${Date.now()}`,
+            id: `irrigation_i${this.sim.clock.tick}_${(this.irrigationSeq = (this.irrigationSeq || 0) + 1)}`,
             factionId: factionId,
             source: { x: sourceX, y: sourceY },
             path: path,
@@ -277,7 +277,7 @@ export class InfrastructureSystem {
         }
         
         const bridge = {
-            id: `bridge_${Date.now()}`,
+            id: `bridge_b${this.sim.clock.tick}_${(this.bridgeSeq = (this.bridgeSeq || 0) + 1)}`,
             factionId: factionId,
             tiles: bridgeTiles,
             direction: direction,

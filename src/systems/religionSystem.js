@@ -48,7 +48,8 @@ export class ReligionSystem {
         // Priest requirements
         const hasTemple = this.hasNearbyTemple(agent);
         const highFaith = agent.religion.faith >= 80;
-        const highCharisma = agent.personality.charisma >= 7;
+        // Agent personality stores social as 0..1 (no charisma field existed -> priests never emerged)
+        const highCharisma = (agent.personality.social ?? 0) >= 0.7;
         const idle = !agent.currentJob || agent.job === JOB_TYPES.IDLE;
         
         if (hasTemple && highFaith && highCharisma && idle) {
@@ -229,7 +230,7 @@ export class ReligionSystem {
         
         // Track active ritual visuals
         this.activeRituals.set(temple.id, {
-            startTime: Date.now(),
+            startTime: this.world?.simulation?.clock?.tick ?? 0, // deterministic sim ticks
             duration: 300,
             priestId: priest.id
         });
@@ -326,8 +327,8 @@ export class ReligionSystem {
         this.updatePriests();
         this.checkHolyWars();
         
-        // Cleanup old rituals
-        const now = Date.now();
+        // Cleanup old rituals (measured in sim ticks so behavior survives save/load)
+        const now = this.world?.simulation?.clock?.tick ?? Date.now();
         for (const [templeId, ritual] of this.activeRituals.entries()) {
             if (now - ritual.startTime > ritual.duration) {
                 this.activeRituals.delete(templeId);
