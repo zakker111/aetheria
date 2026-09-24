@@ -11,7 +11,7 @@ export class EntityStore {
       id,
       type,
       ...data,
-      createdAt: Date.now()
+      createdAt: 0 // deterministic: stamped from sim clock at registration when available
     };
     this.entities.set(id, entity);
     return entity;

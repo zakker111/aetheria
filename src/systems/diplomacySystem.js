@@ -347,7 +347,7 @@ export class DiplomacySystem {
         description,
         settlementA: s1.name,
         settlementB: s2.name,
-        time: Date.now()
+        time: this.simulation?.clock?.tick ?? Date.now()
       });
     }
   }

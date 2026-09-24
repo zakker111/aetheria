@@ -40,7 +40,8 @@ export class Building {
   }
 
   static deserialize(data, idGen) {
-    const building = new Building(data.x, data.y, data.buildingType, idGen,
+    // determinism: don't consume ids from the shared generator during load
+    const building = new Building(data.x, data.y, data.buildingType, { next: () => -1 },
       data.settlementId ?? null, data.factionId ?? null);
     building.id = data.id;
     building.constructionProgress = data.constructionProgress;

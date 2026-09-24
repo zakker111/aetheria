@@ -38,11 +38,13 @@ export class Simulation {
     return agent;
   }
 
-  constructor(seed = Date.now(), width = 128, height = 128) {
+  constructor(seed = Date.now(), width = 128, height = 128, options = {}) {
+    this.seed = seed;
     this.idGen = new IDGenerator();
-    this.eventBus = new EventBus();
+    // Isolated per-simulation bus: no shared listeners/history across sims (determinism fix)
+    this.eventBus = new EventBus({ isolated: true });
     this.clock = new SimulationClock();
-    this.world = new WorldState(width, height, seed);
+    this.world = new WorldState(width, height, seed, { skipTerrain: !!options.skipInit });
     this.entityStore = new EntityStore();
     
     this.agents = [];
@@ -92,9 +94,9 @@ export class Simulation {
     });
     
     // Phase 1 Systems (Complete with Trade)
-    this.relationshipSystem = new RelationshipSystem();
-    this.settlementSystem = new SettlementSystem();
-    this.economySystem = new EconomySystem();
+    this.relationshipSystem = new RelationshipSystem(this);
+    this.settlementSystem = new SettlementSystem(this);
+    this.economySystem = new EconomySystem(this);
     this.craftingSystem = new CraftingSystem(this);
     this.tradeSystem = new TradeSystem(this); // Automated caravans
     this.cultureSystem = new CultureSystem(this); // Emergent Culture & Traditions
@@ -120,9 +122,18 @@ export class Simulation {
     this.birthsThisSession = 0;
     this.deathsThisSession = 0;
     
-    this.initializeWorld();
+    this._skipInit = !!options.skipInit;
+    if (!this._skipInit) {
+      this.initializeWorld();
+    } else {
+      // deserialize() path: still wire cross-references without consuming RNG draws
+      this.world.simulation = this;
+      this.world.eventBus = this.eventBus;
+    }
     this.setupEventListeners();
-    this.initializeNewSystems();
+    if (!this._skipInit) {
+      this.initializeNewSystems();
+    }
   }
   
   initializeNewSystems() {
@@ -198,7 +209,7 @@ export class Simulation {
       const tx = Math.floor(x);
       const ty = Math.floor(y);
       if (tx >= 3 && tx < this.world.width - 3 && ty >= 3 && ty < this.world.height - 3 && this.world.isWalkable(tx, ty)) {
-        const agent = new Agent(x, y, this.idGen, this.world.rng);
+        const agent = new Agent(x, y, this.idGen, null, this.world.rng);
         this.addAgent(agent);
         this.world.addToSpatialIndex(tx, ty, agent);
         spawned++;
@@ -416,7 +427,14 @@ export class Simulation {
     this.updateConstruction();
     this.updateReligion();
     this.updateInfrastructure(); // NEW: Roads/bridges
-    
+
+    // Periodically rebuild spatial index to correct drift from moving agents
+    // and prune stale entries for dead/removed entities (prevents perception
+    // slowdowns and ghost entities in dense areas).
+    if (this.clock.tick % 100 === 0) {
+      this.world.rebuildSpatialIndex(this.agents, this.resources, this.buildings);
+    }
+
     // Process events
     this.processEvents();
   }
@@ -740,7 +758,7 @@ export class Simulation {
     // Create newborn agents
     for (const birth of births) {
       if (this.world.isWalkable(Math.floor(birth.x), Math.floor(birth.y))) {
-        const baby = new Agent(birth.x, birth.y, this.idGen, 0, this.world.rng); // Newborn baby with age 0
+        const baby = new Agent(birth.x, birth.y, this.idGen, 0, this.world.rng); // Newborn baby with age 0 (seeded RNG)
         baby.lifeStage = 'child';
         baby.parents = [birth.parentId1, birth.parentId2];
         
@@ -965,7 +983,7 @@ export class Simulation {
   }
 
   spawnAgent(x, y) {
-    const agent = new Agent(x, y, this.idGen, this.world.rng);
+    const agent = new Agent(x, y, this.idGen, null, this.world.rng);
     this.addAgent(agent);
     this.world.addToSpatialIndex(Math.floor(x), Math.floor(y), agent);
     this.eventBus.emit("GOD_POWER_USED", { power: "spawn_agent", x, y });
@@ -975,7 +993,10 @@ export class Simulation {
   // Serialization (doc 02: persistence service)
   serialize() {
     return {
-      seed: this.world.seed,
+      seed: this.seed ?? this.world.seed,
+      worldSeed: this.world.seed,
+      rngState: this.world.rng.getState(), // determinism: restore RNG stream on load
+      world: this.world.serialize(), // terrain arrays (skipTerrain load path)
       clock: this.clock.serialize(),
       idGen: this.idGen.getState(),
       agents: this.agents.map(a => a.serialize()),
@@ -1008,7 +1029,13 @@ export class Simulation {
   }
 
   static deserialize(data) {
-    const sim = new Simulation(data.seed);
+    // skipInit: constructing a full sim would run world/entity initialization,
+    // consuming RNG draws and creating default entities that then get cleared —
+    // both a determinism hazard and wasted work. We restore everything from data.
+    const sim = new Simulation(data.seed, 128, 128, { skipInit: true });
+    if (data.rngState) {
+      sim.world.rng.setState(data.rngState);
+    }
     sim.clock = SimulationClock.deserialize(data.clock);
     sim.idGen.setState(data.idGen);
     
@@ -1016,10 +1043,22 @@ export class Simulation {
     sim.agents = [];
     sim.resources = [];
     sim.buildings = [];
+
+    // Restore the procedural world terrain exactly as saved (constructor with
+    // skipInit did not generate it, and generation would advance the RNG).
+    if (data.world) {
+      sim.world.elevation = new Float32Array(data.world.elevation);
+      sim.world.moisture = new Float32Array(data.world.moisture);
+      sim.world.temperature = new Float32Array(data.world.temperature);
+      sim.world.waterLevel = new Float32Array(data.world.waterLevel || []);
+      sim.world.biome = data.world.biome || sim.world.biome;
+      sim.world.riverFlow = new Float32Array(data.world.riverFlow || []);
+      sim.world.isRiverSource = new Uint8Array(data.world.isRiverSource || []);
+    }
     
     // Restore entities
     for (const agentData of data.agents) {
-      const agent = Agent.deserialize(agentData, sim.idGen);
+      const agent = Agent.deserialize(agentData, sim.idGen, sim.world.rng);
       sim.addAgent(agent);
       sim.world.addToSpatialIndex(Math.floor(agent.x), Math.floor(agent.y), agent);
     }
@@ -1084,7 +1123,7 @@ export class Simulation {
     if (data.infrastructure) {
       sim.infrastructureSystem = InfrastructureSystem.deserialize(data.infrastructure, sim);
     }
-    
+
     return sim;
   }
 }

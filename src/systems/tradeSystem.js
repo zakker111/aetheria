@@ -146,8 +146,8 @@ export class TradeSystem {
         const caravanAgents = [];
         for (let i = 0; i < this.CARAVAN_SIZE; i++) {
             const agent = this.sim.spawnAgent(
-                fromSettlement.center.x + (RNG.random() - 0.5) * 10,
-                fromSettlement.center.y + (RNG.random() - 0.5) * 10,
+                fromSettlement.center.x + (this.sim._rng().next() - 0.5) * 10,
+                fromSettlement.center.y + (this.sim._rng().next() - 0.5) * 10,
                 fromSettlement.factionId
             );
             if (agent) {
@@ -210,11 +210,11 @@ export class TradeSystem {
                     if (trader && trader.cargo && trader.cargo.amount > 0) {
                         const cargoResource = trader.cargo.resource;
                         const cargoAmount = trader.cargo.amount;
-                        to.stockpile[cargoResource] = (to.stockpile[cargoResource] || 0) + cargoAmount;
+                        toSettlement.stockpile[cargoResource] = (toSettlement.stockpile[cargoResource] || 0) + cargoAmount;
                         trader.cargo.amount = 0;
                         this.eventBus.emit('trade:completed', {
-                            from: from.name,
-                            to: to.name,
+                            from: fromSettlement.name,
+                            to: toSettlement.name,
                             resource: cargoResource,
                             amount: cargoAmount
                         });

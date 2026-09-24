@@ -70,7 +70,7 @@ export class FactionSystem {
       enemies: new Set(),
       diplomaticStatus: new Map(), // factionId -> 'peace' | 'war' | 'alliance' | 'trade'
       influence: 1.0,
-      foundedAt: Date.now(),
+      foundedAt: this.sim?.clock?.tick ?? Date.now(),
       color: `hsl(${this._rng().next() * 360}, 70%, 50%)`,
       territory: [],
       resources: { food: 0, wood: 0, ore: 0 },
@@ -340,13 +340,13 @@ export class FactionSystem {
     // Record war event
     winner.wars.push({
       against: loser.id,
-      startedAt: Date.now(),
+      startedAt: this.sim?.clock?.tick ?? Date.now(),
       outcome: 'victory'
     });
     
     loser.wars.push({
       against: winner.id,
-      startedAt: Date.now(),
+      startedAt: this.sim?.clock?.tick ?? Date.now(),
       outcome: 'defeat'
     });
     
@@ -383,13 +383,13 @@ export class FactionSystem {
     faction1.treaties.push({
       with: faction2.id,
       type: 'peace',
-      signedAt: Date.now()
+      signedAt: this.sim?.clock?.tick ?? Date.now()
     });
     
     faction2.treaties.push({
       with: faction1.id,
       type: 'peace',
-      signedAt: Date.now()
+      signedAt: this.sim?.clock?.tick ?? Date.now()
     });
   }
   

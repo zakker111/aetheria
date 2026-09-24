@@ -2,7 +2,8 @@
 // Jobs, specialization, resource chains, and trading
 
 export class EconomySystem {
-  constructor() {
+  constructor(sim = null) {
+    this.sim = sim;
     // Job definitions
     this.jobDefinitions = {
       unemployed: {
@@ -90,7 +91,7 @@ export class EconomySystem {
       job: bestJob,
       skillLevel: this.calculateSkillLevel(agent, bestJob),
       experience: 0,
-      assignedAt: Date.now()
+      assignedAt: this.sim?.clock?.tick ?? Date.now()
     });
     
     agent.job = bestJob;
@@ -207,7 +208,7 @@ export class EconomySystem {
       resource: resourceType,
       amount,
       price: totalPrice,
-      timestamp: Date.now()
+      timestamp: this.sim?.clock?.tick ?? Date.now()
     };
   }
   
@@ -243,7 +244,7 @@ export class EconomySystem {
       from: settlement1,
       to: settlement2,
       resources,
-      establishedAt: Date.now(),
+      establishedAt: this.sim?.clock?.tick ?? Date.now(),
       active: true
     });
   }

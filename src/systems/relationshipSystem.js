@@ -4,7 +4,8 @@
 import { IDGenerator } from "../core/idGen.js";
 
 export class RelationshipSystem {
-  constructor() {
+  constructor(sim = null) {
+    this.sim = sim;
     // Map of agentId -> Map of otherAgentId -> Relationship data
     this.relationships = new Map();
     
@@ -82,7 +83,7 @@ export class RelationshipSystem {
     }
     
     updated.interactions = (updated.interactions || 0) + 1;
-    updated.lastInteraction = Date.now();
+    updated.lastInteraction = this.sim?.clock?.tick ?? Date.now(); // deterministic sim ticks
     
     this.setRelationship(agentId1, agentId2, updated);
     
@@ -120,7 +121,7 @@ export class RelationshipSystem {
     }
     
     updated.interactions = (updated.interactions || 0) + 1;
-    updated.lastInteraction = Date.now();
+    updated.lastInteraction = this.sim?.clock?.tick ?? Date.now(); // deterministic sim ticks
     
     this.setRelationship(agentId1, agentId2, updated);
     return updated;
@@ -134,7 +135,7 @@ export class RelationshipSystem {
       rel.memories.push({
         type: memory.type, // 'positive', 'negative', 'neutral', 'traumatic'
         description: memory.description,
-        timestamp: Date.now(),
+        timestamp: this.sim?.clock?.tick ?? Date.now(),
         impact: memory.impact // -10 to +10
       });
       
@@ -202,7 +203,7 @@ export class RelationshipSystem {
     // Create marriage record
     this.marriages.set(coupleKey, {
       partners: [agentId1, agentId2],
-      marriedAt: Date.now(),
+      marriedAt: this.sim?.clock?.tick ?? Date.now(),
       children: [],
       status: 'married'
     });
@@ -357,9 +358,15 @@ export class RelationshipSystem {
   
   // Decay relationships over time (neglect)
   decayRelationships(deltaTime) {
+    const nowTick = this.sim?.clock?.tick ?? null;
     for (const [agentId1, relMap] of this.relationships) {
       for (const [agentId2, rel] of relMap) {
-        if (rel.interactions > 0 && Date.now() - rel.lastInteraction > 86400000) { // 24 hours
+        // Neglect threshold expressed in sim ticks (100 ticks ~ 1 sim year);
+        // falls back to wall-clock only when no simulation context exists.
+        const stale = nowTick !== null
+          ? (rel.lastInteraction ?? 0) < nowTick - 100
+          : (Date.now() - (rel.lastInteraction || 0) > 86400000); // legacy 24h
+        if (rel.interactions > 0 && stale) {
           // Small decay if no recent interaction
           rel.friendship = Math.max(-100, rel.friendship - 0.1);
           rel.trust = Math.max(0, rel.trust - 0.05);

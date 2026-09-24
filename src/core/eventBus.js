@@ -3,21 +3,33 @@
 let instance = null;
 
 export class EventBus {
-  constructor() {
-    if (instance) {
+  constructor(options = {}) {
+    // By default act as the legacy global singleton bus. Pass { isolated: true }
+    // (used by Simulation) to get a private per-instance bus so multiple
+    // simulations/tests never share listeners or history (determinism fix).
+    if (!options.isolated && instance) {
       return instance;
     }
     this.listeners = new Map();
     this.history = [];
     this.maxHistory = 500; // cap to prevent unbounded memory growth
-    instance = this;
+    if (!options.isolated) {
+      instance = this;
+    }
   }
-  
+
   static getInstance() {
     if (!instance) {
       instance = new EventBus();
     }
     return instance;
+  }
+
+  off(eventType, callback) {
+    const callbacks = this.listeners.get(eventType);
+    if (!callbacks) return;
+    const idx = callbacks.indexOf(callback);
+    if (idx !== -1) callbacks.splice(idx, 1);
   }
   
   on(eventType, callback) {

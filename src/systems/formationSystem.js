@@ -62,7 +62,7 @@ export class FormationSystem {
         if (!leader) return null;
         
         const formation = {
-            id: `formation_${Date.now()}`,
+            id: `formation_f${this.sim.clock.tick}_${(this.formationSeq = (this.formationSeq || 0) + 1)}`,
             type: type,
             leaderId: leader.id,
             agents: agentIds,
@@ -223,7 +223,10 @@ export class FormationSystem {
         
         // Calculate territory for each faction based on building proximity
         const factions = Array.from((this.sim.factionSystem?.factions || new Map()).values());
-        const buildings = Array.from(this.sim.buildings.values());
+        // sim.buildings is an array — .values() used to throw TypeError every 500 ticks
+        const buildings = Array.isArray(this.sim.buildings)
+            ? this.sim.buildings
+            : Array.from(this.sim.buildings.values());
         
         factions.forEach(faction => {
             const factionBuildings = buildings.filter(b => b.factionId === faction.id);

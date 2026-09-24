@@ -11,7 +11,10 @@ const FIRST_NAMES = [
 export class Agent {
   constructor(x, y, idGen, initialAge = null, rng = null) {
     this.id = idGen.next();
-    this.rng = rng || { next: Math.random }; // deterministic when provided; fallback keeps standalone usage working
+    // Determinism guard: prefer the injected seeded RNG. The Math.random
+    // fallback only applies to standalone (non-sim) usage; inside a
+    // Simulation every construction site passes world.rng explicitly.
+    this.rng = rng || { next: Math.random };
     this.type = "agent";
     this.x = x;
     this.y = y;
@@ -149,22 +152,27 @@ export class Agent {
     };
     
     const radius = 22;
+    // Perf guard: cap perception fan-out so dense settlements never freeze
+    // the tick loop (unbounded neighbor scans were the main soak-test hazard).
+    const MAX_NEARBY_AGENTS = 12;
+    const MAX_NEARBY_RESOURCES = 8;
+    const MAX_NEARBY_BUILDINGS = 6;
     const nearby = world.getEntitiesNear(Math.floor(this.x), Math.floor(this.y), Math.ceil(radius));
-    
+
     for (const entity of nearby) {
       if (entity.id === this.id) continue;
-      
+
       const dx = entity.x - this.x;
       const dy = entity.y - this.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      
-      if (dist <= radius) {
+      const distSq = dx * dx + dy * dy;
+
+      if (distSq <= radius * radius) {
         if (entity.type === "agent") {
-          perception.nearbyAgents.push(entity);
+          if (perception.nearbyAgents.length < MAX_NEARBY_AGENTS) perception.nearbyAgents.push(entity);
         } else if (entity.type === "resource") {
-          perception.nearbyResources.push(entity);
+          if (perception.nearbyResources.length < MAX_NEARBY_RESOURCES) perception.nearbyResources.push(entity);
         } else if (entity.type === "building") {
-          perception.nearbyBuildings.push(entity);
+          if (perception.nearbyBuildings.length < MAX_NEARBY_BUILDINGS) perception.nearbyBuildings.push(entity);
         }
       }
     }
@@ -1058,12 +1066,24 @@ export class Agent {
       job: this.job,
       jobTitle: this.jobTitle,
       workplace: this.workplace,
-      settlementId: this.settlementId
+      settlementId: this.settlementId,
+      // Resume determinism: in-flight decision/movement state must survive save/load,
+      // otherwise the first tick after resume re-decides from scratch and diverges.
+      currentAction: this.currentAction ?? null,
+      goals: Array.isArray(this.goals) ? this.goals.slice() : [],
+      path: Array.isArray(this.path) ? this.path.map(p => ({ x: p.x, y: p.y })) : null,
+      wanderTicks: this.wanderTicks || 0,
+      stuckTicks: this.stuckTicks || 0,
+      speed: this.speed
     };
   }
 
-  static deserialize(data, idGen) {
-    const agent = new Agent(data.x, data.y, idGen, data.age);
+  static deserialize(data, idGen, rng = null) {
+    // Determinism fix: pass a seeded RNG so restore-time random fields never touch Math.random.
+    // Also use a throwaway id generator: the constructor would advance the shared
+    // idGen stream during load, desynchronizing future ids vs an uninterrupted run.
+    const tempIdGen = { next: () => -1 };
+    const agent = new Agent(data.x, data.y, tempIdGen, data.age ?? null, rng || { next: () => 0.5 });
     agent.id = data.id;
     agent.name = data.name || "Villager";
     agent.alive = data.alive !== undefined ? data.alive : true;
@@ -1092,6 +1112,13 @@ export class Agent {
     agent.jobTitle = data.jobTitle || null;
     agent.workplace = data.workplace || null;
     agent.settlementId = data.settlementId || null;
+    // Resume determinism: restore in-flight decision/movement state.
+    agent.currentAction = data.currentAction ?? null;
+    agent.goals = Array.isArray(data.goals) ? data.goals.slice() : [];
+    agent.path = Array.isArray(data.path) ? data.path.map(p => ({ x: p.x, y: p.y })) : null;
+    agent.wanderTicks = data.wanderTicks || 0;
+    agent.stuckTicks = data.stuckTicks || 0;
+    if (typeof data.speed === "number") agent.speed = data.speed;
     return agent;
   }
 }

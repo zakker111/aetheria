@@ -3,7 +3,7 @@
 import { RNG } from "./rng.js";
 
 export class WorldState {
-  constructor(width = 128, height = 128, seed = Date.now()) {
+  constructor(width = 128, height = 128, seed = Date.now(), options = {}) {
     this.width = width;
     this.height = height;
     this.seed = seed;
@@ -31,7 +31,9 @@ export class WorldState {
     this.simulation = null;
     this.eventBus = null;
 
-    this.generateTerrain();
+    if (!options.skipTerrain) {
+      this.generateTerrain();
+    }
   }
 
   // Compatibility getter for tests and external systems
@@ -472,6 +474,25 @@ export class WorldState {
     return Math.abs(this.elevation[idx1] - this.elevation[idx2]);
   }
 
+  /**
+   * Tile accessor used by infrastructure systems. Returns terrain data plus a
+   * normalized slope (0..1 over the 0-100 elevation scale) and passability.
+   */
+  getTile(x, y) {
+    const t = this.getTerrain(x, y);
+    if (!t) return null;
+    let slope = 0;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const n = this.getTerrain(x + dx, y + dy);
+      if (n) slope = Math.max(slope, Math.abs(n.elevation - t.elevation));
+    }
+    return {
+      ...t,
+      slope: slope / 100,
+      passable: t.type !== 'water' && t.waterLevel < 0.5
+    };
+  }
+
   // Spatial indexing for fast entity lookup
   addToSpatialIndex(x, y, entity) {
     const key = `${x},${y}`;
@@ -487,6 +508,24 @@ export class WorldState {
     if (entities) {
       const idx = entities.indexOf(entity);
       if (idx >= 0) entities.splice(idx, 1);
+    }
+  }
+
+  // Periodically rebuild the spatial index from authoritative entity lists.
+  // Agents move every tick without re-registering, so the index drifts;
+  // this corrects stale cells and prunes dead/removed entities.
+  rebuildSpatialIndex(agents, resources, buildings) {
+    this.spatialIndex.clear();
+    for (const agent of agents) {
+      if (agent.alive !== false) this.addToSpatialIndex(Math.floor(agent.x), Math.floor(agent.y), agent);
+    }
+    for (const resource of resources) {
+      if (resource.depleted === true || resource.amount <= 0) continue;
+      this.addToSpatialIndex(Math.floor(resource.x), Math.floor(resource.y), resource);
+    }
+    for (const building of buildings) {
+      if (building.destroyed === true) continue;
+      this.addToSpatialIndex(Math.floor(building.x), Math.floor(building.y), building);
     }
   }
 
@@ -522,6 +561,7 @@ export class WorldState {
       width: this.width,
       height: this.height,
       seed: this.seed,
+      rngState: this.rng.getState(), // determinism: terrain gen advanced the stream; persist position
       elevation: Array.from(this.elevation),
       moisture: Array.from(this.moisture),
       temperature: Array.from(this.temperature),
@@ -534,6 +574,13 @@ export class WorldState {
 
   static deserialize(data) {
     const world = new WorldState(data.width, data.height, data.seed);
+    // determinism: restore RNG stream position from the save (terrain gen in
+    // the constructor above advanced it); fall back to legacy saves.
+    if (data.rngState) {
+      world.rng.setState(data.rngState);
+    } else {
+      world.rng.setState({ seed: data.seed, state: data.seed });
+    }
     world.elevation = new Float32Array(data.elevation);
     world.moisture = new Float32Array(data.moisture);
     world.temperature = new Float32Array(data.temperature);

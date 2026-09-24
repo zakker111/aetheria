@@ -247,13 +247,13 @@ export class EventSystem {
   // Create event instance
   createEvent(eventDef, currentTick = 0) {
     const event = {
-      id: `event_${Date.now()}`,
+      id: `event_e${currentTick}_${(this.eventSeq = (this.eventSeq || 0) + 1)}`,
       eventId: eventDef.id,
       name: eventDef.name,
       type: eventDef.type,
       severity: eventDef.severity,
       description: eventDef.description,
-      startedAt: Date.now(),
+      startedAt: currentTick, // deterministic: sim tick, not wall clock
       startedAtTick: currentTick,
       duration: eventDef.duration,
       endsAtTick: currentTick + eventDef.duration,
@@ -509,7 +509,7 @@ export class EventSystem {
   
   // Update ongoing event effects each tick
   updateActiveEvents(tick, simulation) {
-    const { agents } = simulation;
+    const { agents, world } = simulation;
     
     // Process injuries
     for (const [agentId, injuryData] of this.injuredAgents) {
@@ -543,7 +543,8 @@ export class EventSystem {
       
       // Mortality check
       const event = this.activeEvents.find(e => e.eventId === diseaseData.disease);
-      if (event && world.rng.next() < event.effects.mortalityRate / event.duration) {
+      if (event && event.effects.mortalityRate != null &&
+          world.rng.next() < event.effects.mortalityRate / Math.max(1, event.duration)) {
         agent.alive = false;
         this.infectedAgents.delete(agentId);
         continue;
@@ -589,14 +590,16 @@ export class EventSystem {
   }
   
   // Get event status for UI
-  getEventStatus() {
+  getEventStatus(currentTick = null) {
+    const now = currentTick ?? this.sim?.clock?.tick ?? 0;
     return {
       active: this.activeEvents.map(e => ({
         name: e.name,
         type: e.type,
         severity: e.severity,
         description: e.description,
-        progress: 1 - ((e.endsAtTick - Date.now()) / (e.duration * 1000))
+        // progress as fraction elapsed within the event window (clamped 0..1)
+        progress: Math.max(0, Math.min(1, 1 - ((e.endsAtTick - now) / Math.max(1, e.duration))))
       })),
       recent: this.eventHistory.slice(-10).map(e => ({
         name: e.name,

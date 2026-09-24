@@ -111,7 +111,7 @@ export class ConstructionSystem {
         const footprint = this.getBuildingFootprint(type, rotation);
         
         const building = {
-            id: `building_${Date.now()}_${(worldState && worldState.rng ? worldState.rng : { next: Math.random }).next().toString(36).substr(2, 9)}`,
+            id: `building_${(worldState?.simulation?.clock?.tick ?? 0)}_${(worldState && worldState.rng ? worldState.rng : { next: Math.random }).next().toString(36).substr(2, 9)}`,
             type: ENTITY_TYPES.BUILDING,
             buildingType: type,
             x: x,

@@ -55,7 +55,8 @@ export class Resource {
   }
 
   static deserialize(data, idGen) {
-    const resource = new Resource(data.x, data.y, data.resourceType, data.amount, idGen);
+    // determinism: don't consume ids from the shared generator during load
+    const resource = new Resource(data.x, data.y, data.resourceType, data.amount, { next: () => -1 });
     resource.id = data.id;
     resource.maxAmount = data.maxAmount;
     resource.destroyed = data.destroyed || false;

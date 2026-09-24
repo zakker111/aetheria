@@ -35,23 +35,23 @@ export class AgeSystem {
      * Age all agents and handle lifecycle events
      */
     agePopulation() {
-        const agents = Array.from(this.sim.agents.values());
-        
+        // sim.agents is an array (not a Map) — .values() used to throw TypeError
+        const agents = Array.isArray(this.sim.agents) ? this.sim.agents : Array.from(this.sim.agents.values());
+
         agents.forEach(agent => {
-            // Increment age (1 tick = ~1 day, so 365 ticks = 1 year roughly)
-            // We scale it down for gameplay: 100 ticks = 1 year
-            agent.age += 1;
-            
-            // Check for natural death
-            if (agent.age >= this.MAX_AGE) {
+            // NOTE: aging itself is owned by Agent.updateNeeds() (+0.01/tick).
+            // This pass only fires lifecycle hooks — no duplicate aging.
+
+            // Check for natural death (Agent also self-checks; keep parity here)
+            if (agent.alive && agent.age >= this.MAX_AGE) {
                 this.handleDeath(agent, 'old_age');
                 return;
             }
-            
-            // Check life stage transitions
-            if (agent.age === this.ADULT_AGE) {
+
+            // Check life stage transitions (integer-safe comparisons)
+            if (agent.lifeStage !== 'adult' && agent.age >= this.ADULT_AGE && agent.age < this.ELDER_AGE) {
                 this.onBecomeAdult(agent);
-            } else if (agent.age === this.ELDER_AGE) {
+            } else if (agent.lifeStage === 'adult' && agent.age >= this.ELDER_AGE) {
                 this.onBecomeElder(agent);
             }
         });
@@ -62,12 +62,10 @@ export class AgeSystem {
         agent.canMarry = true;
         agent.canWork = true;
         
-        // Assign adult job if not assigned
-        if (!agent.job && agent.settlementId) {
-            const settlement = this.sim.settlements.get(agent.settlementId);
-            if (settlement) {
-                settlement.assignJob(agent);
-            }
+        // Assign adult job if not assigned (settlements have no assignJob — route via economySystem)
+        if ((!agent.job || agent.job === 'unemployed') && this.sim.economySystem) {
+            const availableJobs = ['gatherer', 'farmer', 'lumberjack', 'miner', 'builder', 'craftsman'];
+            this.sim.economySystem.assignJob(agent, availableJobs);
         }
         
         this.eventBus.emit('agent:adult', { 
@@ -99,7 +97,9 @@ export class AgeSystem {
         if (agent.relationships) {
             const family = agent.relationships.family || [];
             family.forEach(relId => {
-                const relative = this.sim.agents.get(relId);
+                const relative = (Array.isArray(this.sim.agents)
+                    ? this.sim.agents.find(a => a.id === relId)
+                    : this.sim.agents.get(relId));
                 if (relative) {
                     // Grief debuff
                     if (relative.needs) {
@@ -142,11 +142,14 @@ export class AgeSystem {
     }
 
     updateChildBehavior(agent) {
-        // Children follow parents or stay in settlement
-        if (!agent.parentId) return;
-        
-        const parent = this.sim.agents.get(agent.parentId);
-        if (parent) {
+        // Children follow parents or stay in settlement (agents store parents[] array)
+        const parentId = Array.isArray(agent.parents) ? agent.parents[0] : agent.parentId;
+        if (!parentId) return;
+
+        const parent = (Array.isArray(this.sim.agents)
+            ? this.sim.agents.find(a => a.id === parentId)
+            : this.sim.agents.get(parentId));
+        if (parent && parent.alive !== false) {
             // Simple follow logic
             const dx = parent.x - agent.x;
             const dy = parent.y - agent.y;
