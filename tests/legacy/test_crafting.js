@@ -2,7 +2,7 @@
  * Test Crafting System Implementation
  */
 
-import { Simulation } from './src/simulation/simulation.js';
+import { Simulation } from '../../src/simulation/simulation.js';
 
 console.log('🧪 Testing Crafting System...\n');
 

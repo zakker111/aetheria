@@ -66,6 +66,8 @@ export class SettlementSystem {
       agentIds: new Set(foundingAgents.map(a => a.id)),
       foundedAt: this.sim?.clock?.tick ?? Date.now(),
       abandonedTicks: 0,
+      ruined: false,
+      ruinsTicks: 0,
       growthTrend: 'stable',
       previousPopulation: pop,
       buildings: [],
@@ -247,8 +249,25 @@ export class SettlementSystem {
           settlement.leadership = citizens[0].name;
         }
         settlement.abandonedTicks = 0;
+        // Repopulated: society rises from its ruins.
+        if (settlement.ruined) {
+          settlement.ruined = false;
+          settlement.ruinsTicks = 0;
+          this.sim?.eventBus?.emit('SETTLEMENT_REFUNDED', { id, name: settlement.name });
+        }
       } else {
         settlement.abandonedTicks = (settlement.abandonedTicks || 0) + 1;
+        // Gradual decay once no citizens remain.
+        if (!settlement.ruined && settlement.abandonedTicks > 60) {
+          settlement.ruined = true;
+          settlement.ruinsTicks = 0;
+          settlement.tier = 'Ruins';
+          settlement.tierIcon = '🏚️';
+          const s = this.settlements.get(id);
+          if (s) s.leadership = null;
+          this.sim?.eventBus?.emit('SETTLEMENT_ABANDONED', { id, name: settlement.name });
+        }
+        if (settlement.ruined) settlement.ruinsTicks = (settlement.ruinsTicks || 0) + 1;
       }
 
       // Sync stockpile with resources
@@ -262,12 +281,23 @@ export class SettlementSystem {
       };
     }
 
-    // 3. Only disband settlements if completely abandoned (0 population) for over 180 ticks and no buildings
+    // 3. Ruins decay gradually: buildings crumble one by one, then the
+    // settlement is forgotten entirely (removed from map + chronicle).
     for (const [id, settlement] of Array.from(this.settlements.entries())) {
-      const hasBuildings = settlement.buildings && settlement.buildings.length > 0;
-      if (settlement.population === 0 && !hasBuildings && settlement.abandonedTicks > 180) {
+      if (!settlement.ruined) continue;
+      const bs = settlement.buildings || [];
+      // Every ~25 ticks a structure collapses until none remain.
+      if (bs.length > 0 && (settlement.ruinsTicks % 25 === 0)) {
+        const gone = bs.shift();
+        this.sim?.eventBus?.emit('BUILDING_COLLAPSED', {
+          name: settlement.name, buildingType: gone.type || gone.buildingType || 'structure'
+        });
+      }
+      // Once fully collapsed and long abandoned, erase it from memory.
+      if (bs.length === 0 && settlement.abandonedTicks > 600) {
         this.settlements.delete(id);
         this.territories.delete(id);
+        this.sim?.eventBus?.emit('SETTLEMENT_FORGOTTEN', { id, name: settlement.name });
       }
     }
   }
@@ -384,6 +414,26 @@ export class SettlementSystem {
     const settlementId = this.agentSettlementMap.get(agentId);
     if (!settlementId) return null;
     return this.settlements.get(settlementId);
+  }
+
+  // Drop membership/home records for agents that no longer exist. Dead agents
+  // are spliced out of the sim array, so stale map entries would otherwise
+  // linger forever (memory growth) and make save/load resume process different
+  // key sets than an uninterrupted run (determinism hazard).
+  pruneAgents(aliveIds) {
+    for (const id of Array.from(this.agentSettlementMap.keys())) {
+      if (!aliveIds.has(id)) this.agentSettlementMap.delete(id);
+    }
+    for (const id of Array.from(this.homes.keys())) {
+      if (!aliveIds.has(id)) this.homes.delete(id);
+    }
+    for (const settlement of this.settlements.values()) {
+      if (settlement.agentIds) {
+        for (const agentId of Array.from(settlement.agentIds)) {
+          if (!aliveIds.has(agentId)) settlement.agentIds.delete(agentId);
+        }
+      }
+    }
   }
   
   // Get home for an agent

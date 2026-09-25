@@ -1,5 +1,5 @@
 // Phase A: Initialization & World Generation Test
-import { WorldState } from './src/core/worldState.js';
+import { WorldState } from '../../src/core/worldState.js';
 
 console.log('=== PHASE A: INITIALIZATION & WORLD GENERATION TEST ===');
 console.log('');

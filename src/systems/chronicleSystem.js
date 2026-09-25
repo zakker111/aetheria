@@ -90,6 +90,15 @@ export class ChronicleSystem {
     bus.on('SETTLEMENT_ABANDONED', (d) => {
       this.add('ruin', `${d.name || 'A settlement'} stands abandoned. Nature reclaims its roads.`);
     });
+    bus.on('SETTLEMENT_REFUNDED', (d) => {
+      this.add('founding', `${d.name || 'Ancient ruins'} was resettled — its halls echo with new voices.`);
+    });
+    bus.on('BUILDING_COLLAPSED', (d) => {
+      this.add('ruin', `Another roof at ${d.name || 'the ruins'} collapsed into dust (${d.buildingType || 'structure'}).`);
+    });
+    bus.on('SETTLEMENT_FORGOTTEN', (d) => {
+      this.add('ruin', `${d.name || 'A forgotten hold'} has crumbled beyond memory. Its name passes from the chronicle.`);
+    });
     bus.on('ANIMAL_KILLED', (d) => {
       // Only notable kills make the chronicle (keeps it readable)
       if (d.by === 'wolf') this.add('death', `A ${d.species} was torn apart by wolves in the wild.`);

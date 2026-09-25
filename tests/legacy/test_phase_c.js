@@ -1,5 +1,5 @@
 // Phase C: Economy & Crafting Verification Test
-import { Simulation } from './src/simulation/simulation.js';
+import { Simulation } from '../../src/simulation/simulation.js';
 
 console.log('=== PHASE C: ECONOMY & CRAFTING VERIFICATION ===');
 console.log('');

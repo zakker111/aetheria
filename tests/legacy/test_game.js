@@ -1,5 +1,5 @@
 // Test script to verify game functionality
-import { Simulation } from './src/simulation/simulation.js';
+import { Simulation } from '../../src/simulation/simulation.js';
 
 console.log("=== Aetheria Game Test Suite ===\n");
 

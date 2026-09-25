@@ -1,5 +1,5 @@
 // Phase B: Agent AI & Behavior Stress Test
-import { Simulation } from './src/simulation/simulation.js';
+import { Simulation } from '../../src/simulation/simulation.js';
 
 console.log('=== PHASE B: AGENT AI & BEHAVIOR STRESS TEST ===');
 console.log('');

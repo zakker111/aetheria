@@ -1,5 +1,5 @@
 // Extended test suite for game functionality
-import { Simulation } from './src/simulation/simulation.js';
+import { Simulation } from '../../src/simulation/simulation.js';
 
 console.log("=== Extended Aetheria Test Suite ===\n");
 

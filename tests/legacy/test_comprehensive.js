@@ -1,5 +1,5 @@
 // Comprehensive game functionality test
-import { Simulation } from './src/simulation/simulation.js';
+import { Simulation } from '../../src/simulation/simulation.js';
 
 console.log("=== COMPREHENSIVE GAME TEST ===\n");
 

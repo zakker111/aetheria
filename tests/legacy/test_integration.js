@@ -1,5 +1,5 @@
 // Integration test to verify all systems work together
-import { Simulation } from './src/simulation/simulation.js';
+import { Simulation } from '../../src/simulation/simulation.js';
 
 console.log("=== AETHERIA INTEGRATION TEST ===\n");
 

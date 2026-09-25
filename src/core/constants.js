@@ -28,7 +28,24 @@ export const BUILDING_TYPES = {
   MARKET: 'market',
   FARM: 'farm',
   TOWER: 'tower',
-  WALL: 'wall'
+  WALL: 'wall',
+  WAREHOUSE: 'warehouse'
+};
+
+// Storage capacity per building type (units of food/wood/stone/ore/water).
+// Settlements need warehouses to stockpile surplus — limited space is the
+// survival constraint that drives them to build more.
+export const STORAGE_CAPACITY = {
+  house: 10,
+  farm: 40,
+  workshop: 30,
+  market: 60,
+  warehouse: 250,
+  temple: 20,
+  barracks: 30,
+  castle: 120,
+  tower: 20,
+  windmill: 50
 };
 
 export const RESOURCE_TYPES = {
