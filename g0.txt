@@ -1,0 +1,34 @@
+EVENT: Cultural Festival - The people celebrate with a grand festival!
+EVENT: Mysterious Lights - Strange lights appear in the night sky...
+EVENT: Plague Outbreak - A deadly plague spreads through the population!
+Agent 577 died at age 11.0 days
+EVENT: Plague Outbreak - A deadly plague spreads through the population!
+Agent 625 died at age 12.0 days
+Agent 608 died at age 13.0 days
+EVENT: Seasonal Illness - A mild illness circulates among the people.
+Agent 10 died at age 38.0 days
+Agent 16 died at age 49.0 days
+EVENT: Wildfire - A wildfire sweeps through the area!
+EVENT: Seasonal Illness - A mild illness circulates among the people.
+EVENT: Cultural Festival - The people celebrate with a grand festival!
+EVENT: Earthquake - The ground shakes violently!
+Agent 686 died at age 26.0 days
+EVENT: Migrant Wave - New settlers arrive seeking a better life!
+agent 1 pioneer: resumed=false direct=undefined
+agent 1 militaryDuty: resumed=false direct=undefined
+agent 2 pioneer: resumed=false direct=undefined
+agent 2 militaryDuty: resumed=false direct=undefined
+agent 3 reproduceCooldown: resumed=0 direct=undefined
+agent 11 reproduceCooldown: resumed=0 direct=undefined
+tick0 diff counts: { pioneer: 58, militaryDuty: 69, reproduceCooldown: 52 }
+rng equal: true
+after tick 1: diverged agents=6, pop 71/71
+after tick 2: diverged agents=6, pop 71/71
+after tick 3: diverged agents=6, pop 71/71
+after tick 4: diverged agents=6, pop 71/71
+after tick 5: diverged agents=7, pop 71/71
+after tick 6: diverged agents=8, pop 71/71
+after tick 7: diverged agents=8, pop 71/71
+after tick 8: diverged agents=8, pop 71/71
+after tick 9: diverged agents=8, pop 71/71
+after tick 10: diverged agents=15, pop 71/71

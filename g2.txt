@@ -1,0 +1,19 @@
+EVENT: Cultural Festival - The people celebrate with a grand festival!
+EVENT: Mysterious Lights - Strange lights appear in the night sky...
+EVENT: Plague Outbreak - A deadly plague spreads through the population!
+Agent 577 died at age 11.0 days
+EVENT: Plague Outbreak - A deadly plague spreads through the population!
+Agent 625 died at age 12.0 days
+Agent 608 died at age 13.0 days
+EVENT: Seasonal Illness - A mild illness circulates among the people.
+Agent 10 died at age 38.0 days
+Agent 16 died at age 49.0 days
+EVENT: Wildfire - A wildfire sweeps through the area!
+EVENT: Seasonal Illness - A mild illness circulates among the people.
+EVENT: Cultural Festival - The people celebrate with a grand festival!
+EVENT: Earthquake - The ground shakes violently!
+Agent 686 died at age 26.0 days
+EVENT: Migrant Wave - New settlers arrive seeking a better life!
+only in live: _pendingBuildTick,_hasPendingBuild,state
+only in loaded: deathCause,pioneer,spawnX,spawnY,militaryDuty,warbandId,combatRole,hasWeapon,hasShield,formationOffset
+first divergence at resume-tick 1 (clock 4001/4001)

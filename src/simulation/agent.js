@@ -1880,7 +1880,38 @@ export class Agent {
       memories: Array.isArray(this.memories) ? this.memories.slice(-8) : [],
       reputation: this.reputation || 0,
       gossipViews: this.gossipViews ? Array.from(this.gossipViews.entries()) : [],
-      _gossipHeard: this._gossipHeard ? Array.from(this._gossipHeard.entries()) : []
+      _gossipHeard: this._gossipHeard ? Array.from(this._gossipHeard.entries()) : [],
+      // Pioneer flag drives behavior branches (local wander vs world-center
+      // pull, camp-steered gathering). Deserialized agents never run the
+      // constructor, so it must round-trip or a resumed run diverges on the
+      // very first tick.
+      pioneer: this.pioneer === true,
+      spawnX: this.spawnX ?? null,
+      spawnY: this.spawnY ?? null,
+      // Transient threat/flee caches: recomputed within ~4 ticks by the
+      // evaluator, but persisting them keeps save/load byte-for-byte
+      // deterministic even when saving mid-evaluation cycle.
+      _warThreatTick: this._warThreatTick ?? null,
+      _warThreat: this._warThreat ?? null,
+      fleeFrom: this.fleeFrom ?? null,
+      fleeTarget: this.fleeTarget ?? null,
+      // Event-driven productivity modifier (e.g. festival/illness): restored
+      // below so an in-flight event effect survives save/load.
+      productivityMultiplier: this.productivityMultiplier ?? 1,
+      // Military duty flags (WarfareSystem): consulted every goal-tick and by
+      // war-threat scans; losing them desyncs soldier behavior after resume.
+      militaryDuty: this.militaryDuty === true,
+      warbandId: this.warbandId ?? null,
+      combatRole: this.combatRole ?? null,
+      hasWeapon: this.hasWeapon ?? false,
+      hasShield: this.hasShield ?? false,
+      formationOffset: Array.isArray(this.formationOffset) ? this.formationOffset.slice() : null,
+      // Combat component: mirrors canonical health each update, but cooldown/
+      // target/attack-speed state must survive the round trip.
+      combat: this.combat ? { ...this.combat } : null,
+      // Religion component: faith decays incrementally per tick — without
+      // persisting it, priests lose their status and faith on load.
+      religion: this.religion ? { ...this.religion } : null
     };
   }
 
@@ -1949,6 +1980,33 @@ export class Agent {
     agent.reputation = data.reputation || 0;
     agent.gossipViews = new Map(Array.isArray(data.gossipViews) ? data.gossipViews : []);
     agent._gossipHeard = new Map(Array.isArray(data._gossipHeard) ? data._gossipHeard : []);
+    // Pioneer flag drives behavior branches (world-center pull vs local wander).
+    // The randomized constructor never runs here, so it must be restored or a
+    // resumed run diverges on the very first tick.
+    agent.pioneer = data.pioneer === true;
+    agent.spawnX = data.spawnX ?? null;
+    agent.spawnY = data.spawnY ?? null;
+    // Transient threat/flee caches: restored for byte-exact save/load even when
+    // saving mid-evaluation cycle (recomputed within ~4 ticks otherwise).
+    agent._warThreatTick = data._warThreatTick ?? null;
+    agent._warThreat = data._warThreat ?? null;
+    agent.fleeFrom = data.fleeFrom ?? null;
+    agent.fleeTarget = data.fleeTarget ?? null;
+    // In-flight event productivity effect (festival/illness) must survive load.
+    agent.productivityMultiplier = data.productivityMultiplier ?? 1;
+    // Military duty flags (WarfareSystem): consulted every goal-tick and by
+    // war-threat scans; losing them desyncs soldier behavior after resume.
+    agent.militaryDuty = data.militaryDuty === true;
+    agent.warbandId = data.warbandId ?? null;
+    agent.combatRole = data.combatRole ?? null;
+    agent.hasWeapon = data.hasWeapon ?? false;
+    agent.hasShield = data.hasShield ?? false;
+    agent.formationOffset = Array.isArray(data.formationOffset) ? data.formationOffset.slice() : null;
+    // Combat component: cooldown/target/attack-speed state must round-trip.
+    agent.combat = data.combat ? { ...data.combat } : null;
+    // Religion component: faith decays incrementally per tick — without this,
+    // priests lose status/faith on load and demote/promote at wrong times.
+    agent.religion = data.religion ? { ...data.religion } : null;
     return agent;
   }
 }

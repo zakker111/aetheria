@@ -1273,7 +1273,14 @@ export class Simulation {
       // Ecology & history must survive save/load or resumed worlds lose all
       // wildlife and the chronicle book.
       animals: this.animalSystem.serialize(),
-      chronicle: this.chronicleSystem.serialize()
+      chronicle: this.chronicleSystem.serialize(),
+      // Warfare: active warbands (march targets, morale, plunder cargo) drive
+      // soldier behavior every tick — losing them desyncs a resumed run badly.
+      warfare: {
+        warbands: Array.from(this.warfareSystem.warbands.entries()),
+        nextWarbandId: this.warfareSystem.nextWarbandId,
+        combatEffects: this.warfareSystem.combatEffects.map(e => ({ ...e }))
+      }
     };
   }
 
@@ -1388,6 +1395,17 @@ export class Simulation {
     }
     if (data.chronicle) {
       sim.chronicleSystem = ChronicleSystem.deserialize(data.chronicle, sim);
+    }
+
+    // Restore warbands. Warband fields are all plain JSON-safe values (numbers,
+    // strings, arrays, nested plain objects), so entries round-trip through the
+    // save intact; soldier pointers resolve by agent id at use time.
+    if (data.warfare && sim.warfareSystem) {
+      sim.warfareSystem.warbands = new Map(data.warfare.warbands || []);
+      sim.warfareSystem.nextWarbandId = data.warfare.nextWarbandId ?? 1;
+      sim.warfareSystem.combatEffects = Array.isArray(data.warfare.combatEffects)
+        ? data.warfare.combatEffects.map(e => ({ ...e }))
+        : [];
     }
 
     return sim;
