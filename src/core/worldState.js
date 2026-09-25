@@ -20,6 +20,14 @@ export class WorldState {
     this.riverFlow = new Float32Array(width * height); // Water flow intensity
     this.isRiverSource = new Uint8Array(width * height); // River source markers
 
+    // Road network: persistent ground layer (0/1 per tile). Emergent paths are
+    // trampled by foot traffic; planned roads are stamped by InfrastructureSystem.
+    this.roadTiles = new Uint8Array(width * height);
+    // Foot-traffic heat map: counts tile entries; hot tiles become desire-paths.
+    this.footTraffic = new Uint16Array(width * height);
+    // Persistent fire ground layer: per-tile remaining burn ticks (0 = no fire)
+    this.fireTiles = new Uint16Array(width * height);
+
     // Spatial index for fast queries (doc 02: spatial indexes)
     this.spatialIndex = new Map();
 
@@ -465,6 +473,111 @@ export class WorldState {
     return !nonWalkable.includes(terrain.type);
   }
 
+  // Road network accessors (persistent ground layer)
+  isRoad(x, y) {
+    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
+    return this.roadTiles[y * this.width + x] === 1;
+  }
+
+  setRoad(x, y, on = true) {
+    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
+    const idx = y * this.width + x;
+    if (!this.isWalkable(x, y)) return false;
+    this.roadTiles[idx] = on ? 1 : 0;
+    return true;
+  }
+
+  // Fire layer accessors: tiles hold remaining burn ticks (deterministic decay).
+  isBurning(x, y) {
+    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
+    return this.fireTiles[y * this.width + x] > 0;
+  }
+
+  startFire(x, y, duration = 60) {
+    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
+    const idx = y * this.width + x;
+    this.fireTiles[idx] = Math.max(this.fireTiles[idx], duration);
+    // Perf: wake the fire tick loop in Simulation.updateEnvironment()
+    if (this.simulation) this.simulation._fireActive = true;
+    return true;
+  }
+
+  /**
+   * Advance the fire layer one tick: decay burn timers and spread to
+   * adjacent flammable tiles (forests/grasslands). Deterministic — uses no
+   * RNG draws; spread is gated on tile fuel and a fixed tick parity so
+   * fires creep rather than explode. Returns count of burning tiles.
+   */
+  updateFires(tick) {
+    const w = this.width, h = this.height;
+    const ft = this.fireTiles;
+    let burning = 0;
+    // Perf: reuse scratch buffers instead of allocating arrays/objects per tick.
+    if (!this._fireScratch || this._fireScratchCap !== ft.length) {
+      this._fireScratch = new Int32Array(ft.length);
+      this._fireScratchCap = ft.length;
+    }
+    const cand = this._fireScratch;
+    let candCount = 0;
+    const spread = (tick & 1) === 0; // spread every other tick to slow propagation
+    // Global cap so fires creep instead of consuming the map / tanking perf.
+    const MAX_BURNING = 512;
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      for (let x = 0; x < w; x++) {
+        const idx = row + x;
+        const burn = ft[idx];
+        if (burn <= 0) continue;
+        burning++;
+        ft[idx] = burn - 1;
+        if (spread && burning < MAX_BURNING) {
+          // Inline 4-neighbor check (no array-of-pairs allocation)
+          if (x > 0) {
+            const nidx = idx - 1;
+            if (ft[nidx] <= 0) {
+              const b = this.biome[nidx];
+              if (b === 'forest' || b === 'jungle' || b === 'grassland' || b === 'plains' || b === 'savanna') cand[candCount++] = nidx;
+            }
+          }
+          if (x < w - 1) {
+            const nidx = idx + 1;
+            if (ft[nidx] <= 0) {
+              const b = this.biome[nidx];
+              if (b === 'forest' || b === 'jungle' || b === 'grassland' || b === 'plains' || b === 'savanna') cand[candCount++] = nidx;
+            }
+          }
+          if (y > 0) {
+            const nidx = idx - w;
+            if (ft[nidx] <= 0) {
+              const b = this.biome[nidx];
+              if (b === 'forest' || b === 'jungle' || b === 'grassland' || b === 'plains' || b === 'savanna') cand[candCount++] = nidx;
+            }
+          }
+          if (y < h - 1) {
+            const nidx = idx + w;
+            if (ft[nidx] <= 0) {
+              const b = this.biome[nidx];
+              if (b === 'forest' || b === 'jungle' || b === 'grassland' || b === 'plains' || b === 'savanna') cand[candCount++] = nidx;
+            }
+          }
+        }
+      }
+    }
+    for (let i = 0; i < candCount && burning < MAX_BURNING; i++) {
+      const nidx = cand[i];
+      if (ft[nidx] <= 0) { ft[nidx] = 40; burning++; } // fresh flame, shorter life than source
+    }
+    return burning;
+  }
+
+  countFires() {
+    let n = 0;
+    for (let i = 0; i < this.fireTiles.length; i++) {
+      if (this.fireTiles[i] > 0) n++;
+    }
+    return n;
+  }
+
   /**
    * Get slope between two adjacent tiles
    */
@@ -514,7 +627,7 @@ export class WorldState {
   // Periodically rebuild the spatial index from authoritative entity lists.
   // Agents move every tick without re-registering, so the index drifts;
   // this corrects stale cells and prunes dead/removed entities.
-  rebuildSpatialIndex(agents, resources, buildings) {
+  rebuildSpatialIndex(agents, resources, buildings, animals = []) {
     this.spatialIndex.clear();
     for (const agent of agents) {
       if (agent.alive !== false) this.addToSpatialIndex(Math.floor(agent.x), Math.floor(agent.y), agent);
@@ -526,6 +639,10 @@ export class WorldState {
     for (const building of buildings) {
       if (building.destroyed === true) continue;
       this.addToSpatialIndex(Math.floor(building.x), Math.floor(building.y), building);
+    }
+    for (const animal of animals) {
+      if (animal.alive === false) continue;
+      this.addToSpatialIndex(Math.floor(animal.x), Math.floor(animal.y), animal);
     }
   }
 
@@ -568,7 +685,10 @@ export class WorldState {
       waterLevel: Array.from(this.waterLevel),
       biome: [...this.biome],
       riverFlow: Array.from(this.riverFlow),
-      isRiverSource: Array.from(this.isRiverSource)
+      isRiverSource: Array.from(this.isRiverSource),
+      roadTiles: Array.from(this.roadTiles),
+      footTraffic: Array.from(this.footTraffic),
+      fireTiles: Array.from(this.fireTiles)
     };
   }
 
@@ -588,6 +708,9 @@ export class WorldState {
     world.biome = data.biome || new Array(data.width * data.height).fill('plains');
     world.riverFlow = new Float32Array(data.riverFlow || new Float32Array(data.width * data.height));
     world.isRiverSource = new Uint8Array(data.isRiverSource || new Uint8Array(data.width * data.height));
+    world.roadTiles = new Uint8Array(data.roadTiles || new Uint8Array(data.width * data.height));
+    world.footTraffic = new Uint16Array(data.footTraffic || new Uint16Array(data.width * data.height));
+    world.fireTiles = new Uint16Array(data.fireTiles || new Uint16Array(data.width * data.height));
     return world;
   }
 }
