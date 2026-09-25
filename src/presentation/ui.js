@@ -281,6 +281,11 @@ export class UIManager {
             html += this.renderAgentDetails(entity);
         } else if (entity.type === ENTITY_TYPES.BUILDING) {
             html += this.renderBuildingDetails(entity);
+        } else if (entity.type === 'animal') {
+            html += `<div><strong>Species:</strong> ${entity.species}</div>`;
+            html += `<div><strong>Health:</strong> ${Math.round(entity.health || 0)}</div>`;
+            html += `<div><strong>Age:</strong> ${Math.round((entity.age || 0) / 100)} seasons</div>`;
+            html += `<div style="color:#888;margin-top:6px;">${entity.species === 'wolf' ? 'Hunts lone travelers and wounded prey. Keep citizens in groups.' : 'Flees from armed hunters; a good source of meat and hide.'}</div>`;
         } else if (entity.tile) {
             html += this.renderTileDetails(entity);
         }
@@ -442,6 +447,7 @@ export class UIManager {
     getEntityIcon(entity) {
         if (entity.type === ENTITY_TYPES.AGENT) return '🧑';
         if (entity.type === ENTITY_TYPES.BUILDING) return '🏛️';
+        if (entity.type === 'animal') return { deer: '🦌', boar: '🐗', wolf: '🐺' }[entity.species] || '🐾';
         if (entity.tile) return '🗺️';
         return '❓';
     }
@@ -456,6 +462,10 @@ export class UIManager {
         if (entity.type === ENTITY_TYPES.BUILDING) {
             const bType = entity.buildingType || entity.type || 'building';
             return String(bType).replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        }
+        if (entity.type === 'animal') {
+            const label = String(entity.species || 'animal').replace(/^\w/, l => l.toUpperCase());
+            return entity.species === 'wolf' ? `${label} (Predator)` : label;
         }
         if (entity.tile) return 'Terrain Tile';
         return 'Unknown';

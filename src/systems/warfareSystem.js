@@ -413,6 +413,34 @@ export class WarfareSystem {
         });
       }
 
+      // Pillaging: raiders torch the settlement — set buildings ablaze and
+      // light the surrounding ground on fire. Fires then spread/decay via
+      // world.updateFires() in the environment tick. Deterministic.
+      const world = this.sim.world;
+      if (world.startFire) {
+        let burned = 0;
+        for (const b of this.sim.buildings) {
+          if (!b.complete || b.health !== undefined && b.health <= 0) continue;
+          const d = Math.hypot(b.x - enemySettlement.center.x, b.y - enemySettlement.center.y);
+          if (d < 12 && burned < 4) {
+            b.health = (b.health ?? 100) - 40;
+            world.startFire(Math.floor(b.x), Math.floor(b.y), 70);
+            burned++;
+          }
+        }
+        // Ground fires around the center as well
+        const ccx = Math.floor(enemySettlement.center.x);
+        const ccy = Math.floor(enemySettlement.center.y);
+        world.startFire(ccx + 1, ccy, 50);
+        world.startFire(ccx, ccy + 1, 50);
+      }
+      if (this.sim.eventBus) {
+        this.sim.eventBus.emit("SETTLEMENT_BURNED", {
+          attackerName: warband.settlementName,
+          defenderName: enemySettlement.name
+        });
+      }
+
       // Check unconditional surrender
       if (this.sim.diplomacySystem) {
         this.sim.diplomacySystem.signPeace(warband.settlementId, enemySettlement.id, warband.settlementId);

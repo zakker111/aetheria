@@ -106,34 +106,227 @@ export class CanvasRenderer {
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     
     this.renderTerrain();
+    this.renderRoadTiles();   // Persistent road / desire-path ground layer
     this.renderSettlementTerritories();
     this.renderDiplomacyLines(); // Inter-realm alliances, wars & tension lines
     this.renderResources();
     this.renderInfrastructure(); // Roads, bridges, irrigation
     this.renderBuildings();
+    this.renderFireOverlay(); // Burning tiles with flicker
     this.renderSettlements();
+    this.renderAnimals();     // Wildlife: deer, boars, wolves roam the wild
     this.renderAgents();
     this.renderCombatEffects(); // Clashing weapons, sparks, damage & casualty markers
     this.renderParticles(); // Ritual effects, combat effects
+    this.renderHUD();       // Live world counters (fires, fleeing, castles...)
     this.renderUI();
   }
 
-  renderTerrain() {
-    const startX = Math.max(0, Math.floor(this.camera.x - this.canvas.width / 2 / this.camera.zoom));
-    const startY = Math.max(0, Math.floor(this.camera.y - this.canvas.height / 2 / this.camera.zoom));
-    const endX = Math.min(this.world.width, Math.ceil(this.camera.x + this.canvas.width / 2 / this.camera.zoom));
-    const endY = Math.min(this.world.height, Math.ceil(this.camera.y + this.canvas.height / 2 / this.camera.zoom));
-    
+  renderRoadTiles() {
+    const world = this.world;
+    if (!world || !world.roadTiles) return;
+    const zoom = this.camera.zoom;
+    const startX = Math.max(0, Math.floor(this.camera.x - this.canvas.width / 2 / zoom));
+    const startY = Math.max(0, Math.floor(this.camera.y - this.canvas.height / 2 / zoom));
+    const endX = Math.min(world.width, Math.ceil(this.camera.x + this.canvas.width / 2 / zoom));
+    const endY = Math.min(world.height, Math.ceil(this.camera.y + this.canvas.height / 2 / zoom));
     for (let y = startY; y < endY; y++) {
       for (let x = startX; x < endX; x++) {
-        const terrain = this.world.getTerrain(x, y);
-        if (terrain) {
-          const screen = this.worldToScreen(x, y);
-          this.ctx.fillStyle = this.getTerrainColor(terrain.type);
-          this.ctx.fillRect(screen.x, screen.y, this.camera.zoom, this.camera.zoom);
+        const idx = y * world.width + x;
+        if (!world.roadTiles[idx]) continue;
+        const screen = this.worldToScreen(x, y);
+        // Trampled earth tone; newer paths slightly lighter than established roads
+        const traffic = world.footTraffic ? world.footTraffic[idx] : 0;
+        this.ctx.fillStyle = traffic >= 15 ? "#a89478" : "#b9a689";
+        this.ctx.fillRect(screen.x, screen.y, zoom, zoom);
+        if (zoom >= 6) {
+          this.ctx.strokeStyle = "rgba(87, 66, 44, 0.35)";
+          this.ctx.lineWidth = 1;
+          this.ctx.strokeRect(screen.x + 0.5, screen.y + 0.5, zoom - 1, zoom - 1);
         }
       }
     }
+  }
+
+  renderFireOverlay() {
+    const world = this.world;
+    if (!world || !world.fireTiles) return;
+    const zoom = this.camera.zoom;
+    const now = Date.now();
+    const startX = Math.max(0, Math.floor(this.camera.x - this.canvas.width / 2 / zoom));
+    const startY = Math.max(0, Math.floor(this.camera.y - this.canvas.height / 2 / zoom));
+    const endX = Math.min(world.width, Math.ceil(this.camera.x + this.canvas.width / 2 / zoom));
+    const endY = Math.min(world.height, Math.ceil(this.camera.y + this.canvas.height / 2 / zoom));
+    let any = false;
+    for (let y = startY; y < endY; y++) {
+      for (let x = startX; x < endX; x++) {
+        const burn = world.fireTiles[y * world.width + x];
+        if (burn <= 0) continue;
+        any = true;
+        const screen = this.worldToScreen(x, y);
+        const flicker = 0.55 + 0.35 * Math.sin(now * 0.011 + x * 3.7 + y * 5.1);
+        // Glowing embers base
+        this.ctx.fillStyle = `rgba(120, 20, 0, ${0.45 + 0.2 * flicker})`;
+        this.ctx.fillRect(screen.x, screen.y, zoom, zoom);
+        // Flame core
+        this.ctx.fillStyle = `rgba(255, ${Math.floor(120 + 90 * flicker)}, 20, ${0.55 * flicker + 0.25})`;
+        const fs = zoom * (0.5 + 0.25 * flicker);
+        this.ctx.fillRect(screen.x + (zoom - fs) / 2, screen.y + (zoom - fs) / 2, fs, fs);
+        // Smoke wisp at higher zoom
+        if (zoom >= 5) {
+          this.ctx.fillStyle = `rgba(60, 60, 60, ${0.25 + 0.15 * Math.sin(now * 0.004 + x)})`;
+          this.ctx.beginPath();
+          this.ctx.arc(screen.x + zoom / 2, screen.y - zoom * 0.3, zoom * 0.35, 0, Math.PI * 2);
+          this.ctx.fill();
+        }
+      }
+    }
+    if (any && zoom < 5) {
+      // Distant fires: draw pulsing glow markers so blazes are visible when zoomed out
+      for (let y = startY; y < endY; y++) {
+        for (let x = startX; x < endX; x++) {
+          if (world.fireTiles[y * world.width + x] <= 0) continue;
+          const screen = this.worldToScreen(x, y);
+          const r = 4 + 2 * Math.sin(now * 0.008 + x + y);
+          this.ctx.fillStyle = "rgba(255, 100, 20, 0.8)";
+          this.ctx.beginPath();
+          this.ctx.arc(screen.x + zoom / 2, screen.y + zoom / 2, Math.max(2, r), 0, Math.PI * 2);
+          this.ctx.fill();
+        }
+      }
+    }
+  }
+
+  renderHUD() {
+    const sim = this.simulation;
+    if (!sim) return;
+    const ctx = this.ctx;
+    const world = this.world;
+    const fires = world && world.fireTiles ? world.countFires() : 0;
+    let fleeing = 0, soldiers = 0, builders = 0, farmers = 0;
+    for (const a of sim.agents) {
+      if (!a.alive) continue;
+      if (a.fleeFrom) fleeing++;
+      if (a.militaryDuty) soldiers++;
+      const j = a.job || a.role;
+      if (j === "builder") builders++;
+      if (j === "farmer") farmers++;
+    }
+    let castles = 0, towers = 0, houses = 0;
+    const countB = (list) => {
+      for (const b of list) {
+        if (b.complete === false) continue;
+        const t = b.buildingType || b.type;
+        if (t === "castle") castles++;
+        else if (t === "tower") towers++;
+        else if (t === "house") houses++;
+      }
+    };
+    if (sim.buildings) countB(sim.buildings);
+    if (sim.settlementSystem) {
+      for (const s of sim.settlementSystem.settlements.values()) {
+        if (s.buildings) countB(s.buildings);
+      }
+    }
+    const wildlife = sim.animalSystem ? sim.animalSystem.animals.length : 0;
+    const settlements = sim.settlementSystem ? sim.settlementSystem.settlements.size : 0;
+    const population = sim.agents.filter(a => a.alive).length;
+    const era = sim.clock ? `Day ${Math.floor((sim.clock.tick || 0) / 100)}` : "";
+    const wars = sim.diplomacySystem && sim.diplomacySystem.wars ? sim.diplomacySystem.wars.length : 0;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(10, 15, 30, 0.72)";
+    ctx.strokeStyle = "rgba(74, 111, 165, 0.8)";
+    ctx.lineWidth = 1;
+    const lines = [
+      `${era} · Pop ${population} · Settlements ${settlements}`,
+      `Houses ${houses} · Towers ${towers} · Castles ${castles}`,
+      `Jobs: ${farmers} farm · ${builders} build · ${soldiers} arms`,
+      `Wars ${wars} · 🐾 Wildlife ${wildlife}${fires > 0 ? ` · 🔥 Fires ${fires}` : ""}${fleeing > 0 ? ` · 😱 Fleeing ${fleeing}` : ""}`
+    ];
+    // Chronicle ticker: show the latest recorded historical event
+    const chron = sim.chronicleSystem;
+    if (chron && chron.entries.length > 0) {
+      const last = chron.entries[chron.entries.length - 1];
+      let txt = `${last.date}: ${last.text}`;
+      if (txt.length > 46) txt = txt.slice(0, 45) + "…";
+      lines.push(`📜 ${txt}`);
+    }
+    const w = 250, h = 16 * lines.length + 12;
+    ctx.fillRect(8, 8, w, h);
+    ctx.strokeRect(8, 8, w, h);
+    ctx.font = "12px monospace";
+    ctx.textAlign = "left";
+    lines.forEach((line, i) => {
+      ctx.fillStyle = (i === 3 && (fires > 0 || fleeing > 0 || wars > 0)) ? "#fca5a5" : "#d6e4ff";
+      ctx.fillText(line, 16, 26 + i * 16);
+    });
+    ctx.restore();
+  }
+
+  // Perf: terrain is static after generation. Render it once per zoom level
+  // into an offscreen canvas (1px per tile, LUT colors) and blit the visible
+  // region each frame with nearest-neighbor scaling. This replaces thousands
+  // of per-tile fillRect calls + object allocations with a single drawImage.
+  ensureTerrainCache(zoom) {
+    const world = this.world;
+    if (this._terrainCache && this._terrainZoom === zoom) return this._terrainCache;
+    if (!this._terrainCanvas) {
+      this._terrainCanvas = document.createElement("canvas");
+      this._terrainCtx = this._terrainCanvas.getContext("2d");
+    }
+    const w = world.width, h = world.height;
+    this._terrainCanvas.width = w;
+    this._terrainCanvas.height = h;
+    const img = this._terrainCtx.createImageData(w, h);
+    const data = img.data;
+    const biome = world.biome;
+    const elev = world.elevation;
+    for (let i = 0; i < w * h; i++) {
+      const rgb = this.getTerrainColorRGB(biome[i], elev[i]);
+      const o = i * 4;
+      data[o] = rgb[0]; data[o + 1] = rgb[1]; data[o + 2] = rgb[2]; data[o + 3] = 255;
+    }
+    this._terrainCtx.putImageData(img, 0, 0);
+    this._terrainCache = this._terrainCanvas;
+    this._terrainZoom = zoom;
+    return this._terrainCache;
+  }
+
+  getTerrainColorRGB(type, elevation = 50) {
+    let lut = this._colorLUT && this._colorLUT[type];
+    if (!lut) {
+      // Parse the hex palette string once into [r,g,b]
+      const hex = this.getTerrainColor(type);
+      const n = parseInt(hex.slice(1), 16);
+      lut = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+      if (!this._colorLUT) this._colorLUT = {};
+      this._colorLUT[type] = lut;
+    }
+    // Cheap deterministic shading from elevation (~±12%)
+    const shade = 0.88 + (elevation / 100) * 0.24;
+    return [Math.min(255, lut[0] * shade) | 0, Math.min(255, lut[1] * shade) | 0, Math.min(255, lut[2] * shade) | 0];
+  }
+
+  renderTerrain() {
+    const zoom = this.camera.zoom;
+    const cache = this.ensureTerrainCache(zoom);
+    const viewW = this.canvas.width / zoom;
+    const viewH = this.canvas.height / zoom;
+    const sx = this.camera.x - viewW / 2;
+    const sy = this.camera.y - viewH / 2;
+    // Source rect clamped to world bounds; dest rect shifted to match
+    const cx0 = Math.max(0, sx), cy0 = Math.max(0, sy);
+    const cx1 = Math.min(this.world.width, sx + viewW);
+    const cy1 = Math.min(this.world.height, sy + viewH);
+    if (cx1 <= cx0 || cy1 <= cy0) return;
+    this.ctx.imageSmoothingEnabled = false;
+    this.ctx.drawImage(
+      cache,
+      cx0, cy0, cx1 - cx0, cy1 - cy0,
+      (cx0 - sx) * zoom, (cy0 - sy) * zoom, (cx1 - cx0) * zoom, (cy1 - cy0) * zoom
+    );
+    this.ctx.imageSmoothingEnabled = true;
   }
 
   getTerrainColor(type) {
@@ -156,14 +349,15 @@ export class CanvasRenderer {
     const zoom = this.camera.zoom;
     const isDetailed = zoom >= 3.5;
 
+    // Perf: cheap bounds check before worldToScreen — most resources are
+    // offscreen at typical zoom levels.
+    const camX = this.camera.x, camY = this.camera.y;
+    const halfW = this.canvas.width / 2 / zoom + 40, halfH = this.canvas.height / 2 / zoom + 40;
     for (const resource of this.simulation.resources) {
       if (resource.destroyed) continue;
+      if (resource.x < camX - halfW || resource.x > camX + halfW ||
+          resource.y < camY - halfH || resource.y > camY + halfH) continue;
       const screen = this.worldToScreen(resource.x, resource.y);
-      
-      // Skip offscreen
-      if (screen.x < -30 || screen.x > this.canvas.width + 30 || screen.y < -30 || screen.y > this.canvas.height + 30) {
-        continue;
-      }
 
       const type = resource.resourceType;
       const isDepleted = resource.amount <= 0;
@@ -503,14 +697,44 @@ export class CanvasRenderer {
       else if (bType === "temple") buildingColor = "#fbbf24";
       else if (bType === "wall") buildingColor = "#4b5563";
       else if (bType === "tower") buildingColor = "#dc2626";
-      
+      else if (bType === "castle") buildingColor = "#64748b";
+
+      const bs = bType === "castle" ? this.camera.zoom * 1.3 : this.camera.zoom * 0.8;
       this.ctx.fillStyle = buildingColor;
       this.ctx.fillRect(
-        screen.x - this.camera.zoom * 0.4,
-        screen.y - this.camera.zoom * 0.4,
-        this.camera.zoom * 0.8,
-        this.camera.zoom * 0.8
+        screen.x - bs / 2,
+        screen.y - bs / 2,
+        bs,
+        bs
       );
+
+      // Castle keep detail: corner turrets + gatehouse + banner at readable zoom
+      if (bType === "castle" && this.camera.zoom >= 4) {
+        this.ctx.fillStyle = "#94a3b8";
+        const t = Math.max(2, this.camera.zoom * 0.22);
+        this.ctx.fillRect(screen.x - bs / 2 - t / 2, screen.y - bs / 2 - t / 2, t, t);
+        this.ctx.fillRect(screen.x + bs / 2 - t / 2, screen.y - bs / 2 - t / 2, t, t);
+        this.ctx.fillRect(screen.x - bs / 2 - t / 2, screen.y + bs / 2 - t / 2, t, t);
+        this.ctx.fillRect(screen.x + bs / 2 - t / 2, screen.y + bs / 2 - t / 2, t, t);
+        this.ctx.fillStyle = "#1f2937";
+        this.ctx.fillRect(screen.x - t / 2, screen.y + bs / 2 - t * 1.4, t, t * 1.4);
+        this.ctx.strokeStyle = "#e2e8f0";
+        this.ctx.lineWidth = 1;
+        this.ctx.beginPath();
+        this.ctx.moveTo(screen.x, screen.y - bs / 2);
+        this.ctx.lineTo(screen.x, screen.y - bs / 2 - t * 2.2);
+        this.ctx.stroke();
+        this.ctx.fillStyle = "#7c3aed";
+        this.ctx.fillRect(screen.x, screen.y - bs / 2 - t * 2.2, t * 1.4, t);
+      }
+      // Tower crenellations
+      if (bType === "tower" && this.camera.zoom >= 5) {
+        this.ctx.fillStyle = "#fecaca";
+        const t = Math.max(1.5, this.camera.zoom * 0.15);
+        this.ctx.fillRect(screen.x - bs / 2, screen.y - bs / 2 - t, t, t);
+        this.ctx.fillRect(screen.x - t / 2, screen.y - bs / 2 - t, t, t);
+        this.ctx.fillRect(screen.x + bs / 2 - t, screen.y - bs / 2 - t, t, t);
+      }
       
       // Construction progress overlay
       if (building.constructionProgress !== undefined && building.constructionProgress < 100) {
@@ -574,6 +798,42 @@ export class CanvasRenderer {
     }
   }
 
+  renderAnimals() {
+    const animals = this.simulation?.animalSystem?.animals;
+    if (!animals || animals.length === 0) return;
+    const ctx = this.ctx;
+    const zoom = this.camera.zoom;
+    const now = Date.now();
+    const COLORS = { deer: "#b45309", boar: "#57534e", wolf: "#94a3b8" };
+    for (const a of animals) {
+      if (a.alive === false) continue;
+      const screen = this.worldToScreen(a.x, a.y);
+      if (screen.x < -20 || screen.x > this.canvas.width + 20 ||
+          screen.y < -20 || screen.y > this.canvas.height + 20) continue;
+      const size = Math.max(1.5, zoom * 0.30);
+      const hop = Math.sin(now * 0.006 + a.age) * (zoom > 6 ? 1 : 0);
+      // shadow
+      ctx.fillStyle = "rgba(0,0,0,0.22)";
+      ctx.beginPath();
+      ctx.ellipse(screen.x, screen.y + size * 0.6, size * 0.8, size * 0.32, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // body
+      ctx.fillStyle = COLORS[a.species] || "#a3a3a3";
+      ctx.beginPath();
+      ctx.ellipse(screen.x, screen.y - size * 0.2 + hop, size * 0.95, size * 0.62, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // head dot
+      ctx.beginPath();
+      ctx.arc(screen.x + size * 0.85, screen.y - size * 0.5 + hop, size * 0.34, 0, Math.PI * 2);
+      ctx.fill();
+      // hostile wolves get a red glint when zoomed in
+      if (a.species === "wolf" && zoom > 8) {
+        ctx.fillStyle = "#ef4444";
+        ctx.fillRect(screen.x + size * 0.9, screen.y - size * 0.6 + hop, 1.6, 1.6);
+      }
+    }
+  }
+
   renderAgents() {
     const now = Date.now();
     for (const agent of this.simulation.agents) {
@@ -631,6 +891,7 @@ export class CanvasRenderer {
           case "military_duty":
           case "combat": bodyColor = "#dc2626"; break;
           case "flee": bodyColor = "#ef4444"; break;
+          case "hunt": bodyColor = "#0d9488"; break;
         }
       }
       

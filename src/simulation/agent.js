@@ -8,6 +8,11 @@ const FIRST_NAMES = [
   "Hadrian", "Iris", "Jorah", "Kendra", "Lorcan", "Mira", "Nesta", "Osric"
 ];
 
+// Deterministic tick accessor: never consumes RNG, safe for goal scheduling.
+function tickOf(simulation) {
+  return (simulation && simulation.clock && simulation.clock.tick) || 0;
+}
+
 export class Agent {
   constructor(x, y, idGen, initialAge = null, rng = null) {
     this.id = idGen.next();
@@ -45,7 +50,9 @@ export class Agent {
       water: 90 + this.rng.next() * 10,
       rest: 90 + this.rng.next() * 10,
       social: 60 + this.rng.next() * 20,
-      safety: 100
+      safety: 100,
+      // Combat health mirror (warfareSystem writes needs.health; keep both in sync)
+      health: 100
     };
     
     this.personality = {
@@ -89,6 +96,7 @@ export class Agent {
     this.path = null;
     this.wanderTicks = 0;
     this.stuckTicks = 0;
+    this.restCycles = 0; // how many times we've slept since waking — drives "out and about" behavior
     
     // Job and workplace
     this.job = null;
@@ -139,6 +147,11 @@ export class Agent {
         this.health = Math.min(this.maxHealth, this.health + 0.5);
       }
     }
+
+    // Keep combat-health mirror in sync with canonical health field so both
+    // warfareSystem (needs.health) and legacy code paths (agent.health) agree.
+    this.needs.health = this.health;
+    if (this.combat) this.combat.health = this.health;
   }
 
   // Perceive nearby entities (doc 03A: perceive nearby people, resources, structures)
@@ -147,6 +160,7 @@ export class Agent {
       nearbyAgents: [],
       nearbyResources: [],
       nearbyBuildings: [],
+      nearbyAnimals: [],
       dangers: [],
       opportunities: []
     };
@@ -157,6 +171,7 @@ export class Agent {
     const MAX_NEARBY_AGENTS = 12;
     const MAX_NEARBY_RESOURCES = 8;
     const MAX_NEARBY_BUILDINGS = 6;
+    const MAX_NEARBY_ANIMALS = 6;
     const nearby = world.getEntitiesNear(Math.floor(this.x), Math.floor(this.y), Math.ceil(radius));
 
     for (const entity of nearby) {
@@ -173,6 +188,8 @@ export class Agent {
           if (perception.nearbyResources.length < MAX_NEARBY_RESOURCES) perception.nearbyResources.push(entity);
         } else if (entity.type === "building") {
           if (perception.nearbyBuildings.length < MAX_NEARBY_BUILDINGS) perception.nearbyBuildings.push(entity);
+        } else if (entity.type === "animal" && entity.alive !== false) {
+          if (perception.nearbyAnimals.length < MAX_NEARBY_ANIMALS) perception.nearbyAnimals.push(entity);
         }
       }
     }
@@ -181,7 +198,7 @@ export class Agent {
   }
 
   // Generate goals based on needs, jobs, reproduction, building, and community
-  generateGoals(simulation) {
+  generateGoals(simulation, perception = null) {
     this.goals = [];
     
     // 1. Critical Hunger & Thirst
@@ -218,6 +235,75 @@ export class Agent {
       this.goals.sort((a, b) => b.priority - a.priority);
       return;
     }
+
+    // 2.6 Desperation & Panic Fleeing: civilians run for their lives when war
+    // reaches their doorstep or flames lick at their heels. Wounded, starving
+    // agents flee even more readily. Deterministic (no RNG draws).
+    //
+    // Perf: O(agents^2 * wars) enemy scan throttled to every 4th tick per
+    // agent with a cached result. The decision is pure (no RNG), so reuse is
+    // save/load-safe; the flee threshold (~9 tiles) moves slowly relative to
+    // 4 ticks of travel, and fire threats are re-checked every tick below.
+    const desperate = this.needs.health < 35 ||
+      (this.needs.food < 12 && this.needs.water < 12);
+    let threatX = null, threatY = null, threatDist = Infinity, threatKind = null;
+    if (simulation && simulation.world && simulation.diplomacySystem) {
+      const mySid = this.settlementId ||
+        (simulation.settlementSystem ? simulation.settlementSystem.agentSettlementMap.get(this.id) : null);
+      const tickNow = simulation.clock ? simulation.clock.tick : this._goalTick;
+      if (this._warThreatTick === undefined || tickNow - this._warThreatTick >= 4) {
+        this._warThreatTick = tickNow;
+        this._warThreat = null;
+        const hostiles = mySid != null ? simulation.diplomacySystem.getEnemies(mySid) : [];
+        if (hostiles.length > 0 && !this.militaryDuty) {
+          const hostileSet = new Set(hostiles);
+          let best = null, bestD = Infinity;
+          for (const other of simulation.agents) {
+            if (!other.alive || other.militaryDuty) continue;
+            const osid = other.settlementId ||
+              (simulation.settlementSystem ? simulation.settlementSystem.agentSettlementMap.get(other.id) : null);
+            if (osid == null || !hostileSet.has(osid)) continue;
+            const dx = other.x - this.x, dy = other.y - this.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < bestD) { bestD = d2; best = other; }
+          }
+          if (best) this._warThreat = { x: best.x, y: best.y, dist: Math.sqrt(bestD) };
+        }
+      }
+      if (this._warThreat) {
+        threatX = this._warThreat.x; threatY = this._warThreat.y;
+        threatDist = this._warThreat.dist; threatKind = "war";
+      }
+      // Fire nearby? Scan a few tiles around us for burning ground.
+      const w = simulation.world;
+      if (w.fireTiles) {
+        const px = Math.floor(this.x), py = Math.floor(this.y);
+        for (let dy = -3; dy <= 3 && threatKind !== "war"; dy++) {
+          for (let dx = -3; dx <= 3; dx++) {
+            const fx = px + dx, fy = py + dy;
+            if (fx < 0 || fy < 0 || fx >= w.width || fy >= w.height) continue;
+            if (w.fireTiles[fy * w.width + fx] > 0) {
+              const d = Math.hypot(dx, dy);
+              if (d < threatDist) { threatDist = d; threatX = fx; threatY = fy; threatKind = "fire"; }
+            }
+          }
+        }
+      }
+    }
+    const underThreat = threatKind !== null && threatDist < (threatKind === "fire" ? 4.5 : 9);
+    if ((underThreat && (desperate || this.personality.brave < 0.6 || this.lifeStage !== "adult")) ||
+        (desperate && threatKind !== null)) {
+      this.fleeFrom = { x: threatX, y: threatY };
+      this.goals.push({ type: "flee", priority: 130, target: { x: threatX, y: threatY }, kind: threatKind });
+    } else {
+      this.fleeFrom = null;
+    }
+    if (underThreat || desperate) {
+      // Safety need plummets while danger looms — visible in the UI
+      this.needs.safety = Math.min(this.needs.safety, desperate ? 10 : 35);
+    } else if (this.needs.safety < 100) {
+      this.needs.safety = Math.min(100, this.needs.safety + 0.3);
+    }
     
     // 3. Construction & Civic Works: high priority for builders or settlements with pending buildings!
     const job = this.job;
@@ -225,21 +311,29 @@ export class Agent {
     let hasPendingConstruction = false;
     
     if (simulation && simulation.buildings) {
-      const homeSid = this.settlementId ||
-        (simulation.settlementSystem ? simulation.settlementSystem.agentSettlementMap.get(this.id) : null);
-      for (const b of simulation.buildings) {
-        if (!b.complete && (b.constructionProgress || 0) < 100) {
-          const sid = b.settlementId ?? null;
-          if (sid == null || sid === homeSid) { hasPendingConstruction = true; break; }
-          // foreign site: only counts as civic work if friendly (not at war)
-          if (homeSid != null && simulation.diplomacySystem) {
-            try {
-              const rel = simulation.diplomacySystem.getRelation(homeSid, sid);
-              if (rel && rel.status !== 'war' && rel.score >= 40) { hasPendingConstruction = true; break; }
-            } catch { /* ignore */ }
+      // Perf: cache the pending-construction scan per tick (pure decision, no
+      // RNG — safe to reuse across save/load). Building sites change slowly.
+      const tickNow = simulation.clock ? simulation.clock.tick : -1;
+      if (this._pendingBuildTick !== tickNow) {
+        this._pendingBuildTick = tickNow;
+        this._hasPendingBuild = false;
+        const homeSid = this.settlementId ||
+          (simulation.settlementSystem ? simulation.settlementSystem.agentSettlementMap.get(this.id) : null);
+        for (const b of simulation.buildings) {
+          if (!b.complete && (b.constructionProgress || 0) < 100) {
+            const sid = b.settlementId ?? null;
+            if (sid == null || sid === homeSid) { this._hasPendingBuild = true; break; }
+            // foreign site: only counts as civic work if friendly (not at war)
+            if (homeSid != null && simulation.diplomacySystem) {
+              try {
+                const rel = simulation.diplomacySystem.getRelation(homeSid, sid);
+                if (rel && rel.status !== 'war' && rel.score >= 40) { this._hasPendingBuild = true; break; }
+              } catch { /* ignore */ }
+            }
           }
         }
       }
+      hasPendingConstruction = this._hasPendingBuild;
     }
     
     if (isBuilder || (hasPendingConstruction && (job === 'unemployed' || !job))) {
@@ -272,9 +366,15 @@ export class Agent {
       this.goals.push({ type: "reproduce", priority: 58 });
     }
     
-    // 6. Social Interaction & Community Bonding
-    if (this.needs.social < 80) {
+    // 6. Social Interaction & Community Bonding — and neighbor visits:
+    // agents actively walk around town to see friends instead of idling.
+    // Deterministic trigger (no RNG draw): keeps the shared world RNG stream
+    // aligned across save/load resume for the determinism test.
+    const socialDrive = (this.personality.social || 0.5);
+    if (this.needs.social < 85) {
       this.goals.push({ type: "socialize", priority: 50 });
+    } else if (this.lifeStage !== "child" && ((this.id * 7 + tickOf(simulation)) % Math.max(4, Math.round(14 - socialDrive * 10))) === 0) {
+      this.goals.push({ type: "visit_neighbor", priority: 26 });
     }
     
     // 7. Settlement Stay & Home Tether
@@ -296,19 +396,56 @@ export class Agent {
             this.goals.push({ type: "eat_from_stockpile", priority: 95, target: settlement.center });
           }
         }
+
+        // Sleep at home: go rest where you live (drives foot traffic on roads)
+        if (this.needs.rest < 65) {
+          const home = simulation.settlementSystem.getAgentHome(this.id);
+          if (home) {
+            this.goals.push({ type: "rest_at_home", priority: this.needs.rest < 35 ? 60 : 32, target: home });
+          }
+        }
       }
     }
     
+    // 7.5 Town life: errands that pull agents out into the streets.
+    // After a good night's sleep at home, people head to the market square,
+    // guards walk the walls, priests tend the temple — visible foot traffic.
+    const restedAtHome = this.restCycles > 0 && this.needs.rest > 70;
+    if (simulation && simulation.settlementSystem && restedAtHome) {
+      const settlement = simulation.settlementSystem.getAgentSettlement(this.id);
+      if (settlement && settlement.center) {
+        const isGuard = job === 'soldier' || job === 'guard';
+        const isPriest = job === 'priest';
+        const t = tickOf(simulation);
+        const cadence = Math.max(6, Math.round(16 - (this.personality.social || 0.5) * 8));
+        if (isGuard && ((this.id * 5 + t) % 10) === 0) {
+          this.goals.push({ type: "patrol_settlement", priority: 44, target: settlement });
+        } else if (isPriest && ((this.id * 5 + t) % 12) === 0) {
+          this.goals.push({ type: "pray_at_temple", priority: 46, target: settlement });
+        } else if (((this.id * 11 + t) % cadence) === 0) {
+          this.goals.push({ type: "visit_market", priority: 30, target: settlement });
+        }
+      }
+    }
+
     // 8. Proactive foraging if inventory has space
     const totalItems = Object.values(this.inventory).reduce((a, b) => typeof b === 'number' ? a + b : a, 0);
     if (totalItems < this.inventory.capacity) {
       this.goals.push({ type: "forage_nearby", priority: 35 });
     }
     
-    // Default fallback goal: explore
-    if (this.goals.length === 0) {
-      this.goals.push({ type: "explore", priority: 10 });
+    // 7b. Hunting: hungry agents (and job hunters) stalk nearby wildlife.
+    // Prey animals are visible via perception; wolves stay off the menu.
+    if (perception && perception.nearbyAnimals && perception.nearbyAnimals.length > 0 &&
+        (this.needs.food < 65 || this.job === 'hunter')) {
+      const prey = perception.nearbyAnimals.find(a => a.species !== 'wolf');
+      if (prey) {
+        this.goals.push({ type: "hunt", priority: this.job === 'hunter' ? 92 : 82, target: prey });
+      }
     }
+
+    // Default fallback goal: always keep exploring/moving — nobody stands still
+    this.goals.push({ type: "explore", priority: this.goals.length === 0 ? 10 : 8 });
     
     // Sort by priority descending
     this.goals.sort((a, b) => b.priority - a.priority);
@@ -511,6 +648,44 @@ export class Agent {
             score: goal.priority
           });
           break;
+
+        case "rest_at_home":
+          if (goal.target) {
+            actions.push({
+              type: "go_home_and_rest",
+              target: goal.target,
+              score: goal.priority
+            });
+          }
+          break;
+
+        case "visit_neighbor": {
+          // Walk over to a nearby friend/relative's position and chat on arrival
+          let best = null;
+          let bestScore = -Infinity;
+          for (const agent of perception.nearbyAgents) {
+            if (!agent.alive || agent === this) continue;
+            const d = this.distanceTo(agent);
+            if (d < 4) continue; // already together — socialize covers it
+            let affinity = 0;
+            if (simulation && simulation.relationshipSystem) {
+              try {
+                const rel = simulation.relationshipSystem.getRelationship(this.id, agent.id);
+                if (rel) affinity = (rel.friendship || 0) * 0.1;
+              } catch { /* ignore */ }
+            }
+            const score = affinity - Math.min(20, d) * 0.3;
+            if (score > bestScore) { bestScore = score; best = agent; }
+          }
+          if (best) {
+            actions.push({
+              type: "visit_neighbor",
+              target: best,
+              score: goal.priority + Math.max(0, 8 + bestScore)
+            });
+          }
+          break;
+        }
           
         case "return_to_settlement":
           if (goal.target) {
@@ -521,6 +696,34 @@ export class Agent {
             });
           }
           break;
+
+        case "visit_market": {
+          const dest = this.pickMarketSpot(simulation, goal.target);
+          if (dest) {
+            actions.push({
+              type: "visit_market",
+              target: dest,
+              score: goal.priority + (10 - Math.min(9, Math.hypot(dest.x - this.x, dest.y - this.y)))
+            });
+          }
+          break;
+        }
+
+        case "patrol_settlement": {
+          const post = this.pickPatrolPost(simulation, goal.target);
+          if (post) {
+            actions.push({ type: "patrol_settlement", target: post, score: goal.priority });
+          }
+          break;
+        }
+
+        case "pray_at_temple": {
+          const temple = this.findSettlementBuilding(simulation, goal.target, ["temple"]);
+          if (temple) {
+            actions.push({ type: "pray_at_temple", target: temple, score: goal.priority });
+          }
+          break;
+        }
 
         case "deposit_to_stockpile":
           if (goal.target) {
@@ -545,6 +748,25 @@ export class Agent {
         case "military_duty":
           actions.push({
             type: "military_duty",
+            score: goal.priority
+          });
+          break;
+
+        case "hunt":
+          if (goal.target && goal.target.alive !== false) {
+            actions.push({
+              type: "hunt",
+              target: goal.target,
+              score: goal.priority + (12 - Math.min(12, this.distanceTo(goal.target)))
+            });
+          }
+          break;
+
+        case "flee":
+          actions.push({
+            type: "flee",
+            target: goal.target,
+            kind: goal.kind,
             score: goal.priority
           });
           break;
@@ -578,6 +800,56 @@ export class Agent {
     const dx = entity.x - this.x;
     const dy = entity.y - this.y;
     return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  // ---- Town-life helpers (deterministic, no RNG draws) ----
+
+  // Find a completed building of one of the given types owned by a settlement.
+  findSettlementBuilding(simulation, settlement, types) {
+    if (!simulation || !settlement) return null;
+    const list = settlement.buildings && settlement.buildings.length > 0
+      ? settlement.buildings
+      : simulation.buildings;
+    let best = null, bestD = Infinity;
+    for (const b of list) {
+      if (!b || b.settlementId !== settlement.id) continue;
+      if (!(b.complete || b.isComplete)) continue;
+      if (!types.includes(b.buildingType)) continue;
+      const d = this.distanceTo(b);
+      if (d < bestD) { bestD = d; best = b; }
+    }
+    return best;
+  }
+
+  // A spot in the town center / market square to bustle around.
+  pickMarketSpot(simulation, settlement) {
+    if (!settlement || !settlement.center) return null;
+    const t = tickOf(simulation);
+    const angle = ((this.id + Math.floor(t / 24)) % 8) * (Math.PI / 4);
+    const radius = 2 + ((this.id * 3) % 4);
+    const x = settlement.center.x + Math.cos(angle) * radius;
+    const y = settlement.center.y + Math.sin(angle) * radius;
+    if (simulation.world && !simulation.world.isWalkable(Math.floor(x), Math.floor(y))) {
+      return { x: settlement.center.x, y: settlement.center.y };
+    }
+    return { x, y };
+  }
+
+  // Guards circle the perimeter of their town's civic buildings.
+  pickPatrolPost(simulation, settlement) {
+    if (!settlement) return null;
+    const civic = this.findSettlementBuilding(simulation, settlement, ["castle", "tower", "temple"]);
+    const anchor = civic || settlement.center;
+    if (!anchor) return null;
+    const t = tickOf(simulation);
+    const angle = ((this.id + Math.floor(t / 16)) % 8) * (Math.PI / 4);
+    const radius = civic ? 5 : 9;
+    const x = anchor.x + Math.cos(angle) * radius;
+    const y = anchor.y + Math.sin(angle) * radius;
+    if (simulation.world && !simulation.world.isWalkable(Math.floor(x), Math.floor(y))) {
+      return { x: anchor.x, y: anchor.y };
+    }
+    return { x, y };
   }
 
   // Execute action for one tick
@@ -806,6 +1078,96 @@ export class Agent {
         }
         break;
 
+      case "go_home_and_rest": {
+        if (!action.target) {
+          this.currentAction = null;
+          break;
+        }
+        if (this.distanceTo(action.target) < 2.5) {
+          // Cozy at home: rest recovers faster than napping in the open
+          this.needs.rest = Math.min(100, this.needs.rest + 14);
+          if (this.needs.rest > 85) {
+            // Slept a full night at home — count it and head back out tomorrow
+            this.restCycles++;
+            this.currentAction = null;
+          }
+        } else {
+          this.moveToward(action.target, world);
+        }
+        break;
+      }
+
+      case "visit_market": {
+        if (!action.target) { this.currentAction = null; break; }
+        if (this.distanceTo(action.target) < 1.6) {
+          // Bustling in the square: bump into neighbors, catch up on gossip
+          this.needs.social = Math.min(100, this.needs.social + 8);
+          for (const other of world.getEntitiesNear(Math.floor(this.x), Math.floor(this.y), 3)) {
+            if (other.type === "agent" && other.id !== this.id && other.alive) {
+              other.needs.social = Math.min(100, other.needs.social + 3);
+              if (simulation && simulation.relationshipSystem) {
+                simulation.relationshipSystem.modifyRelationship(this.id, other.id, { friendship: 1 });
+              }
+            }
+          }
+          if (eventBus) {
+            eventBus.emit("MARKET_VISIT", { agentId: this.id, x: this.x, y: this.y });
+          }
+          this.currentAction = null; // errand done
+        } else {
+          this.moveToward(action.target, world);
+        }
+        break;
+      }
+
+      case "patrol_settlement": {
+        if (!action.target) { this.currentAction = null; break; }
+        if (this.distanceTo(action.target) < 1.8) {
+          this.needs.rest = Math.max(0, this.needs.rest - 0.5); // standing watch is tiring
+          this.currentAction = null; // reached post — next tick picks a new one, creating a circuit
+        } else {
+          this.moveToward(action.target, world);
+        }
+        break;
+      }
+
+      case "pray_at_temple": {
+        if (!action.target) { this.currentAction = null; break; }
+        if (this.distanceTo(action.target) < 2.2) {
+          this.needs.social = Math.min(100, this.needs.social + 6);
+          this.skills.cooking = this.skills.cooking; // no-op keeps shape stable
+          if (eventBus) {
+            eventBus.emit("PRAYER", { agentId: this.id, buildingId: action.target.id, x: this.x, y: this.y });
+          }
+          this.currentAction = null;
+        } else {
+          this.moveToward(action.target, world);
+        }
+        break;
+      }
+
+      case "visit_neighbor": {
+        if (!action.target || !action.target.alive) {
+          this.currentAction = null;
+          break;
+        }
+        if (this.distanceTo(action.target) < 2.5) {
+          // Arrived: say hello and catch up
+          this.needs.social = Math.min(100, this.needs.social + 12);
+          action.target.needs.social = Math.min(100, action.target.needs.social + 6);
+          if (simulation && simulation.relationshipSystem) {
+            simulation.relationshipSystem.modifyRelationship(this.id, action.target.id, {
+              friendship: 3
+            });
+          }
+          this.currentAction = null;
+        } else {
+          // Follow them around the map — keeps both parties moving
+          this.moveToward(action.target, world);
+        }
+        break;
+      }
+
       case "return_home":
         if (!action.target) {
           this.currentAction = null;
@@ -873,6 +1235,71 @@ export class Agent {
         // Position, maneuvers and combat clashing are processed each tick by WarfareSystem
         this.currentAction = null;
         break;
+
+      case "hunt": {
+        const prey = action.target;
+        if (!prey || prey.alive === false) {
+          this.currentAction = null;
+          break;
+        }
+        if (this.distanceTo(prey) < 1.6) {
+          // The kill: food fills fast, hide is loot, skill grows.
+          const gain = prey.species === 'boar' ? 38 : 30;
+          prey.alive = false;
+          this.needs.food = Math.min(100, this.needs.food + gain);
+          this.inventory.meat = (this.inventory.meat || 0) + 2;
+          this.inventory.hide = (this.inventory.hide || 0) + 1;
+          this.skills.hunt = (this.skills.hunt || 1.0) + 0.06;
+          simulation?.animalSystem?.removeAnimal?.(prey);
+          if (eventBus) {
+            eventBus.emit("ANIMAL_KILLED", {
+              species: prey.species, x: prey.x, y: prey.y, by: this.id
+            });
+            eventBus.emit("RESOURCE_GATHERED", {
+              agentId: this.id, resourceType: "meat", x: prey.x, y: prey.y
+            });
+          }
+          this.currentAction = null;
+        } else {
+          // The chase: sprint after the quarry.
+          this.moveToward(prey, world, 1.5);
+          this.currentAction = action;
+        }
+        break;
+      }
+
+      case "flee": {
+        // Sprint directly away from the threat (soldiers/war or burning ground).
+        const threat = action.target || this.fleeFrom;
+        if (!threat) { this.currentAction = null; break; }
+        let awayX = this.x - threat.x;
+        let awayY = this.y - threat.y;
+        const mag = Math.hypot(awayX, awayY) || 1;
+        awayX /= mag; awayY /= mag;
+        // Slight deterministic veer so crowds don't stack on one lane
+        const veerAngle = ((this.id % 7) - 3) * 0.18;
+        const cosV = Math.cos(veerAngle), sinV = Math.sin(veerAngle);
+        const dirX = awayX * cosV - awayY * sinV;
+        const dirY = awayX * sinV + awayY * cosV;
+        const runDist = 6;
+        const margin = 4;
+        let destX = Math.max(margin, Math.min((world.width || 128) - margin, this.x + dirX * runDist));
+        let destY = Math.max(margin, Math.min((world.height || 128) - margin, this.y + dirY * runDist));
+        if (!world.isWalkable(Math.floor(destX), Math.floor(destY))) {
+          // Try perpendicular escape vectors
+          const alt = [{ x: this.x + dirY * runDist, y: this.y - dirX * runDist },
+                       { x: this.x - dirY * runDist, y: this.y + dirX * runDist },
+                       { x: this.x + dirX * 3, y: this.y + dirY * 3 }];
+          for (const cand of alt) {
+            const cx = Math.max(margin, Math.min((world.width || 128) - margin, cand.x));
+            const cy = Math.max(margin, Math.min((world.height || 128) - margin, cand.y));
+            if (world.isWalkable(Math.floor(cx), Math.floor(cy))) { destX = cx; destY = cy; break; }
+          }
+        }
+        this.moveToward({ x: destX, y: destY }, world, 1.8); // panic sprint ×1.8 speed
+        this.needs.rest = Math.max(0, this.needs.rest - 0.15); // running is exhausting
+        break;
+      }
         
       case "wander": {
         this.wanderTicks = (this.wanderTicks || 0) + 1;
@@ -958,7 +1385,8 @@ export class Agent {
   }
 
   // Smooth movement with border clamping and multi-direction obstacle avoidance
-  moveToward(target, world) {
+  // speedBoost: optional multiplier (e.g. panic fleeing sprints at ×1.8)
+  moveToward(target, world, speedBoost = 1) {
     if (!target) return;
     
     const dx = target.x - this.x;
@@ -966,13 +1394,17 @@ export class Agent {
     const dist = Math.sqrt(dx * dx + dy * dy);
     
     if (dist > 0.1) {
-      let effectiveSpeed = this.speed;
+      let effectiveSpeed = this.speed * speedBoost;
       // Elder agents move slightly slower, urgent needs move faster
       if (this.lifeStage === "elder") {
         effectiveSpeed *= 0.75;
       }
       if (this.needs.food < 30 || this.needs.water < 30) {
         effectiveSpeed *= 1.35;
+      }
+      // Roads: agents standing on a road tile stride 60% faster
+      if (world.isRoad && world.isRoad(Math.floor(this.x), Math.floor(this.y))) {
+        effectiveSpeed *= 1.6;
       }
       
       const step = Math.min(dist, effectiveSpeed);
@@ -989,6 +1421,17 @@ export class Agent {
       if (world.isWalkable(newTileX, newTileY)) {
         const oldTileX = Math.floor(this.x);
         const oldTileY = Math.floor(this.y);
+
+        // Emergent paths: repeated foot traffic tramples desire-paths into roads
+        // (deterministic — no RNG involved).
+        if (world.footTraffic) {
+          const wIdx = newTileY * world.width + newTileX;
+          const heat = (world.footTraffic[wIdx] || 0) + 1;
+          world.footTraffic[wIdx] = heat;
+          if (heat >= 24 && !world.isRoad(newTileX, newTileY)) {
+            world.setRoad(newTileX, newTileY, true);
+          }
+        }
         
         if (oldTileX !== newTileX || oldTileY !== newTileY) {
           world.removeFromSpatialIndex(oldTileX, oldTileY, this);
@@ -1074,6 +1517,7 @@ export class Agent {
       path: Array.isArray(this.path) ? this.path.map(p => ({ x: p.x, y: p.y })) : null,
       wanderTicks: this.wanderTicks || 0,
       stuckTicks: this.stuckTicks || 0,
+      restCycles: this.restCycles || 0,
       speed: this.speed
     };
   }
@@ -1118,6 +1562,7 @@ export class Agent {
     agent.path = Array.isArray(data.path) ? data.path.map(p => ({ x: p.x, y: p.y })) : null;
     agent.wanderTicks = data.wanderTicks || 0;
     agent.stuckTicks = data.stuckTicks || 0;
+    agent.restCycles = data.restCycles || 0;
     if (typeof data.speed === "number") agent.speed = data.speed;
     return agent;
   }

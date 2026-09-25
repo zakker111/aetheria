@@ -23,6 +23,8 @@ import { InfrastructureSystem } from "../systems/infrastructureSystem.js";
 import { CultureSystem } from "../systems/cultureSystem.js";
 import { DiplomacySystem } from "../systems/diplomacySystem.js";
 import { WarfareSystem } from "../systems/warfareSystem.js";
+import { AnimalSystem } from "../systems/animalSystem.js";
+import { ChronicleSystem } from "../systems/chronicleSystem.js";
 
 export class Simulation {
   // Deterministic RNG helper: always routes through the seeded world RNG
@@ -117,6 +119,11 @@ export class Simulation {
     this.constructionSystem.simulation = this;
     this.religionSystem = new ReligionSystem(this.world);
     this.infrastructureSystem = new InfrastructureSystem(this); // NEW: Roads/bridges
+
+    // Ecology & History: wildlife roam the wild biomes; the chronicle records
+    // the world's living history (wars, plagues, founding, burnings...).
+    this.animalSystem = new AnimalSystem(this);
+    this.chronicleSystem = new ChronicleSystem(this);
     
     // Session statistics
     this.birthsThisSession = 0;
@@ -173,6 +180,9 @@ export class Simulation {
     this.world.simulation = this;
     this.world.eventBus = this.eventBus;
     if (this.settlementSystem?.setWorld) this.settlementSystem.setWorld(this.world);
+
+    // Populate wildlife BEFORE agents so the agent spawn stream is unchanged.
+    this.animalSystem.initialPopulate();
     
     // Cluster starting agents into habitable walkable centers across the 128x128 map
     const margin = 14;
@@ -428,11 +438,16 @@ export class Simulation {
     this.updateReligion();
     this.updateInfrastructure(); // NEW: Roads/bridges
 
+    // Ecology: wildlife roam/breed/hunt after agents move so prey flee logic
+    // sees fresh positions. (Chronicle is event-driven — no per-tick update.)
+    this.animalSystem.update(this.clock.tick);
+
     // Periodically rebuild spatial index to correct drift from moving agents
     // and prune stale entries for dead/removed entities (prevents perception
     // slowdowns and ghost entities in dense areas).
     if (this.clock.tick % 100 === 0) {
-      this.world.rebuildSpatialIndex(this.agents, this.resources, this.buildings);
+      this.world.rebuildSpatialIndex(this.agents, this.resources, this.buildings,
+        this.animalSystem?.animals || []);
     }
 
     // Process events
@@ -496,6 +511,26 @@ export class Simulation {
   updateEnvironment() {
     // Environment updates (weather, seasons, etc.) would go here
     // For now, just let resources regrow
+
+    // Perf: fire layer only matters while something burns. Skip the full-map
+    // scan entirely when there are no active fires (common case). Fires can
+    // only be created via world.startFire(), which sets _fireActive.
+    if (!this.world.fireTiles) return;
+    if (!this._fireActive && this.burningTileCount === 0) return;
+    this.burningTileCount = this.world.updateFires(this.clock.tick);
+    if (this.burningTileCount > 0) this._fireActive = true;
+    else this._fireActive = false;
+    // Fires destroy buildings on burning tiles and scatter resources
+    if (this.burningTileCount > 0 && this.buildings) {
+      for (const b of this.buildings) {
+        if (b.health > 0 && this.world.isBurning(Math.floor(b.x), Math.floor(b.y))) {
+          b.health -= 2;
+          if (b.health <= 0) {
+            this.eventBus.emit('building_destroyed', { building: b, cause: 'fire' });
+          }
+        }
+      }
+    }
   }
   
   updateRelationships() {
@@ -558,6 +593,13 @@ export class Simulation {
             neededType = "temple";
           } else if (houses.length < Math.ceil(pop / 2)) {
             neededType = "house";
+          }
+
+          // Civic milestone projects: towns raise a watchtower, cities a castle.
+          // Deterministic RNG usage preserved (same draw pattern as before).
+          const towers = currentBuildings.filter(b => (b.buildingType === "tower" || b.buildingType === "castle") && b.complete);
+          if (!neededType && pop >= 8 && towers.length === 0) {
+            neededType = pop >= 15 ? "castle" : "tower";
           }
           
           if (neededType) {
@@ -740,7 +782,7 @@ export class Simulation {
       const perception = agent.perceive(this.world, []);
       
       // Generate goals
-      agent.generateGoals(this);
+      agent.generateGoals(this, perception);
       
       // Generate and choose actions
       const actions = agent.generateActions(perception, this.world, this);
@@ -1024,7 +1066,11 @@ export class Simulation {
         priests: Array.from(this.religionSystem.priests),
         activeRituals: Array.from(this.religionSystem.activeRituals.entries())
       },
-      infrastructure: this.infrastructureSystem.serialize() // NEW: Roads/bridges
+      infrastructure: this.infrastructureSystem.serialize(), // NEW: Roads/bridges
+      // Ecology & history must survive save/load or resumed worlds lose all
+      // wildlife and the chronicle book.
+      animals: this.animalSystem.serialize(),
+      chronicle: this.chronicleSystem.serialize()
     };
   }
 
@@ -1054,6 +1100,11 @@ export class Simulation {
       sim.world.biome = data.world.biome || sim.world.biome;
       sim.world.riverFlow = new Float32Array(data.world.riverFlow || []);
       sim.world.isRiverSource = new Uint8Array(data.world.isRiverSource || []);
+      // Road network + foot-traffic heat map are persistent ground state: without
+      // restoring them, a resumed world forgets every trampled desire-path and
+      // diverges from an uninterrupted run.
+      sim.world.roadTiles = new Uint8Array(data.world.roadTiles || new Uint8Array(sim.world.width * sim.world.height));
+      sim.world.footTraffic = new Uint16Array(data.world.footTraffic || new Uint16Array(sim.world.width * sim.world.height));
     }
     
     // Restore entities
@@ -1122,6 +1173,15 @@ export class Simulation {
     }
     if (data.infrastructure) {
       sim.infrastructureSystem = InfrastructureSystem.deserialize(data.infrastructure, sim);
+    }
+
+    // Restore ecology & chronicle (skipInit never populated wildlife, so the
+    // saved animal list becomes the authoritative herd).
+    if (data.animals) {
+      sim.animalSystem = AnimalSystem.deserialize(data.animals, sim);
+    }
+    if (data.chronicle) {
+      sim.chronicleSystem = ChronicleSystem.deserialize(data.chronicle, sim);
     }
 
     return sim;
