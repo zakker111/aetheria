@@ -1,4 +1,6 @@
 // Building entities (houses, farms, etc.)
+import { STORAGE_CAPACITY } from '../core/constants.js';
+
 export class Building {
   constructor(x, y, buildingType, idGen, settlementId = null, factionId = null) {
     this.id = idGen.next();
@@ -10,6 +12,13 @@ export class Building {
     this.complete = false;
     this.ownerId = null;
     this.storage = {};
+    // Storage capacity: settlements are limited in how much food/wood/stone/
+    // ore/water they can keep — warehouses expand this (see STORAGE_CAPACITY).
+    this.capacity = 0;
+    this.health = 100;
+    // Apply storage capacity for the building type (drives warehouse demand)
+    const cap = STORAGE_CAPACITY[buildingType];
+    if (cap) this.capacity = cap;
     // Territorial ownership: buildings belong to a settlement/faction.
     // Only that community's builders work on them directly; friendly
     // settlements may assist (see agent.js build goal filtering).
@@ -35,6 +44,8 @@ export class Building {
       ownerId: this.ownerId,
       settlementId: this.settlementId,
       factionId: this.factionId,
+      capacity: this.capacity,
+      health: this.health,
       storage: { ...this.storage }
     };
   }
@@ -47,6 +58,8 @@ export class Building {
     building.constructionProgress = data.constructionProgress;
     building.complete = data.complete;
     building.ownerId = data.ownerId;
+    if (data.capacity != null) building.capacity = data.capacity;
+    if (data.health != null) building.health = data.health;
     building.storage = { ...data.storage };
     return building;
   }

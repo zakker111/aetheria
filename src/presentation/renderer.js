@@ -106,6 +106,8 @@ export class CanvasRenderer {
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     
     this.renderTerrain();
+    this.renderRiverOverlay(); // Shimmering river bands over the cached terrain
+    this.renderBridgeTiles();  // Bridge decks (persistent ground layer)
     this.renderRoadTiles();   // Persistent road / desire-path ground layer
     this.renderSettlementTerritories();
     this.renderDiplomacyLines(); // Inter-realm alliances, wars & tension lines
@@ -120,6 +122,63 @@ export class CanvasRenderer {
     this.renderParticles(); // Ritual effects, combat effects
     this.renderHUD();       // Live world counters (fires, fleeing, castles...)
     this.renderUI();
+  }
+
+  // Visible river bands with a subtle animated shimmer (deterministic per-tile phase).
+  renderRiverOverlay() {
+    const world = this.world;
+    if (!world || !world.riverFlow) return;
+    const zoom = this.camera.zoom;
+    const now = Date.now();
+    const startX = Math.max(0, Math.floor(this.camera.x - this.canvas.width / 2 / zoom));
+    const startY = Math.max(0, Math.floor(this.camera.y - this.canvas.height / 2 / zoom));
+    const endX = Math.min(world.width, Math.ceil(this.camera.x + this.canvas.width / 2 / zoom));
+    const endY = Math.min(world.height, Math.ceil(this.camera.y + this.canvas.height / 2 / zoom));
+    for (let y = startY; y < endY; y++) {
+      for (let x = startX; x < endX; x++) {
+        const flow = world.riverFlow[y * world.width + x];
+        if (flow <= 0.3) continue;
+        if (world.biome[y * world.width + x] === 'water') continue; // lakes/ocean already blue in terrain cache
+        const screen = this.worldToScreen(x, y);
+        const shimmer = 0.5 + 0.25 * Math.sin(now * 0.002 + x * 1.7 + y * 2.3);
+        const w = Math.floor(40 + 30 * shimmer);
+        this.ctx.fillStyle = `rgba(${60 + Math.floor(30 * shimmer)}, ${w + 100}, 230, 0.85)`;
+        this.ctx.fillRect(screen.x, screen.y, zoom, zoom);
+        if (zoom >= 6) {
+          this.ctx.fillStyle = `rgba(255, 255, 255, ${0.12 * shimmer})`;
+          this.ctx.fillRect(screen.x + zoom * 0.2, screen.y + zoom * 0.4, zoom * 0.6, Math.max(1, zoom * 0.12));
+        }
+      }
+    }
+  }
+
+  // Bridge decks drawn over water tiles so crossings are visible.
+  renderBridgeTiles() {
+    const world = this.world;
+    if (!world || !world.bridgeTiles) return;
+    const zoom = this.camera.zoom;
+    const startX = Math.max(0, Math.floor(this.camera.x - this.canvas.width / 2 / zoom));
+    const startY = Math.max(0, Math.floor(this.camera.y - this.canvas.height / 2 / zoom));
+    const endX = Math.min(world.width, Math.ceil(this.camera.x + this.canvas.width / 2 / zoom));
+    const endY = Math.min(world.height, Math.ceil(this.camera.y + this.canvas.height / 2 / zoom));
+    for (let y = startY; y < endY; y++) {
+      for (let x = startX; x < endX; x++) {
+        if (!world.bridgeTiles[y * world.width + x]) continue;
+        const screen = this.worldToScreen(x, y);
+        this.ctx.fillStyle = "#8b5a2b"; // wooden deck
+        this.ctx.fillRect(screen.x, screen.y, zoom, zoom);
+        if (zoom >= 5) {
+          this.ctx.strokeStyle = "#5c3a1a";
+          this.ctx.lineWidth = 1;
+          this.ctx.strokeRect(screen.x + 0.5, screen.y + 0.5, zoom - 1, zoom - 1);
+          // plank lines
+          this.ctx.beginPath();
+          this.ctx.moveTo(screen.x, screen.y + zoom / 2);
+          this.ctx.lineTo(screen.x + zoom, screen.y + zoom / 2);
+          this.ctx.stroke();
+        }
+      }
+    }
   }
 
   renderRoadTiles() {
@@ -282,8 +341,11 @@ export class CanvasRenderer {
     const data = img.data;
     const biome = world.biome;
     const elev = world.elevation;
+    const riverFlow = world.riverFlow;
     for (let i = 0; i < w * h; i++) {
-      const rgb = this.getTerrainColorRGB(biome[i], elev[i]);
+      // Rivers render as flowing blue even where the biome stayed land.
+      const type = biome[i] === 'water' || (riverFlow && riverFlow[i] > 0.3) ? 'water' : biome[i];
+      const rgb = this.getTerrainColorRGB(type, elev[i]);
       const o = i * 4;
       data[o] = rgb[0]; data[o + 1] = rgb[1]; data[o + 2] = rgb[2]; data[o + 3] = 255;
     }
@@ -1139,6 +1201,31 @@ export class CanvasRenderer {
       const icon = s.tierIcon || "🏡";
       const bannerColor = s.bannerColor || s.culture?.bannerColor || "#38bdf8";
       const zoom = this.camera.zoom;
+
+      // Ruined settlements: faded grey marker, no flame/banner ceremony.
+      if (s.ruined) {
+        this.ctx.save();
+        this.ctx.globalAlpha = 0.55;
+        this.ctx.fillStyle = "#3f3f46";
+        this.ctx.beginPath();
+        this.ctx.arc(screen.x, screen.y, Math.max(5, zoom * 0.6), 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.strokeStyle = "#18181b";
+        this.ctx.lineWidth = 1.5;
+        this.ctx.stroke();
+        // Broken pillars
+        this.ctx.fillStyle = "#71717a";
+        this.ctx.fillRect(screen.x - zoom * 0.25, screen.y - zoom * 0.45, Math.max(2, zoom * 0.14), Math.max(4, zoom * 0.4));
+        this.ctx.fillRect(screen.x + zoom * 0.05, screen.y - zoom * 0.25, Math.max(2, zoom * 0.14), Math.max(3, zoom * 0.25));
+        this.ctx.font = `${Math.max(12, zoom * 0.9)}px serif`;
+        this.ctx.textAlign = "center";
+        this.ctx.fillText("🏚️", screen.x, screen.y - Math.max(8, zoom * 0.8));
+        this.ctx.fillStyle = "#a1a1aa";
+        this.ctx.font = `${Math.max(9, zoom * 0.32)}px sans-serif`;
+        this.ctx.fillText(`${s.name} (Ruins)`, screen.x, screen.y + Math.max(12, zoom * 1.1));
+        this.ctx.restore();
+        continue;
+      }
 
       this.ctx.save();
 

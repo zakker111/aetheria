@@ -6,10 +6,16 @@
     "dev": "node server.js",
     "start": "node server.js",
     "build": "echo 'No build step required'",
-    "lint": "echo 'Linting complete - no syntax errors'"
+    "lint": "eslint .",
+    "test": "node tests/soak.mjs && node tests/determinism.mjs && node tests/gossip.mjs",
+    "verify": "npm run lint && npm test"
   },
   "dependencies": {
     "express": "^5.2.1",
     "http-server": "^14.1.1"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.5",
+    "globals": "^17.12.0"
   }
 }

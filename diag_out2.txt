@@ -1,0 +1,49 @@
+EVENT: Cultural Festival - The people celebrate with a grand festival!
+EVENT: Mysterious Lights - Strange lights appear in the night sky...
+EVENT: Plague Outbreak - A deadly plague spreads through the population!
+Agent 577 died at age 11.0 days
+EVENT: Plague Outbreak - A deadly plague spreads through the population!
+Agent 625 died at age 12.0 days
+Agent 608 died at age 13.0 days
+EVENT: Seasonal Illness - A mild illness circulates among the people.
+Agent 10 died at age 38.0 days
+Agent 16 died at age 49.0 days
+EVENT: Wildfire - A wildfire sweeps through the area!
+EVENT: Seasonal Illness - A mild illness circulates among the people.
+EVENT: Cultural Festival - The people celebrate with a grand festival!
+EVENT: Earthquake - The ground shakes violently!
+Agent 686 died at age 26.0 days
+EVENT: Migrant Wave - New settlers arrive seeking a better life!
+EVENT: Earthquake - The ground shakes violently!
+EVENT: Earthquake - The ground shakes violently!
+EVENT: Earthquake - The ground shakes violently!
+Agent 684 died at age 35.0 days
+Agent 684 died at age 35.0 days
+EVENT: Wildfire - A wildfire sweeps through the area!
+Agent 13 died at age 67.0 days
+Agent 579 died at age 43.0 days
+Agent 582 died at age 43.0 days
+Agent 697 died at age 35.0 days
+pos match: false
+resumed-only ids: []
+direct-only ids: [ 13, 579, 582, 697 ]
+agent 1 x: resumed=37.88934806877251 direct=37.813657040692945
+agent 1 y: resumed=47.80779402416732 direct=48.51901398988843
+agent 1 currentAction: resumed={"type":"chop_wood","target":{"x":37,"y":37,"id":134,"type":"resource","resourceType":"wood"},"score":77.99144664696685} direct={"type":"chop_wood","target":{"x":37,"y":37,"id":134,"type":"resource","resourceType":"wood"},"score":77.45228502780249}
+agent 3 x: resumed=99.88785143781429 direct=100.3618879861008
+agent 3 y: resumed=6.331533803394308 direct=6.505874491880887
+agent 3 reproduceCooldown: resumed=0 direct=undefined
+agent 4 currentAction: resumed={"type":"build","target":{"x":16,"y":8,"id":943,"type":"building","buildingType":"house"},"score":72.12} direct={"type":"build","target":{"x":31,"y":14,"id":945,"type":"building","buildingType":"house"},"score":72.12}
+agent 6 wanderTicks: resumed=4 direct=0
+agent 11 reproduceCooldown: resumed=0 direct=undefined
+agent 609 settlementId: resumed=8 direct=7
+agent 634 settlementId: resumed=8 direct=7
+diff counts: {
+  x: 34,
+  y: 34,
+  currentAction: 11,
+  reproduceCooldown: 45,
+  wanderTicks: 1,
+  settlementId: 8
+}
+pop: 66 70

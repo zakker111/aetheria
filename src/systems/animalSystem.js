@@ -278,7 +278,15 @@ export class AnimalSystem {
       animals: this.animals.map(a => ({
         id: a.id, species: a.species, x: a.x, y: a.y,
         age: a.age, health: a.health, breedCooldown: a.breedCooldown,
-        dirX: a.dirX || 0, dirY: a.dirY || 0
+        dirX: a.dirX || 0, dirY: a.dirY || 0,
+        // Full internal timer state must survive save/load. These counters
+        // branch on `<= 0` (fleeing, attacks) and gate RNG draws; resetting
+        // them to 0 on load consumed extra random numbers on the first resumed
+        // tick and desynced the whole world from an uninterrupted run.
+        maxAge: a.maxAge ?? 1200,
+        wanderTicks: a.wanderTicks || 0,
+        fleeingTicks: a.fleeingTicks || 0,
+        attackCooldown: a.attackCooldown || 0
       }))
     };
   }
@@ -288,13 +296,19 @@ export class AnimalSystem {
     if (!data) return system;
     system.nextId = data.nextId || 1;
     for (const ad of (data.animals || [])) {
+      // Restore ALL timer state exactly as saved (serialize() persists
+      // maxAge/wanderTicks/fleeingTicks/attackCooldown). Re-deriving or
+      // zeroing them made the first resumed tick branch differently and
+      // desynced the RNG stream from an uninterrupted run.
       const a = {
         ...ad,
         type: 'animal',
         alive: true,
-        maxAge: 1200 + (parseInt(String(ad.id).slice(1), 10) % 800 || 400),
+        maxAge: ad.maxAge ?? 1200,
         speed: SPECIES[ad.species]?.speed || 0.3,
-        wanderTicks: 0, fleeingTicks: 0, attackCooldown: 0
+        wanderTicks: ad.wanderTicks || 0,
+        fleeingTicks: ad.fleeingTicks || 0,
+        attackCooldown: ad.attackCooldown || 0
       };
       system.animals.push(a);
       if (sim?.world) {

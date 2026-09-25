@@ -27,6 +27,7 @@ export class WorldState {
     this.footTraffic = new Uint16Array(width * height);
     // Persistent fire ground layer: per-tile remaining burn ticks (0 = no fire)
     this.fireTiles = new Uint16Array(width * height);
+    this.bridgeTiles = new Uint8Array(width * height); // 1 = bridge deck (walkable over water)
 
     // Spatial index for fast queries (doc 02: spatial indexes)
     this.spatialIndex = new Map();
@@ -305,6 +306,7 @@ export class WorldState {
             const idx = y * this.width + x;
             this.waterLevel[idx] = Math.max(this.waterLevel[idx], 2.0);
             this.riverFlow[idx] = 0.2; // Stagnant water
+            this.biome[idx] = 'water'; // Mark as lake so it renders & blocks movement
           }
         }
       }
@@ -466,11 +468,27 @@ export class WorldState {
   isWalkable(x, y) {
     const terrain = this.getTerrain(x, y);
     if (!terrain) return false;
-    // Water deeper than 1.5 units is not walkable
-    if (terrain.waterLevel > 1.5) return false;
+    // Bridges make any water tile passable (persistent ground layer).
+    if (this.bridgeTiles && this.bridgeTiles[y * this.width + x] === 1) return true;
+    // Mountains are impassable.
+    if (terrain.type === 'mountain') return false;
+    // Lakes and rivers (and ocean) are impassable without a bridge.
+    if (terrain.waterLevel > 0.3) return false;
     // Some biomes are not walkable
     const nonWalkable = ["water", "deep_water"];
     return !nonWalkable.includes(terrain.type);
+  }
+
+  // Bridge network accessors (persistent ground layer, survives save/load).
+  isBridge(x, y) {
+    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
+    return this.bridgeTiles[y * this.width + x] === 1;
+  }
+
+  setBridge(x, y, on = true) {
+    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
+    this.bridgeTiles[y * this.width + x] = on ? 1 : 0;
+    return true;
   }
 
   // Road network accessors (persistent ground layer)
@@ -602,8 +620,26 @@ export class WorldState {
     return {
       ...t,
       slope: slope / 100,
-      passable: t.type !== 'water' && t.waterLevel < 0.5
+      // Passability must agree with isWalkable(): mountains and any water
+      // (lakes/rivers/ocean) are impassable unless bridged.
+      passable: this.isWalkable(x, y),
+      mountain: t.type === 'mountain',
+      water: t.waterLevel > 0.3 || t.type === 'water' || t.type === 'ocean' || t.type === 'deep_water'
     };
+  }
+
+  /**
+   * Fertility multiplier for a tile given the current season. Pure function —
+   * deterministic and save-safe (season derives from clock tick).
+   */
+  static seasonFertility(season) {
+    switch (season) {
+      case 'spring': return 1.1;
+      case 'summer': return 1.0;
+      case 'autumn': return 0.8;
+      case 'winter': return 0.25;
+      default: return 1.0;
+    }
   }
 
   // Spatial indexing for fast entity lookup
@@ -688,7 +724,8 @@ export class WorldState {
       isRiverSource: Array.from(this.isRiverSource),
       roadTiles: Array.from(this.roadTiles),
       footTraffic: Array.from(this.footTraffic),
-      fireTiles: Array.from(this.fireTiles)
+      fireTiles: Array.from(this.fireTiles),
+      bridgeTiles: Array.from(this.bridgeTiles)
     };
   }
 
@@ -711,6 +748,7 @@ export class WorldState {
     world.roadTiles = new Uint8Array(data.roadTiles || new Uint8Array(data.width * data.height));
     world.footTraffic = new Uint16Array(data.footTraffic || new Uint16Array(data.width * data.height));
     world.fireTiles = new Uint16Array(data.fireTiles || new Uint16Array(data.width * data.height));
+    world.bridgeTiles = new Uint8Array(data.bridgeTiles || new Uint8Array(data.width * data.height));
     return world;
   }
 }

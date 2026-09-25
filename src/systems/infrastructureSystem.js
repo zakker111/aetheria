@@ -20,6 +20,67 @@ export class InfrastructureSystem {
         
         this.lastUpdate = 0;
         this.UPDATE_INTERVAL = 100;
+
+        // Autonomous bridge builders: when settlements on opposite banks trade,
+        // they pool resources and construct a crossing (rivers block movement).
+        this.eventBus.on('trade:route_established', (e) => this.maybeBuildBridge(e));
+    }
+
+    /**
+     * True if the tile is water-crossable terrain (river or lake/ocean biome).
+     */
+    isWaterTile(x, y) {
+        const t = this.getTile(x, y);
+        if (!t) return false;
+        return t.biome === 'water' || (t.riverFlow || 0) > 0.3;
+    }
+
+    /**
+     * Called when a trade route forms: if the two endpoints sit across a river
+     * within reach, one of the factions builds a bridge at the crossing point.
+     */
+    maybeBuildBridge(event) {
+        const from = event.from || event.source || event.a;
+        const to = event.to || event.target || event.b;
+        if (!from || !to) return;
+        const fx = Math.floor(from.x ?? from.cx ?? 0), fy = Math.floor(from.y ?? from.cy ?? 0);
+        const tx = Math.floor(to.x ?? to.cx ?? 0), ty = Math.floor(to.y ?? to.cy ?? 0);
+        if (!(fx >= 0 && fy >= 0 && tx >= 0 && ty >= 0)) return;
+        if (Math.hypot(tx - fx, ty - fy) > 24) return; // only local crossings
+
+        const world = this.sim.world;
+        if (!world) return;
+
+        // Walk the straight line between the settlements; find where it crosses water.
+        const steps = Math.max(1, Math.round(Math.hypot(tx - fx, ty - fy)));
+        let crossX = -1, crossY = -1;
+        for (let i = 1; i < steps; i++) {
+            const px = Math.round(fx + (tx - fx) * (i / steps));
+            const py = Math.round(fy + (ty - fy) * (i / steps));
+            if (this.isWaterTile(px, py) && !world.isBridge(px, py)) {
+                crossX = px; crossY = py; break;
+            }
+        }
+        if (crossX < 0) return;
+
+        // Choose direction perpendicular-ish to travel: whichever axis has more water run.
+        const horizontal = Math.abs(ty - fy) >= Math.abs(tx - fx);
+        const direction = horizontal ? 'horizontal' : 'vertical';
+
+        // Paying faction: whichever settlement owns the crossing side's stockpile.
+        const settlements = this.getSettlements();
+        const near = settlements
+            .map(s => ({ s, d: Math.hypot((s.x ?? s.cx) - crossX, (s.y ?? s.cy) - crossY) }))
+            .sort((a, b) => a.d - b.d);
+        for (const { s, d } of near) {
+            if (d > 20) continue;
+            const fid = s.factionId;
+            if (!fid) continue;
+            const faction = this.getFaction(fid);
+            if (!faction) continue;
+            const res = this.buildBridge(crossX, crossY, direction, fid);
+            if (res.success) return;
+        }
     }
 
     getFaction(factionId) {

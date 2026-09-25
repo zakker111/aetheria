@@ -42,6 +42,17 @@ export class CombatSystem {
         const actualDamage = Math.max(1, Math.floor(amount * (1 - (target.defense || 0))));
         target.combat.health -= actualDamage;
 
+        // Memory: a victim of agent-on-agent violence remembers their
+        // attacker. This seeds the gossip pipeline with negative claims and
+        // colors future social decisions via _feltAbout(). No-op for
+        // non-agent targets (buildings/animals) or non-agent attackers.
+        if (attacker && target !== attacker &&
+            typeof target.remember === 'function' &&
+            attacker.type === 'agent') {
+            const tick = this.worldState?.simulation?.clock?.tick ?? 0;
+            target.remember('ATTACKED_BY', tick, { subjectId: attacker.id, rep: -2 });
+        }
+
         // Visual feedback hook (called by renderer)
         if (target.visuals) {
             target.visuals.flashRed = 5; // Flash red for 5 frames

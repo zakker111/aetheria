@@ -348,6 +348,49 @@ export class UIManager {
             });
         }
         
+        // Life Story (personal memories, bounded to last 8)
+        if (Array.isArray(agent.memories) && agent.memories.length > 0) {
+            const yearOf = (t) => Math.floor((t || 0) / 100) + 1;
+            const MEM_LABELS = {
+                WITNESSED_DEATH: 'Witnessed a death',
+                SURVIVED_FIRE: 'Survived a fire',
+                SACKED_HOME: 'Lost home to raid/fire',
+                GOOD_MEAL: 'Remembered a warm meal',
+                MADE_FRIEND: 'Made a friend',
+                PRAYER_ANSWERED: 'Felt a prayer answered',
+                RAID_SURVIVED: 'Survived a caravan raid'
+            };
+            html += `<div style="margin-top: 10px;"><strong>Life Story</strong>${agent.reputation ? ` <span style="font-size:10px;color:#9ab;">(reputation ${agent.reputation})</span>` : ''}:</div>`;
+            for (const m of agent.memories.slice(-8).reverse()) {
+                const label = MEM_LABELS[m.type] || String(m.type).toLowerCase().replace(/_/g, ' ');
+                html += `<div style="font-size: 11px; color: #aab;">• Yr ${yearOf(m.tick)} — ${label}</div>`;
+            }
+        }
+
+        // Relationships & shared memories (from relationship system when available)
+        {
+            const relSys = this.sim && this.sim.relationshipSystem;
+            if (relSys && typeof relSys.relationships?.get === 'function') {
+                const relMap = relSys.relationships.get(agent.id);
+                if (relMap && relMap.size > 0) {
+                    const entries = Array.from(relMap.entries())
+                        .map(([id, r]) => ({ id, r }))
+                        .sort((a, b) => Math.abs(b.r.friendship || 0) - Math.abs(a.r.friendship || 0))
+                        .slice(0, 5);
+                    html += `<div style="margin-top: 10px;"><strong>Bonds &amp; Memories</strong>:</div>`;
+                    for (const { id, r } of entries) {
+                        const other = this.sim.agents.find(x => x.id === id);
+                        const name = other ? other.name : `${id}`;
+                        const f = Math.round(r.friendship || 0);
+                        const kind = f >= 25 ? 'friend' : f <= -25 ? 'grudge' : 'acquaintance';
+                        html += `<div style="font-size: 11px; color: #aaa;">• ${name} (${kind}, ${f > 0 ? '+' : ''}${f})</div>`;
+                        const mem = (r.memories || []).slice(-1)[0];
+                        if (mem) html += `<div style="font-size: 10px; color: #889; font-style: italic;">&nbsp;&nbsp;"${mem.description}"</div>`;
+                    }
+                }
+            }
+        }
+
         // Inventory
         if (agent.inventory && Object.keys(agent.inventory).length > 0) {
             html += `<div style="margin-top: 10px;"><strong>Inventory:</strong></div>`;

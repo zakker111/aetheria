@@ -127,28 +127,47 @@ export class RelationshipSystem {
     return updated;
   }
   
-  // Record a memory between agents
+  // Record a memory between agents. Creates the relationship entry on demand
+  // so memories are never silently dropped for pairs that haven't interacted yet.
   addMemory(agentId1, agentId2, memory) {
-    const rel = this.getRelationship(agentId1, agentId2);
-    if (rel) {
-      if (!rel.memories) rel.memories = [];
-      rel.memories.push({
-        type: memory.type, // 'positive', 'negative', 'neutral', 'traumatic'
-        description: memory.description,
-        timestamp: this.sim?.clock?.tick ?? Date.now(),
-        impact: memory.impact // -10 to +10
-      });
-      
-      // Keep only last 20 memories
-      if (rel.memories.length > 20) {
-        rel.memories = rel.memories.slice(-20);
-      }
-      
-      // Apply memory impact to friendship
-      this.modifyRelationship(agentId1, agentId2, {
-        friendship: memory.impact
-      });
+    let relMap = this.relationships.get(agentId1);
+    if (!relMap) {
+      relMap = new Map();
+      this.relationships.set(agentId1, relMap);
     }
+    let rel = relMap.get(agentId2);
+    if (!rel) {
+      rel = {
+        friendship: 0,
+        rivalry: 0,
+        romance: 0,
+        trust: 50,
+        interactions: 0,
+        lastInteraction: this.sim?.clock?.tick ?? 0,
+        familial: false,
+        memories: []
+      };
+      relMap.set(agentId2, rel);
+    }
+
+    if (!rel.memories) rel.memories = [];
+    rel.memories.push({
+      type: memory.type, // 'positive', 'negative', 'neutral', 'traumatic'
+      description: memory.description,
+      timestamp: this.sim?.clock?.tick ?? Date.now(),
+      impact: memory.impact // -10 to +10
+    });
+
+    // Keep only last 20 memories (bounded — save-size and perf safe)
+    if (rel.memories.length > 20) {
+      rel.memories = rel.memories.slice(-20);
+    }
+
+    // Apply memory impact to friendship (direct: avoids reciprocal double-apply)
+    this.modifyRelationshipDirect(agentId1, agentId2, {
+      friendship: memory.impact
+    });
+    return rel;
   }
   
   // Parent-child relationship
@@ -356,6 +375,41 @@ export class RelationshipSystem {
     return [agentId1, agentId2].sort().join('-');
   }
   
+  // Remove all relationship/family/marriage/reputation records for agents not
+  // in the alive set. Keeps save/load resume deterministic (dead agents are
+  // spliced from the array, so stale map entries would otherwise be processed
+  // in a different order after compaction) and stops unbounded memory growth.
+  pruneAgents(aliveIds) {
+    for (const id of Array.from(this.relationships.keys())) {
+      if (!aliveIds.has(id)) this.relationships.delete(id);
+    }
+    for (const [id, relMap] of this.relationships) {
+      for (const other of Array.from(relMap.keys())) {
+        if (!aliveIds.has(other)) relMap.delete(other);
+      }
+    }
+    for (const id of Array.from(this.familyTrees.keys())) {
+      if (!aliveIds.has(id)) this.familyTrees.delete(id);
+    }
+    for (const family of this.familyTrees.values()) {
+      family.parents = (family.parents || []).filter(p => aliveIds.has(p));
+      family.children = (family.children || []).filter(c => aliveIds.has(c));
+      family.siblings = (family.siblings || []).filter(s => aliveIds.has(s));
+      if (family.spouse && !aliveIds.has(family.spouse)) family.spouse = null;
+    }
+    for (const id of Array.from(this.reputations.keys())) {
+      if (!aliveIds.has(id)) this.reputations.delete(id);
+    }
+    for (const [key, marriage] of Array.from(this.marriages.entries())) {
+      const partnersAlive = (marriage.partners || []).every(p => aliveIds.has(p));
+      if (!partnersAlive) {
+        this.marriages.delete(key);
+      } else if (Array.isArray(marriage.children)) {
+        marriage.children = marriage.children.filter(c => aliveIds.has(c));
+      }
+    }
+  }
+
   // Decay relationships over time (neglect)
   decayRelationships(deltaTime) {
     const nowTick = this.sim?.clock?.tick ?? null;

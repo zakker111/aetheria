@@ -1,5 +1,38 @@
 // Main simulation orchestrator (doc 03: high-level tick order)
 import { WorldState } from "../core/worldState.js";
+
+// Deterministic deep-clone for save data. Replaces JSON.parse(JSON.stringify())
+// round-trips, which are fragile here: live objects nested inside serialized
+// state (e.g. a building reference captured in an agent's currentAction) can
+// carry circular back-references to the Simulation and throw mid-save —
+// silently corrupting future saves. This clone drops functions and breaks
+// cycles instead of crashing; everything else (numbers, strings, arrays,
+// plain objects, Maps/Sets via their own serialize() output) is preserved
+// bit-for-bit, so save/load determinism is unchanged.
+function cloneSaveValue(value, seen = new WeakSet()) {
+  if (value === null || typeof value !== "object") {
+    return typeof value === "function" ? undefined : value;
+  }
+  if (typeof value === "function") return undefined;
+  if (seen.has(value)) return "[Circular]";
+  seen.add(value);
+  let out;
+  if (Array.isArray(value)) {
+    out = [];
+    for (const item of value) {
+      const c = cloneSaveValue(item, seen);
+      if (c !== undefined) out.push(c);
+    }
+  } else {
+    out = {};
+    for (const k of Object.keys(value)) {
+      const c = cloneSaveValue(value[k], seen);
+      if (c !== undefined) out[k] = c;
+    }
+  }
+  seen.delete(value);
+  return out;
+}
 import { SimulationClock } from "./clock.js";
 import { EntityStore } from "./entityStore.js";
 import { EventBus } from "../core/eventBus.js";
@@ -37,6 +70,9 @@ export class Simulation {
   addAgent(agent) {
     this.agents.push(agent);
     this.world.entityRegistry.set(agent.id, agent);
+    // Back-reference so memory recency reads the sim clock and remember()
+    // can file dyadic memories into the shared RelationshipSystem.
+    agent.sim = this;
     return agent;
   }
 
@@ -71,7 +107,13 @@ export class Simulation {
       },
       push: (entity) => {
         if (entity?.type === 'building') {
-          this.buildings.push(entity);
+          // Legacy plain-object workshop stubs are not Building instances;
+          // the crafting system tracks them in its own workshops map, so we
+          // must NOT push them into this.buildings (updateBuildings would
+          // crash on building.update()). Only real Building entities belong.
+          if (typeof entity.update === 'function' && typeof entity.serialize === 'function') {
+            this.buildings.push(entity);
+          }
         } else if (entity?.type === 'resource') {
           this.resources.push(entity);
         } else if (entity?.type === 'agent') {
@@ -162,6 +204,15 @@ export class Simulation {
     this.eventBus.on("AGENT_DIED", (data) => {
       this.deathsThisSession++;
       console.log(`Agent ${data.agentId} died at age ${data.age.toFixed(1)} days`);
+      // Memory: nearby survivors witness the death and remember it (trauma).
+      if (Number.isFinite(data.x) && Number.isFinite(data.y)) {
+        const tick = this.clock?.tick ?? 0;
+        for (const other of this.world.getEntitiesNear(Math.floor(data.x), Math.floor(data.y), 6)) {
+          if (other.type === "agent" && other.alive && other.id !== data.agentId && typeof other.remember === "function") {
+            other.remember("WITNESSED_DEATH", tick, { subjectId: data.agentId, cause: data.cause || "unknown", rep: -1 });
+          }
+        }
+      }
     });
     
     // NOTE: birth relationship linking is handled synchronously in the
@@ -419,6 +470,7 @@ export class Simulation {
     // Phase 2: Update emergent systems
     this.updateRelationships();
     this.updateSettlements();
+    this.updatePioneers(); // god-spawned wanderers found new villages
     this.updateCulture(); // Societies & Culture
     this.updateEconomy();
     this.updateCrafting();
@@ -509,6 +561,13 @@ export class Simulation {
   }
 
   updateEnvironment() {
+    // Season transitions: log to chronicle + emit event (pure clock math —
+    // deterministic and save-safe).
+    if (this.clock.seasonChanged()) {
+      const season = this.clock.getSeason();
+      this.eventBus.emit('SEASON_CHANGED', { season, year: this.clock.getYear(), tick: this.clock.tick });
+    }
+
     // Environment updates (weather, seasons, etc.) would go here
     // For now, just let resources regrow
 
@@ -527,13 +586,46 @@ export class Simulation {
           b.health -= 2;
           if (b.health <= 0) {
             this.eventBus.emit('building_destroyed', { building: b, cause: 'fire' });
+            // Memory: agents whose home burns remember the loss (ghost-quarter bias later).
+            for (const a of this.agents) {
+              if (a.alive && a.homeId === b.id && typeof a.remember === "function") {
+                a.remember("SACKED_HOME", this.clock.tick, { x: b.x, y: b.y, rep: -1 });
+              }
+            }
           }
+        }
+      }
+    }
+    // Memory: agents standing next to fire remember surviving it (once per burn spell).
+    if (this.burningTileCount > 0) {
+      for (const a of this.agents) {
+        if (!a.alive || typeof a.remember !== "function") continue;
+        const lastFire = a.memories?.length ? a.memories[a.memories.length - 1] : null;
+        if (lastFire && lastFire.type === "SURVIVED_FIRE" && this.clock.tick - lastFire.tick < 60) continue;
+        if (this.world.isBurning(Math.floor(a.x), Math.floor(a.y)) ||
+            this.world.isBurning(Math.floor(a.x) + 1, Math.floor(a.y)) ||
+            this.world.isBurning(Math.floor(a.x) - 1, Math.floor(a.y)) ||
+            this.world.isBurning(Math.floor(a.x), Math.floor(a.y) + 1) ||
+            this.world.isBurning(Math.floor(a.x), Math.floor(a.y) - 1)) {
+          a.remember("SURVIVED_FIRE", this.clock.tick, { x: a.x, y: a.y });
         }
       }
     }
   }
   
   updateRelationships() {
+    // Purge relationship/map entries for agents that no longer exist. Dead
+    // agents are spliced out of this.agents (by ageSystem deaths or god-power
+    // removal), but their relationship rows and settlement assignments linger.
+    // On save/load the surviving agents compact into different array slots, so
+    // stale entries make a resumed world process memory in different order and
+    // diverge from an uninterrupted run. Pruning keeps both runs identical.
+    if (this.clock.tick % 10 === 0) {
+      const alive = new Set(this.agents.map(a => a.id));
+      this.relationshipSystem.pruneAgents(alive);
+      this.settlementSystem.pruneAgents(alive);
+    }
+
     // Decay relationships over time
     this.relationshipSystem.decayRelationships(1);
   }
@@ -612,7 +704,7 @@ export class Simulation {
               if (bx >= 4 && bx < this.world.width - 4 && by >= 4 && by < this.world.height - 4 && this.world.isWalkable(bx, by)) {
                 const occupied = this.buildings.some(b => Math.abs(b.x - bx) < 2 && Math.abs(b.y - by) < 2);
                 if (!occupied) {
-                  const building = new Building(bx, by, neededType, this.idGen);
+                  const building = new Building(bx, by, neededType, this.idGen, settlement.id, settlement.factionId ?? null);
                   building.constructionProgress = 0;
                   building.complete = false;
                   this.buildings.push(building);
@@ -635,10 +727,38 @@ export class Simulation {
     }
   }
   
+  // Which settlement a job site belongs to: construction target, workshop, or
+  // farm workplace. Returns null if the agent works unaffiliated ground.
+  _jobSettlementId(agent) {
+    const site = agent.constructionTarget || agent.workplace;
+    if (site && site.settlementId != null) return site.settlementId;
+    return null;
+  }
+
   updateEconomy() {
     // Assign jobs to unemployed agents in settlements and idle agents
     if (this.clock.tick % 10 === 0) {
       const availableJobs = ['gatherer', 'farmer', 'lumberjack', 'miner', 'builder', 'craftsman'];
+
+      // Role rebalancing: detect settlements that lack critical roles (builders,
+      // food producers) so agents can voluntarily switch jobs when needed.
+      const needsBuilders = new Set();
+      const needsFood = new Set();
+      for (const [sid, settlement] of this.settlementSystem.settlements) {
+        let builders = 0, foodWorkers = 0;
+        for (const agentId of settlement.agentIds) {
+          const a = this.agents.find(x => x.id === agentId);
+          if (!a || !a.alive) continue;
+          if (a.job === 'builder') builders++;
+          else if (a.job === 'farmer' || a.job === 'gatherer' || a.job === 'lumberjack') foodWorkers++;
+        }
+        const pop = settlement.agentIds.size;
+        if (pop >= 2 && builders === 0) needsBuilders.add(sid);
+        if (pop >= 3 && foodWorkers <= 1) needsFood.add(sid);
+      }
+      // Any pending construction anywhere raises builder demand
+      const hasPendingWork = this.buildings.some(b => !b.complete && (b.constructionProgress || 0) < 100);
+
       for (const settlement of this.settlementSystem.settlements.values()) {
         for (const agentId of settlement.agentIds) {
           const agent = this.agents.find(a => a.id === agentId);
@@ -646,6 +766,23 @@ export class Simulation {
             const currentJob = this.economySystem.getAgentJob(agentId);
             if (!currentJob || currentJob.job === 'unemployed') {
               this.economySystem.assignJob(agent, availableJobs);
+            } else if (agent.lifeStage === 'adult' && this.clock.tick % 40 === 0 &&
+                       agent.personality.curious > 0.4) {
+              // Career change: switch role if the community is short-staffed
+              // where we live AND where we currently work (same site), so a
+              // builder heading to another town's construction never poaches.
+              const homeSid = settlement.id;
+              const jobSid = this._jobSettlementId(agent);
+              const sameSite = jobSid == null || jobSid === homeSid;
+              if (sameSite) {
+                if (needsBuilders.has(homeSid) && hasPendingWork && agent.job !== 'builder' &&
+                    agent.skills.build >= 1.2) {
+                  this.economySystem.assignJob(agent, ['builder']);
+                } else if (needsFood.has(homeSid) && agent.job !== 'farmer' && agent.job !== 'gatherer' &&
+                           agent.job !== 'lumberjack' && agent.job !== 'hunter') {
+                  this.economySystem.assignJob(agent, ['farmer', 'gatherer', 'lumberjack']);
+                }
+              }
             }
           }
         }
@@ -784,9 +921,21 @@ export class Simulation {
       // Generate goals
       agent.generateGoals(this, perception);
       
-      // Generate and choose actions
+      // Generate and choose actions. Gossip influence: the target's
+      // second-hand opinion of us (their gossipViews about our id) nudges
+      // voluntary social bids. Resolved here, in the simulation, because
+      // agents must never read each other's private memory directly.
       const actions = agent.generateActions(perception, this.world, this);
-      const chosenAction = agent.chooseAction(actions);
+      let targetGossip = null;
+      for (const a of actions) {
+        if (!Agent.SOCIAL_ACTION_TYPES.has(a.type)) continue;
+        const t = a.target;
+        if (t && typeof t === "object" && t.type === "agent" && t.gossipViews?.has(agent.id)) {
+          if (!targetGossip) targetGossip = new Map();
+          targetGossip.set(t.id, t.gossipViews.get(agent.id));
+        }
+      }
+      const chosenAction = agent.chooseAction(actions, { targetGossip });
       
       // Execute action with crafting system and simulation references
       const result = agent.executeAction(chosenAction, this.world, this.eventBus, this.craftingSystem, this);
@@ -876,9 +1025,11 @@ export class Simulation {
       else if (r.resourceType === "ore") oreCount++;
     }
 
-    // Regrow wood in forests/jungles
+    // Regrow wood in forests/jungles — vegetation follows the seasons
+    const season = this.clock.getSeason();
+    const fertility = WorldState.seasonFertility(season);
     if (woodCount < 120) {
-      const needed = Math.min(8, 120 - woodCount);
+      const needed = Math.max(1, Math.min(8, Math.round((120 - woodCount) * fertility)));
       for (let k = 0; k < needed; k++) {
         const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
         const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
@@ -932,19 +1083,26 @@ export class Simulation {
   }
 
   updateBuildings() {
+    const season = this.clock.getSeason();
+    const fertility = WorldState.seasonFertility(season);
     for (const building of this.buildings) {
-      building.update();
-      // Completed farms cultivate food nearby
-      if (building.complete && building.buildingType === "farm" && this.clock.tick % 50 === 0) {
+      if (typeof building.update === 'function') building.update();
+      // Completed farms cultivate food nearby — yield follows the seasons:
+      // strong in spring/summer, poor in autumn, near-frozen in winter.
+      const farmInterval = season === 'winter' ? 200 : 50;
+      if (building.complete && building.buildingType === "farm" && this.clock.tick % farmInterval === 0) {
         const fx = Math.floor(building.x + (this._rng().next() - 0.5) * 4);
         const fy = Math.floor(building.y + (this._rng().next() - 0.5) * 4);
         if (fx >= 2 && fx < this.world.width - 2 && fy >= 2 && fy < this.world.height - 2 && this.world.isWalkable(fx, fy)) {
           const entities = this.world.getEntitiesAt(fx, fy);
           const hasFood = entities.some(e => e.type === "resource" && e.resourceType === "food");
           if (!hasFood) {
-            const crop = new Resource(fx, fy, "food", 30, this.idGen);
-            this.resources.push(crop);
-            this.world.addToSpatialIndex(fx, fy, crop);
+            const amount = Math.round(30 * fertility);
+            if (amount > 0) {
+              const crop = new Resource(fx, fy, "food", amount, this.idGen);
+              this.resources.push(crop);
+              this.world.addToSpatialIndex(fx, fy, crop);
+            }
           }
         }
       }
@@ -1026,10 +1184,55 @@ export class Simulation {
 
   spawnAgent(x, y) {
     const agent = new Agent(x, y, this.idGen, null, this.world.rng);
+    // God-touched wanderer: while unaffiliated they roam locally and gather
+    // supplies instead of trekking to the world center (fixes top-of-map bias).
+    agent.pioneer = true;
     this.addAgent(agent);
     this.world.addToSpatialIndex(Math.floor(x), Math.floor(y), agent);
     this.eventBus.emit("GOD_POWER_USED", { power: "spawn_agent", x, y });
     return agent;
+  }
+
+  // Pioneer colonization: god-spawned (or otherwise unaffiliated) agents that
+  // settle down together found a brand-new village right where they were born.
+  updatePioneers() {
+    if (!this.settlementSystem || this.clock.tick % 20 !== 0) return;
+    const ssys = this.settlementSystem;
+    const pioneers = this.agents.filter(a =>
+      a.alive && a.pioneer && !a.settlementId && !ssys.agentSettlementMap.get(a.id));
+    if (pioneers.length === 0) return;
+
+    for (const seed of pioneers) {
+      // Recruit nearby pioneers (and any unaffiliated locals) into a band
+      const band = [seed];
+      for (const other of pioneers) {
+        if (other === seed) continue;
+        if (Math.hypot(other.x - seed.x, other.y - seed.y) < 14) band.push(other);
+      }
+      const nearTown = [...ssys.settlements.values()].some(s =>
+        Math.hypot(s.center.x - seed.x, s.center.y - seed.y) < 24);
+      if (nearTown) continue; // joins an existing town via normal clustering
+
+      if (band.length >= 3) {
+        // Ready to colonize: found a village at the band's camp
+        let cx = 0, cy = 0;
+        for (const b of band) { cx += b.x; cy += b.y; }
+        cx /= band.length; cy /= band.length;
+        const settlement = ssys.foundSettlement(cx, cy, band);
+        for (const b of band) b.pioneer = false;
+        this.eventBus.emit("SETTLEMENT_FOUNDED", {
+          id: settlement?.id ?? null, name: settlement?.name ?? "New Camp",
+          x: cx, y: cy, population: band.length, pioneer: true
+        });
+      } else {
+        // Small band: stay active near the spawn site — gather & make camp
+        const angle = this._rng().next() * Math.PI * 2;
+        const dist = 3 + this._rng().next() * 5;
+        const tx = Math.max(8, Math.min(this.world.width - 8, seed.x + Math.cos(angle) * dist));
+        const ty = Math.max(8, Math.min(this.world.height - 8, seed.y + Math.sin(angle) * dist));
+        seed.goals = [{ type: "gather_supplies", priority: 60, target: { x: tx, y: ty } }];
+      }
+    }
   }
 
   // Serialization (doc 02: persistence service)
@@ -1043,7 +1246,7 @@ export class Simulation {
       idGen: this.idGen.getState(),
       agents: this.agents.map(a => a.serialize()),
       resources: this.resources.map(r => r.serialize()),
-      buildings: this.buildings.map(b => b.serialize()),
+      buildings: this.buildings.map(b => typeof b.serialize === 'function' ? b.serialize() : null).filter(Boolean),
       // Phase 1 systems (Complete)
       relationships: this.relationshipSystem.serialize(),
       settlements: this.settlementSystem.serialize(),
@@ -1070,7 +1273,14 @@ export class Simulation {
       // Ecology & history must survive save/load or resumed worlds lose all
       // wildlife and the chronicle book.
       animals: this.animalSystem.serialize(),
-      chronicle: this.chronicleSystem.serialize()
+      chronicle: this.chronicleSystem.serialize(),
+      // Warfare: active warbands (march targets, morale, plunder cargo) drive
+      // soldier behavior every tick — losing them desyncs a resumed run badly.
+      warfare: {
+        warbands: Array.from(this.warfareSystem.warbands.entries()),
+        nextWarbandId: this.warfareSystem.nextWarbandId,
+        combatEffects: this.warfareSystem.combatEffects.map(e => ({ ...e }))
+      }
     };
   }
 
@@ -1105,6 +1315,9 @@ export class Simulation {
       // diverges from an uninterrupted run.
       sim.world.roadTiles = new Uint8Array(data.world.roadTiles || new Uint8Array(sim.world.width * sim.world.height));
       sim.world.footTraffic = new Uint16Array(data.world.footTraffic || new Uint16Array(sim.world.width * sim.world.height));
+      // Burning tiles are ground state too: without restoring them a resumed world
+      // silently extinguishes every active fire and diverges from an uninterrupted run.
+      sim.world.fireTiles = new Uint16Array(data.world.fireTiles || new Uint16Array(sim.world.width * sim.world.height));
     }
     
     // Restore entities
@@ -1182,6 +1395,17 @@ export class Simulation {
     }
     if (data.chronicle) {
       sim.chronicleSystem = ChronicleSystem.deserialize(data.chronicle, sim);
+    }
+
+    // Restore warbands. Warband fields are all plain JSON-safe values (numbers,
+    // strings, arrays, nested plain objects), so entries round-trip through the
+    // save intact; soldier pointers resolve by agent id at use time.
+    if (data.warfare && sim.warfareSystem) {
+      sim.warfareSystem.warbands = new Map(data.warfare.warbands || []);
+      sim.warfareSystem.nextWarbandId = data.warfare.nextWarbandId ?? 1;
+      sim.warfareSystem.combatEffects = Array.isArray(data.warfare.combatEffects)
+        ? data.warfare.combatEffects.map(e => ({ ...e }))
+        : [];
     }
 
     return sim;
