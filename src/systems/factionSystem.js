@@ -1,12 +1,15 @@
 // Faction System - Phase 3: Advanced Simulation
 // Political groups with shared beliefs, diplomacy, and conflict
 
+import { RNG } from "../core/rng.js";
+
 export class FactionSystem {
   constructor(sim = null) {
     this.sim = sim;
     this.factions = new Map(); // factionId -> Faction
     this.agentFactionMap = new Map(); // agentId -> factionId
     this.nextFactionId = 1;
+    this._fallbackRng = null;
     
     // Belief definitions
     this.beliefTypes = [
@@ -32,9 +35,13 @@ export class FactionSystem {
     ];
   }
 
-  // Seeded RNG accessor (falls back to unseeded when standalone)
+  // Seeded RNG accessor. Falls back to a lazily-created fixed-seed stream
+  // (never Math.random) so standalone usage stays deterministic.
   _rng() {
-    return (this.sim && this.sim.world && this.sim.world.rng) || { next: Math.random };
+    const simRng = this.sim && this.sim.world && this.sim.world.rng;
+    if (simRng) return simRng;
+    if (!this._fallbackRng) this._fallbackRng = new RNG(0);
+    return this._fallbackRng;
   }
 
   

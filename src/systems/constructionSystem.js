@@ -5,6 +5,7 @@
 
 import { ENTITY_TYPES, JOB_TYPES, BUILDING_TYPES } from '../core/constants.js';
 import { distance } from '../utils/math.js';
+import { RNG } from '../core/rng.js';
 
 export class ConstructionSystem {
     constructor(worldState) {
@@ -14,6 +15,15 @@ export class ConstructionSystem {
         this.simulation = null;
         this.pendingBuildings = []; // Buildings waiting to be constructed
         this.constructionQueue = new Map(); // buildingId -> {progress, requiredResources}
+        this._fallbackRng = null;
+    }
+
+    // Seeded RNG accessor. Falls back to a lazily-created fixed-seed stream
+    // (never Math.random) so standalone usage stays deterministic.
+    _rng() {
+        if (this.worldState && this.worldState.rng) return this.worldState.rng;
+        if (!this._fallbackRng) this._fallbackRng = new RNG(0);
+        return this._fallbackRng;
     }
 
     /**
@@ -111,7 +121,7 @@ export class ConstructionSystem {
         const footprint = this.getBuildingFootprint(type, rotation);
         
         const building = {
-            id: `building_${(this.worldState?.simulation?.clock?.tick ?? 0)}_${(this.worldState && this.worldState.rng ? this.worldState.rng : { next: Math.random }).next().toString(36).substr(2, 9)}`,
+            id: `building_${(this.worldState?.simulation?.clock?.tick ?? 0)}_${this._rng().next().toString(36).substr(2, 9)}`,
             type: ENTITY_TYPES.BUILDING,
             buildingType: type,
             x: x,

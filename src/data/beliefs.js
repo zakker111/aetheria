@@ -3,6 +3,16 @@
  * Defines all religious/cultural belief systems in Aetheria.
  */
 
+import { RNG } from "../core/rng.js";
+
+// Shared fixed-seed fallback stream (determinism guard: never Math.random).
+let _fallbackRng = null;
+function _rngOr(rng) {
+  if (rng) return rng;
+  if (!_fallbackRng) _fallbackRng = new RNG(0);
+  return _fallbackRng;
+}
+
 export const BELIEFS = {
     // Nature Worship
     NATURE_WORSHIP: {
@@ -137,7 +147,7 @@ export function getBelief(id) {
  */
 export function getRandomBelief(rng = null) {
     const beliefs = Object.values(BELIEFS);
-    const r = rng ? rng.next() : Math.random();
+    const r = _rngOr(rng).next();
     return beliefs[Math.floor(r * beliefs.length)];
 }
 
@@ -164,7 +174,7 @@ export function getCompatibleBeliefs(factionPersonality, rng = null) {
     }
     
     // Always add some random options
-    const rnd = () => (rng ? rng.next() : Math.random());
+    const rnd = () => _rngOr(rng).next();
     const randomCount = Math.floor(rnd() * 3) + 2;
     const shuffled = Object.values(BELIEFS).sort(() => rnd() - 0.5);
     

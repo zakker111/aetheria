@@ -1,9 +1,12 @@
 // Culture System - Emergent Society Traditions, Values & Cultural Diffusion
 // Fulfills Phase 6 Requirements and Plan Audit specs
 
+import { RNG } from "../core/rng.js";
+
 export class CultureSystem {
   constructor(simulation) {
     this.simulation = simulation;
+    this._fallbackRng = null;
     
     // Archetypes for cultural founding
     this.culturalEthos = [
@@ -82,6 +85,17 @@ export class CultureSystem {
       }
     };
   }
+  // Seeded RNG accessor. Falls back to a lazily-created fixed-seed stream
+  // (never Math.random) so standalone usage stays deterministic.
+  _rng() {
+    if (this.simulation && typeof this.simulation._rng === 'function') {
+      return this.simulation._rng();
+    }
+    if (!this._fallbackRng) this._fallbackRng = new RNG(0);
+    return this._fallbackRng;
+  }
+
+
 
   // Initialize or assign culture to a new settlement
   initSettlementCulture(settlement) {
@@ -95,11 +109,11 @@ export class CultureSystem {
     const ethos = this.culturalEthos[ethosIndex] || this.culturalEthos[0];
 
     const values = {
-      industriousness: Math.min(1.0, Math.max(0.1, ethos.values.industriousness + ((this.simulation?._rng?.().next?.() ?? Math.random()) - 0.5) * 0.2)),
-      belligerence: Math.min(1.0, Math.max(0.1, ethos.values.belligerence + ((this.simulation?._rng?.().next?.() ?? Math.random()) - 0.5) * 0.2)),
-      spirituality: Math.min(1.0, Math.max(0.1, ethos.values.spirituality + ((this.simulation?._rng?.().next?.() ?? Math.random()) - 0.5) * 0.2)),
-      cooperation: Math.min(1.0, Math.max(0.1, ethos.values.cooperation + ((this.simulation?._rng?.().next?.() ?? Math.random()) - 0.5) * 0.2)),
-      traditionalism: Math.min(1.0, Math.max(0.1, ethos.values.traditionalism + ((this.simulation?._rng?.().next?.() ?? Math.random()) - 0.5) * 0.2))
+      industriousness: Math.min(1.0, Math.max(0.1, ethos.values.industriousness + (this._rng().next() - 0.5) * 0.2)),
+      belligerence: Math.min(1.0, Math.max(0.1, ethos.values.belligerence + (this._rng().next() - 0.5) * 0.2)),
+      spirituality: Math.min(1.0, Math.max(0.1, ethos.values.spirituality + (this._rng().next() - 0.5) * 0.2)),
+      cooperation: Math.min(1.0, Math.max(0.1, ethos.values.cooperation + (this._rng().next() - 0.5) * 0.2)),
+      traditionalism: Math.min(1.0, Math.max(0.1, ethos.values.traditionalism + (this._rng().next() - 0.5) * 0.2))
     };
 
     const traditions = [ethos.favoredTradition];
