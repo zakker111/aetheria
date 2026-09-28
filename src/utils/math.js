@@ -1,5 +1,16 @@
 // Math utilities for Aetheria simulation
 
+import { RNG } from "../core/rng.js";
+
+// Shared fixed-seed fallback stream for helpers called without an explicit
+// rng (determinism guard: never falls back to Math.random).
+let _fallbackRng = null;
+function _rngOr(rng) {
+  if (rng) return rng;
+  if (!_fallbackRng) _fallbackRng = new RNG(0);
+  return _fallbackRng;
+}
+
 /**
  * Calculate distance between two points
  */
@@ -59,14 +70,14 @@ export function normalizeAngle(angle) {
  * Random integer between min and max (inclusive)
  */
 export function randomInt(min, max, rng = null) {
-  return Math.floor((rng ? rng.next() : Math.random()) * (max - min + 1)) + min;
+  return Math.floor(_rngOr(rng).next() * (max - min + 1)) + min;
 }
 
 /**
  * Random float between min and max
  */
 export function randomFloat(min, max, rng = null) {
-  return (rng ? rng.next() : Math.random()) * (max - min) + min;
+  return _rngOr(rng).next() * (max - min) + min;
 }
 
 /**

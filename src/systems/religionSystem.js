@@ -5,6 +5,7 @@
 
 import { ENTITY_TYPES, JOB_TYPES } from '../core/constants.js';
 import { distance } from '../utils/math.js';
+import { RNG } from '../core/rng.js';
 
 export class ReligionSystem {
     constructor(worldState) {
@@ -12,6 +13,15 @@ export class ReligionSystem {
         this.priests = new Set();
         this.activeRituals = new Map(); // templeId -> ritual data
         this.faithDecayRate = 0.05; // Faith lost per tick without temple
+        this._fallbackRng = null;
+    }
+
+    // Seeded RNG accessor. Falls back to a lazily-created fixed-seed stream
+    // (never Math.random) so standalone usage stays deterministic.
+    _rng() {
+        if (this.worldState && this.worldState.rng) return this.worldState.rng;
+        if (!this._fallbackRng) this._fallbackRng = new RNG(0);
+        return this._fallbackRng;
     }
 
     /**
@@ -260,7 +270,7 @@ export class ReligionSystem {
                     f1.adjustRelation(f2.id, -0.1);
                     
                     // Chance of holy war declaration if relations very bad
-                    if (currentRelation < -80 && (this.worldState && this.worldState.rng ? this.worldState.rng : { next: Math.random }).next() < 0.001) {
+                    if (currentRelation < -80 && this._rng().next() < 0.001) {
                         this.declareHolyWar(f1, f2);
                     }
                 }

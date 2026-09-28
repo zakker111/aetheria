@@ -1,5 +1,6 @@
 // Agent with needs, perception, and decision-making (doc 02/03A: component-based agents)
 import { IDGenerator } from "../core/idGen.js";
+import { RNG } from "../core/rng.js";
 
 const FIRST_NAMES = [
   "Aeron", "Bryn", "Caelen", "Darian", "Elowen", "Faelan", "Garrick", "Isolde", 
@@ -36,10 +37,11 @@ export class Agent {
     // Back-reference to the owning Simulation, wired in addAgent(). Used for
     // deterministic memory recency (sim clock) and dyadic memory filing.
     this.sim = null;
-    // Determinism guard: prefer the injected seeded RNG. The Math.random
-    // fallback only applies to standalone (non-sim) usage; inside a
+    // Determinism guard: prefer the injected seeded RNG. The fallback is a
+    // fixed-seed deterministic RNG (never Math.random) so that even agents
+    // constructed without an injected stream stay reproducible; inside a
     // Simulation every construction site passes world.rng explicitly.
-    this.rng = rng || { next: Math.random };
+    this.rng = rng || new RNG(0);
     const newborn = initialAge === 0;
     this.type = "agent";
     this.x = x;
@@ -284,7 +286,7 @@ export class Agent {
     if (simulation && simulation.world && simulation.diplomacySystem) {
       const mySid = this.settlementId ||
         (simulation.settlementSystem ? simulation.settlementSystem.agentSettlementMap.get(this.id) : null);
-      const tickNow = simulation.clock ? simulation.clock.tick : this._goalTick;
+      const tickNow = simulation && simulation.clock ? simulation.clock.tick : 0;
       if (this._warThreatTick === undefined || tickNow - this._warThreatTick >= 4) {
         this._warThreatTick = tickNow;
         this._warThreat = null;
@@ -2120,6 +2122,11 @@ export class Agent {
       lifeStage: this.lifeStage,
       children: this.children,
       parents: this.parents,
+      // Social bonds must round-trip: partnerId gates mate-seeking (and its
+      // RNG consumption) and homeId steers settlement/build choices — losing
+      // them desyncs resumed runs and breaks save/load determinism.
+      partnerId: this.partnerId ?? null,
+      homeId: this.homeId ?? null,
       health: this.health,
       maxHealth: this.maxHealth ?? 100,
       // Behavior-gating counters must survive save/load: reproduceCooldown
@@ -2202,7 +2209,7 @@ export class Agent {
     // every field directly from data.
     const agent = Object.create(Agent.prototype);
     agent.sim = null;
-    agent.rng = rng || { next: Math.random }; // live seeded stream for future behavior
+    agent.rng = rng || new RNG(0); // live seeded stream for future behavior
     agent.relationships = new Map(); // transient runtime map (rebuilt by RelationshipSystem)
     agent.id = data.id;
     agent.type = "agent";

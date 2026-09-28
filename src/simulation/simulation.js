@@ -1,5 +1,6 @@
 // Main simulation orchestrator (doc 03: high-level tick order)
 import { WorldState } from "../core/worldState.js";
+import { RNG } from "../core/rng.js";
 
 // Deterministic deep-clone for save data. Replaces JSON.parse(JSON.stringify())
 // round-trips, which are fragile here: live objects nested inside serialized
@@ -60,9 +61,13 @@ import { AnimalSystem } from "../systems/animalSystem.js";
 import { ChronicleSystem } from "../systems/chronicleSystem.js";
 
 export class Simulation {
-  // Deterministic RNG helper: always routes through the seeded world RNG
+  // Deterministic RNG helper: always routes through the seeded world RNG.
+  // The fallback is a lazily-created fixed-seed stream (never Math.random)
+  // so standalone/test usage stays reproducible.
   _rng() {
-    return this.world.rng || { next: Math.random };
+    if (this.world.rng) return this.world.rng;
+    if (!this._fallbackRng) this._fallbackRng = new RNG(0);
+    return this._fallbackRng;
   }
 
   // Central entity intake: registers agents in the O(1) id registry so
