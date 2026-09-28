@@ -9,7 +9,7 @@ export class SimulationClock {
   constructor() {
     this.tick = 0;
     this.speed = 1.0; // 0 = paused, 1 = normal, 2 = fast, etc.
-    this.tickRate = 100; // ms per tick at speed 1.0
+    this.tickRate = 350; // ms per tick at speed 1.0 (calm, observable god-game pacing)
   }
 
   // --- Seasons (pure functions of tick: deterministic & save-safe) ---

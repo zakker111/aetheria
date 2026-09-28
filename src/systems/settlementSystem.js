@@ -436,9 +436,44 @@ export class SettlementSystem {
     }
   }
   
-  // Get home for an agent
+  // Get home for an agent (with fallback to town house or communal hearth)
   getAgentHome(agentId) {
-    return this.homes.get(agentId);
+    const existing = this.homes.get(agentId);
+    if (existing) return existing;
+
+    const sid = this.agentSettlementMap.get(agentId);
+    if (!sid) return null;
+    const settlement = this.settlements.get(sid);
+    if (!settlement) return null;
+
+    // Check if there is an existing house in the settlement
+    if (this.sim && this.sim.buildings) {
+      for (const b of this.sim.buildings) {
+        if (b.settlementId === sid && (b.buildingType === 'house' || b.type === 'house') && (b.complete || b.constructionProgress >= 100)) {
+          const h = { x: b.x, y: b.y, buildingId: b.id, storage: { food: 0, wood: 0, ore: 0 } };
+          this.homes.set(agentId, h);
+          return h;
+        }
+      }
+    }
+    if (settlement.buildings && settlement.buildings.length > 0) {
+      for (const b of settlement.buildings) {
+        if (b.type === 'house' || b.buildingType === 'house') {
+          const h = { x: b.x, y: b.y, storage: { food: 0, wood: 0, ore: 0 } };
+          this.homes.set(agentId, h);
+          return h;
+        }
+      }
+    }
+
+    // Default to the town center / communal hearth
+    if (settlement.center) {
+      const h = { x: settlement.center.x, y: settlement.center.y, isCommunal: true };
+      this.homes.set(agentId, h);
+      return h;
+    }
+
+    return null;
   }
   
   // Agent stores resources at home
@@ -475,7 +510,7 @@ export class SettlementSystem {
     
     for (const agentId of settlement.agentIds) {
       const home = this.homes.get(agentId);
-      if (home) {
+      if (home && home.storage) {
         totalFood += home.storage.food || 0;
         totalWood += home.storage.wood || 0;
         totalOre += home.storage.ore || 0;
@@ -527,8 +562,12 @@ export class SettlementSystem {
     };
   }
   
-  static deserialize(data) {
-    const system = new SettlementSystem();
+  static deserialize(data, sim = null) {
+    const system = new SettlementSystem(sim);
+    if (sim) {
+      system.sim = sim;
+      system.world = sim.world;
+    }
     
     system.settlements = new Map(
       data.settlements.map(([id, s]) => [

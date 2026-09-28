@@ -196,6 +196,9 @@ export class Interaction {
           const list = this.simulation.spawnAbundantBounty ? 
             this.simulation.spawnAbundantBounty(x, y) : 
             [this.simulation.createResource(x, y, "wood", 50), this.simulation.createResource(x, y, "water", 100), this.simulation.createResource(x, y, "ore", 60)];
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("god_effect", { detail: { type: "bounty", x, y } }));
+          }
           this.notify(`✨ Divine Bounty! Spawned ${list.length} nodes of wood, water, ore & food!`);
         }
         break;
@@ -231,6 +234,9 @@ export class Interaction {
             if (agent.needs.health) agent.needs.health = 100;
             blessedCount++;
           }
+        }
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("god_effect", { detail: { type: "bless", x, y } }));
         }
         window.dispatchEvent(new CustomEvent("show_notification", { detail: `Divine blessing restored ${blessedCount} citizens!` }));
         break;
@@ -324,7 +330,10 @@ export class Interaction {
           this.simulation.removeAgent(agent.id);
           smittenCount++;
         }
-        window.dispatchEvent(new CustomEvent("show_notification", { detail: `Divine lightning struck (${tx}, ${ty})! ${smittenCount} fallen.` }));
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("god_effect", { detail: { type: "smite", x, y } }));
+        }
+        window.dispatchEvent(new CustomEvent("show_notification", { detail: `⚡ Divine lightning struck (${tx}, ${ty})! ${smittenCount} fallen.` }));
         break;
       }
 

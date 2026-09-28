@@ -1344,7 +1344,7 @@ export class Simulation {
       sim.relationshipSystem = RelationshipSystem.deserialize(data.relationships);
     }
     if (data.settlements) {
-      sim.settlementSystem = SettlementSystem.deserialize(data.settlements);
+      sim.settlementSystem = SettlementSystem.deserialize(data.settlements, sim);
     }
     if (data.economy) {
       sim.economySystem = EconomySystem.deserialize(data.economy);

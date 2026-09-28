@@ -414,8 +414,11 @@
     <div id="topBar">
         <div id="ui">
             <div class="title-row">
-                <span class="app-title">🌍 Aetheria</span>
-                <span style="font-size:11px; color:#38bdf8;" id="mapDim">128×128 World</span>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <img src="/src/assets/images/god_avatar_pantheon_1790511705368.jpg" alt="Pantheon Emblem" referrerPolicy="no-referrer" style="width:24px; height:24px; border-radius:50%; border:1px solid rgba(251,191,36,0.6);" />
+                    <span class="app-title">Aetheria</span>
+                </div>
+                <span style="font-size:11px; color:#38bdf8;" id="mapDim">2.5D God World</span>
             </div>
             <div class="stats-grid">
                 <div class="stat"><span class="stat-label">Day / Hour:</span> <span class="stat-val"><span id="day">1</span> : <span id="hour">0</span></span></div>
@@ -434,6 +437,8 @@
         </div>
         
         <div id="controls">
+            <button class="control-button" id="viewModeBtn" style="background: rgba(56, 189, 248, 0.2); border-color: rgba(56, 189, 248, 0.5); color: #38bdf8;" title="Switch between 2.5D Isometric and 2D Top-Down">📐 2.5D View</button>
+            <button class="control-button" id="heightScaleBtn" title="Cycle terrain 3D heights">⛰️ Heights: Normal</button>
             <button class="control-button" id="pauseBtn">⏸️ Pause</button>
             <button class="control-button" id="speedBtn">⚡ Speed (1x)</button>
             <button class="control-button" id="centerBtn" title="Center on civilization">🎯 Center</button>
@@ -528,16 +533,20 @@
     
     <!-- Controls Help -->
     <div id="info" class="hidden">
+        <img src="/src/assets/images/aetheria_game_banner_1790511715234.jpg" alt="Aetheria 2.5D Realm" referrerPolicy="no-referrer" style="width:100%; border-radius:8px; margin-bottom:10px; border:1px solid rgba(255,255,255,0.15);" />
         <h3>
             <span>Divine Instructions</span>
             <button class="panel-close-btn" id="closeHelp">✕</button>
         </h3>
-        <div>• <b>Drag</b> mouse to pan the 128×128 world</div>
+        <div>• <b>2.5D Isometric World:</b> Full 3D elevated terrain with realistic mountains, valleys & flowing rivers.</div>
+        <div>• <b>Heights Control:</b> Tap <b>⛰️ Heights</b> to switch between relief levels.</div>
+        <div>• <b>View Toggle:</b> Switch between <b>📐 2.5D Isometric</b> and <b>🗺️ 2D View</b> anytime.</div>
+        <div>• <b>Drag</b> mouse to pan across the 128×128 realm</div>
         <div>• <b>Scroll wheel</b> to zoom in and out</div>
-        <div>• <b>Click</b> with tool selected to act</div>
+        <div>• <b>Click</b> with tool selected to act, build or cast miracles</div>
         <div>• <b>Keys 1-0</b> for rapid tool switching</div>
         <div>• <b>Spacebar</b> to pause / resume time</div>
-        <div>• Click <b>Inspect</b> and tap any citizen or building</div>
+        <div>• Click <b>Inspect</b> and tap any citizen, building, or realm</div>
     </div>
 
     <!-- Notification Toast -->
@@ -556,29 +565,44 @@
         const renderer = new CanvasRenderer(canvas, simulation.world, simulation);
         const interaction = new Interaction(simulation, renderer);
 
-        // Center camera initially on first settlement or agent center
+        // Center camera initially on first settlement or agent center in 2.5D
         if (simulation.agents.length > 0) {
             renderer.camera.x = simulation.agents[0].x;
             renderer.camera.y = simulation.agents[0].y;
-            renderer.camera.zoom = 18;
+            renderer.camera.zoom = 14;
         }
 
         let lastTime = 0;
-        const TICK_RATE = 100;
+        let lastUiUpdate = 0;
+        const TICK_RATE = 350; // ms per tick at 1x speed: pleasant, steady and observable
         let activeEntity = null;
 
         function gameLoop(currentTime) {
+            if (!lastTime) lastTime = currentTime;
             const deltaTime = currentTime - lastTime;
+            const currentSpeed = simulation.clock.speed;
             
-            if (deltaTime >= TICK_RATE / simulation.clock.speed) {
-                if (simulation.clock.speed > 0) {
-                    simulation.tick();
+            if (currentSpeed > 0) {
+                const stepInterval = TICK_RATE / currentSpeed;
+                if (deltaTime >= stepInterval) {
+                    // Step simulation (capped to prevent spiral-of-death on background tab switch)
+                    const maxSteps = Math.min(2, Math.floor(deltaTime / stepInterval));
+                    for (let s = 0; s < maxSteps; s++) {
+                        simulation.tick();
+                    }
+                    lastTime = currentTime;
                 }
+            } else {
                 lastTime = currentTime;
             }
             
             renderer.render();
-            updateUI();
+
+            // Throttle heavy DOM updates to 4 times per second (250ms) to ensure smooth 60fps rendering
+            if (currentTime - lastUiUpdate > 250) {
+                updateUI();
+                lastUiUpdate = currentTime;
+            }
             
             requestAnimationFrame(gameLoop);
         }
@@ -593,12 +617,17 @@
             
             // Detailed resource counters
             let foodCount = 0, woodCount = 0, oreCount = 0, waterCount = 0;
-            for (const r of simulation.resources) {
-                if (r.destroyed) continue;
-                if (r.resourceType === "food") foodCount++;
-                else if (r.resourceType === "wood") woodCount++;
-                else if (r.resourceType === "ore") oreCount++;
-                else if (r.resourceType === "water") waterCount++;
+            const resList = simulation.resources;
+            if (resList) {
+                const rLen = resList.length;
+                for (let i = 0; i < rLen; i++) {
+                    const r = resList[i];
+                    if (r.destroyed) continue;
+                    if (r.resourceType === "food") foodCount++;
+                    else if (r.resourceType === "wood") woodCount++;
+                    else if (r.resourceType === "ore") oreCount++;
+                    else if (r.resourceType === "water") waterCount++;
+                }
             }
             const foodEl = document.getElementById("foodCount");
             if (foodEl) foodEl.textContent = foodCount;
@@ -619,14 +648,21 @@
             const setEl = document.getElementById("settlementsCount");
             if (setEl) setEl.textContent = settlements.length;
 
-            // Refresh societies card
-            updateSocietiesCard(settlements);
+            // Refresh societies card ONLY if user opened it
+            const socCard = document.getElementById("societiesCard");
+            if (socCard && !socCard.classList.contains("hidden")) {
+                updateSocietiesCard(settlements);
+            }
 
-            // Refresh diplomacy card
-            updateDiplomacyCard(settlements);
+            // Refresh diplomacy card ONLY if user opened it
+            const dipCard = document.getElementById("diplomacyCard");
+            if (dipCard && !dipCard.classList.contains("hidden")) {
+                updateDiplomacyCard(settlements);
+            }
 
-            // Refresh inspector if entity is active
-            if (activeEntity && activeEntity.kind === "agent") {
+            // Refresh inspector if entity is active AND card is open
+            const inspCard = document.getElementById("inspectorCard");
+            if (inspCard && !inspCard.classList.contains("hidden") && activeEntity && activeEntity.kind === "agent") {
                 const stillAlive = simulation.agents.find(a => a.id === activeEntity.entity.id);
                 if (stillAlive) {
                     activeEntity.entity = stillAlive;
@@ -850,7 +886,36 @@
                 const stageClass = e.lifeStage === "elder" ? "badge-elder" : (e.lifeStage === "child" ? "badge-child" : "badge-adult");
                 title.innerHTML = `<span>👤 Citizen: ${e.name}</span>`;
                 
-                content.innerHTML = `
+                    const actionDescriptions = {
+                        gather_at_hearth: "🔥 Gathering around village hearth",
+                        visit_market: "🛍️ Browsing market square",
+                        pray_at_temple: "🙏 Praying at the temple",
+                        watch_crafts: "🔨 Watching blacksmith forge",
+                        train_at_barracks: "🛡️ Practicing combat drills",
+                        patrol_settlement: "🛡️ Patrolling town perimeter",
+                        play_in_town: "🪁 Playing in town square",
+                        fetch_town_water: "🪣 Drawing fresh well water",
+                        tend_town_farm: "🌾 Tending communal crops",
+                        deposit_to_stockpile: "📦 Hauling goods to stockpile",
+                        eat_from_stockpile: "🍞 Dining from town granary",
+                        eat_from_inventory: "🍞 Eating meal",
+                        visit_neighbor: "💬 Visiting a neighbor",
+                        socialize: "💬 Socializing with townspeople",
+                        go_home_and_rest: "💤 Resting in cottage bed",
+                        rest: "💤 Taking a rest",
+                        chop_wood: "🪓 Chopping timber",
+                        mine_ore: "⛏️ Mining mineral deposit",
+                        gather_food: "🌾 Foraging supplies",
+                        hunt: "🏹 Stalking quarry",
+                        build: "🔨 Constructing building",
+                        reproduce: "❤️ Courting spouse",
+                        return_home: "🚶 Returning to settlement",
+                        wander: "🚶 Strolling around neighborhood"
+                    };
+                    const actKey = e.currentAction?.type;
+                    const actionLabel = actionDescriptions[actKey] || (actKey ? String(actKey).replace(/_/g, ' ') : 'Observing community');
+
+                    content.innerHTML = `
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                         <span class="inspect-badge ${stageClass}">${e.lifeStage} (Age ${Math.floor(e.age)})</span>
                         <span style="color:#fbbf24; font-weight:600;">Job: ${e.job || 'Civilian'}</span>
@@ -877,7 +942,7 @@
                         <div>📍 Position: (${e.x.toFixed(1)}, ${e.y.toFixed(1)})</div>
                         <div>👶 Children: ${e.children || 0}</div>
                         <div>🎒 Inventory: 🌲 ${e.inventory.wood_log || 0} | ⛏️ ${e.inventory.ore_iron || 0} | 🌾 ${e.inventory.wheat || 0}</div>
-                        <div>🧠 Action: ${e.currentAction?.type || 'observing'}</div>
+                        <div style="margin-top:4px; font-weight:600; color:#38bdf8;">🧠 ${actionLabel}</div>
                     </div>
                 `;
             } else if (data.kind === "settlement") {
@@ -1110,12 +1175,13 @@
         });
 
         document.getElementById("speedBtn").addEventListener("click", () => {
-            const speeds = [1, 2, 5, 10];
+            const speeds = [0.5, 1, 2, 4];
             const currentIdx = speeds.indexOf(simulation.clock.speed);
             const nextIdx = (currentIdx + 1) % speeds.length;
             const newSpeed = speeds[nextIdx];
             simulation.clock.setSpeed(newSpeed);
             document.getElementById("speedBtn").innerHTML = `⚡ Speed (${newSpeed}x)`;
+            showNotification(`Time speed set to ${newSpeed}x${newSpeed === 0.5 ? ' (Relaxed pace)' : newSpeed === 1 ? ' (Normal pace)' : ' (Fast forward)'}`);
         });
 
         document.getElementById("centerBtn").addEventListener("click", () => {
@@ -1148,9 +1214,36 @@
             showNotification("🌱 Abundant Wood, Water & Ore sprouted across the realm!");
         });
 
+        const viewBtn = document.getElementById("viewModeBtn");
+        if (viewBtn) {
+            viewBtn.addEventListener("click", () => {
+                const is25 = renderer.toggle25D();
+                viewBtn.textContent = is25 ? "📐 2.5D View" : "🗺️ 2D View";
+                viewBtn.style.color = is25 ? "#38bdf8" : "#94a3b8";
+            });
+        }
+
+        const heightBtn = document.getElementById("heightScaleBtn");
+        if (heightBtn) {
+            heightBtn.addEventListener("click", () => {
+                renderer.cycleHeightScale();
+                const label = renderer.camera.heightScale === 0.08 ? "Heights: Low" :
+                              renderer.camera.heightScale === 0.22 ? "Heights: Gentle" :
+                              renderer.camera.heightScale === 0.38 ? "Heights: Normal" : "Heights: Peaks";
+                heightBtn.textContent = `⛰️ ${label}`;
+            });
+        }
+
+        window.addEventListener("show_notification", (e) => {
+            if (e.detail) showNotification(e.detail);
+        });
+
         document.getElementById("societiesBtn").addEventListener("click", () => {
             const card = document.getElementById("societiesCard");
             card.classList.toggle("hidden");
+            if (!card.classList.contains("hidden")) {
+                updateSocietiesCard(Array.from(simulation.settlementSystem.settlements.values()));
+            }
         });
 
         document.getElementById("closeSocieties").addEventListener("click", () => {
@@ -1160,6 +1253,9 @@
         document.getElementById("diplomacyBtn").addEventListener("click", () => {
             const card = document.getElementById("diplomacyCard");
             card.classList.toggle("hidden");
+            if (!card.classList.contains("hidden")) {
+                updateDiplomacyCard(Array.from(simulation.settlementSystem.settlements.values()));
+            }
         });
 
         document.getElementById("closeDiplomacy").addEventListener("click", () => {

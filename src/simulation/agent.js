@@ -18,7 +18,7 @@ export class Agent {
   static MEMORIES_MAX = 8;               // personal salient-event window
   static MEMORY_RECENCY_TICKS = 400;     // ~2 sim years of "fresh" feeling
   static SOCIAL_ACTION_TYPES = new Set([
-    "socialize", "visit_neighbor", "reproduce"
+    "socialize", "visit_neighbor", "reproduce", "gather_at_hearth", "visit_market", "pray_at_temple", "play_in_town"
   ]);
   static POSITIVE_MEMORY_TYPES = new Set([
     "MADE_FRIEND", "GOOD_MEAL", "RECEIVED_GIFT", "SAVED_LIFE"
@@ -411,53 +411,105 @@ export class Agent {
       this.goals.push({ type: "visit_neighbor", priority: 26 });
     }
     
-    // 7. Settlement Stay & Home Tether
+    // 7. Settlement Stay, Tethering & Stockpile Sharing
     if (simulation && simulation.settlementSystem) {
       const settlement = simulation.settlementSystem.getAgentSettlement(this.id);
       if (settlement && settlement.center) {
         const distToCenter = Math.hypot(this.x - settlement.center.x, this.y - settlement.center.y);
-        if (distToCenter > 18) {
-          this.goals.push({ type: "return_to_settlement", priority: 42, target: settlement.center });
-        }
 
-        // Communal Stockpile sharing
+        // Communal Stockpile sharing: when workers have gathered a haul, bring it back to town!
         const surplus = (this.inventory.wood_log || 0) + (this.inventory.ore_iron || 0) + (this.inventory.wheat || 0);
-        if (surplus >= 4) {
-          this.goals.push({ type: "deposit_to_stockpile", priority: 72, target: settlement.center });
+        if (surplus >= 2) {
+          this.goals.push({ type: "deposit_to_stockpile", priority: 84, target: settlement.center });
         }
-        if (this.needs.food < 40 && (!this.inventory.wheat && !this.inventory.bread)) {
+        if (this.needs.food < 45 && (!this.inventory.wheat && !this.inventory.bread)) {
           if (settlement.stockpile && settlement.stockpile.food > 0) {
             this.goals.push({ type: "eat_from_stockpile", priority: 95, target: settlement.center });
           }
+        }
+
+        // Town well / water fetch when in or near settlement
+        if (this.needs.water < 65 && distToCenter <= 16) {
+          this.goals.push({ type: "fetch_town_water", priority: this.needs.water < 45 ? 116 : 58, target: settlement.center });
         }
 
         // Sleep at home: go rest where you live (drives foot traffic on roads)
         if (this.needs.rest < 65) {
           const home = simulation.settlementSystem.getAgentHome(this.id);
           if (home) {
-            this.goals.push({ type: "rest_at_home", priority: this.needs.rest < 35 ? 60 : 32, target: home });
+            this.goals.push({ type: "rest_at_home", priority: this.needs.rest < 35 ? 65 : 36, target: home });
           }
+        }
+
+        // Gravitational tether: return home if wandering far from town
+        if (distToCenter > 14) {
+          const homePull = Math.min(80, 52 + Math.floor(distToCenter - 14));
+          this.goals.push({ type: "return_to_settlement", priority: homePull, target: settlement.center });
         }
       }
     }
     
-    // 7.5 Town life: errands that pull agents out into the streets.
-    // After a good night's sleep at home, people head to the market square,
-    // guards walk the walls, priests tend the temple — visible foot traffic.
-    const restedAtHome = this.restCycles > 0 && this.needs.rest > 70;
-    if (simulation && simulation.settlementSystem && restedAtHome) {
+    // 7.5 Town Life & Urban Activities ("hanging around town doing stuff"):
+    // When an agent is in or near their settlement, they actively take part in community life:
+    //  - Gather around the communal hearth / town square (warm up, drink, chat, relax)
+    //  - Browse market stalls and trade
+    //  - Pray or seek blessings at the temple / shrine
+    //  - Watch blacksmith / craftsmen at the workshop
+    //  - Spar / drill at watchtower / barracks
+    //  - Play games in the streets (children)
+    //  - Tend communal town crops
+    if (simulation && simulation.settlementSystem) {
       const settlement = simulation.settlementSystem.getAgentSettlement(this.id);
       if (settlement && settlement.center) {
-        const isGuard = job === 'soldier' || job === 'guard';
-        const isPriest = job === 'priest';
-        const t = tickOf(simulation);
-        const cadence = Math.max(6, Math.round(16 - (this.personality.social || 0.5) * 8));
-        if (isGuard && ((this.id * 5 + t) % 10) === 0) {
-          this.goals.push({ type: "patrol_settlement", priority: 44, target: settlement });
-        } else if (isPriest && ((this.id * 5 + t) % 12) === 0) {
-          this.goals.push({ type: "pray_at_temple", priority: 46, target: settlement });
-        } else if (((this.id * 11 + t) % cadence) === 0) {
-          this.goals.push({ type: "visit_market", priority: 30, target: settlement });
+        const distToCenter = Math.hypot(this.x - settlement.center.x, this.y - settlement.center.y);
+        if (distToCenter <= 18) {
+          const t = tickOf(simulation);
+          const isChild = this.lifeStage === "child";
+          const isGuard = job === 'soldier' || job === 'guard';
+          const isPriest = job === 'priest';
+          const isFarmer = job === 'farmer';
+
+          // Children play tag and chase through the town square
+          if (isChild) {
+            this.goals.push({ type: "play_in_town", priority: 42, target: settlement.center });
+          }
+
+          // Hearth / Plaza gathering: citizens gather around the fire, drink, chat, relax
+          if (((this.id * 3 + t) % 7) === 0 || this.needs.social < 65) {
+            this.goals.push({ type: "gather_at_hearth", priority: 43, target: settlement.center });
+          }
+
+          // Market visiting: shopping, browsing, trading
+          const marketCadence = Math.max(6, Math.round(14 - (this.personality.social || 0.5) * 8));
+          if (((this.id * 7 + t) % marketCadence) === 0) {
+            this.goals.push({ type: "visit_market", priority: 38, target: settlement.center });
+          }
+
+          // Temple prayer & blessings (priests lead, citizens attend)
+          const templeCadence = isPriest ? 8 : 14;
+          if (((this.id * 5 + t) % templeCadence) === 0 || (this.personality.spirituality || 0.5) > 0.65) {
+            this.goals.push({ type: "pray_at_temple", priority: isPriest ? 55 : 34, target: settlement.center });
+          }
+
+          // Workshop / Blacksmith forge watching
+          if (!isChild && ((this.id * 9 + t) % 15) === 0) {
+            this.goals.push({ type: "watch_crafts", priority: 30, target: settlement.center });
+          }
+
+          // Barracks / Guard drills & patrol
+          if (isGuard) {
+            if (((this.id * 5 + t) % 10) === 0) {
+              this.goals.push({ type: "patrol_settlement", priority: 46, target: settlement.center });
+            }
+            this.goals.push({ type: "train_at_barracks", priority: 44, target: settlement.center });
+          } else if (((this.id * 13 + t) % 22) === 0) {
+            this.goals.push({ type: "train_at_barracks", priority: 28, target: settlement.center });
+          }
+
+          // Town farm tending
+          if (isFarmer || ((this.id * 17 + t) % 24) === 0) {
+            this.goals.push({ type: "tend_town_farm", priority: isFarmer ? 76 : 31, target: settlement.center });
+          }
         }
       }
     }
@@ -756,10 +808,69 @@ export class Agent {
           break;
         }
 
+        case "gather_at_hearth": {
+          const spot = this.pickHearthSpot(simulation, goal.target);
+          if (spot) {
+            actions.push({
+              type: "gather_at_hearth",
+              target: spot,
+              score: goal.priority + (10 - Math.min(9, Math.hypot(spot.x - this.x, spot.y - this.y)))
+            });
+          }
+          break;
+        }
+
         case "pray_at_temple": {
           const temple = this.findSettlementBuilding(simulation, goal.target, ["temple"]);
-          if (temple) {
-            actions.push({ type: "pray_at_temple", target: temple, score: goal.priority });
+          const target = temple || this.pickTempleSpot(simulation, goal.target);
+          if (target) {
+            actions.push({ type: "pray_at_temple", target, score: goal.priority });
+          }
+          break;
+        }
+
+        case "watch_crafts": {
+          const workshop = this.findSettlementBuilding(simulation, goal.target, ["workshop"]);
+          const target = workshop || this.pickWorkshopSpot(simulation, goal.target);
+          if (target) {
+            actions.push({ type: "watch_crafts", target, score: goal.priority });
+          }
+          break;
+        }
+
+        case "train_at_barracks": {
+          const post = this.pickPatrolPost(simulation, goal.target);
+          if (post) {
+            actions.push({ type: "train_at_barracks", target: post, score: goal.priority });
+          }
+          break;
+        }
+
+        case "play_in_town": {
+          const spot = this.pickPlaySpot(simulation, goal.target);
+          if (spot) {
+            actions.push({ type: "play_in_town", target: spot, score: goal.priority });
+          }
+          break;
+        }
+
+        case "fetch_town_water": {
+          const well = this.pickWellSpot(simulation, goal.target);
+          if (well) {
+            actions.push({
+              type: "fetch_town_water",
+              target: well,
+              score: goal.priority
+            });
+          }
+          break;
+        }
+
+        case "tend_town_farm": {
+          const farm = this.findSettlementBuilding(simulation, goal.target, ["farm"]);
+          const spot = farm || goal.target.center;
+          if (spot) {
+            actions.push({ type: "tend_town_farm", target: spot, score: goal.priority });
           }
           break;
         }
@@ -1126,6 +1237,60 @@ export class Agent {
     return { x, y };
   }
 
+  // Citizens gather around the communal hearth / campfire / town plaza.
+  pickHearthSpot(simulation, settlement) {
+    if (!settlement || !settlement.center) return null;
+    const t = tickOf(simulation);
+    const angle = ((this.id * 2 + Math.floor(t / 18)) % 8) * (Math.PI / 4);
+    const radius = 1.2 + ((this.id % 3) * 0.6);
+    const x = settlement.center.x + Math.cos(angle) * radius;
+    const y = settlement.center.y + Math.sin(angle) * radius;
+    if (simulation.world && !simulation.world.isWalkable(Math.floor(x), Math.floor(y))) {
+      return { x: settlement.center.x, y: settlement.center.y };
+    }
+    return { x, y };
+  }
+
+  // Children play spots in open town spaces.
+  pickPlaySpot(simulation, settlement) {
+    if (!settlement || !settlement.center) return null;
+    const t = tickOf(simulation);
+    const angle = ((this.id * 3 + Math.floor(t / 12)) % 8) * (Math.PI / 4);
+    const radius = 2.5 + ((this.id % 4) * 1.2);
+    const x = settlement.center.x + Math.cos(angle) * radius;
+    const y = settlement.center.y + Math.sin(angle) * radius;
+    if (simulation.world && !simulation.world.isWalkable(Math.floor(x), Math.floor(y))) {
+      return { x: settlement.center.x, y: settlement.center.y };
+    }
+    return { x, y };
+  }
+
+  // Workshop / forge spot to watch blacksmiths and craftsmen.
+  pickWorkshopSpot(simulation, settlement) {
+    if (!settlement) return null;
+    const workshop = this.findSettlementBuilding(simulation, settlement, ["workshop"]);
+    if (workshop) {
+      return { x: workshop.x, y: workshop.y, buildingId: workshop.id };
+    }
+    return settlement.center ? { x: settlement.center.x + 2, y: settlement.center.y - 1 } : null;
+  }
+
+  // Temple / sacred shrine spot for meditation and prayer.
+  pickTempleSpot(simulation, settlement) {
+    if (!settlement) return null;
+    const temple = this.findSettlementBuilding(simulation, settlement, ["temple"]);
+    if (temple) {
+      return { x: temple.x, y: temple.y, buildingId: temple.id };
+    }
+    return settlement.center ? { x: settlement.center.x - 2, y: settlement.center.y - 2 } : null;
+  }
+
+  // Town well spot for fresh drinking water.
+  pickWellSpot(simulation, settlement) {
+    if (!settlement || !settlement.center) return null;
+    return { x: settlement.center.x, y: settlement.center.y };
+  }
+
   // Flatten an action into a serializable snapshot before it is stored on
   // `this.currentAction`. Generated actions carry live object references
   // (target: Building / Agent / Resource entities). Those entities own back-
@@ -1429,6 +1594,109 @@ export class Agent {
             this.restCycles++;
             this.currentAction = null;
           }
+        } else {
+          this.moveToward(action.target, world);
+        }
+        break;
+      }
+
+      case "gather_at_hearth": {
+        if (!action.target) { this.currentAction = null; break; }
+        if (this.distanceTo(action.target) < 2.0) {
+          // Relaxing around the communal hearth / town square: warm up, chat, drink
+          this.needs.social = Math.min(100, this.needs.social + 10);
+          this.needs.rest = Math.min(100, this.needs.rest + 4);
+          const hearthTick = tickOf(simulation);
+          for (const other of world.getEntitiesNear(Math.floor(this.x), Math.floor(this.y), 4)) {
+            if (other.type === "agent" && other.id !== this.id && other.alive) {
+              other.needs.social = Math.min(100, other.needs.social + 4);
+              if (simulation && simulation.relationshipSystem) {
+                simulation.relationshipSystem.modifyRelationship(this.id, other.id, { friendship: 1 });
+              }
+              this._exchangeGossip(other, hearthTick);
+            }
+          }
+          if (eventBus) {
+            eventBus.emit("HEARTH_GATHER", { agentId: this.id, x: this.x, y: this.y });
+          }
+          this.currentAction = null;
+        } else {
+          this.moveToward(action.target, world);
+        }
+        break;
+      }
+
+      case "watch_crafts": {
+        if (!action.target) { this.currentAction = null; break; }
+        if (this.distanceTo(action.target) < 2.4) {
+          this.needs.social = Math.min(100, this.needs.social + 5);
+          if (this.skills && this.skills.craft !== undefined) {
+            this.skills.craft = Math.min(5, (this.skills.craft || 1) + 0.02);
+          }
+          if (eventBus) {
+            eventBus.emit("CRAFT_WATCH", { agentId: this.id, x: this.x, y: this.y });
+          }
+          this.currentAction = null;
+        } else {
+          this.moveToward(action.target, world);
+        }
+        break;
+      }
+
+      case "train_at_barracks": {
+        if (!action.target) { this.currentAction = null; break; }
+        if (this.distanceTo(action.target) < 2.2) {
+          this.needs.rest = Math.max(0, this.needs.rest - 0.4);
+          if (this.skills && this.skills.combat !== undefined) {
+            this.skills.combat = Math.min(5, (this.skills.combat || 1) + 0.03);
+          }
+          if (eventBus) {
+            eventBus.emit("TRAINING", { agentId: this.id, x: this.x, y: this.y });
+          }
+          this.currentAction = null;
+        } else {
+          this.moveToward(action.target, world);
+        }
+        break;
+      }
+
+      case "play_in_town": {
+        if (!action.target) { this.currentAction = null; break; }
+        if (this.distanceTo(action.target) < 2.2) {
+          this.needs.social = Math.min(100, this.needs.social + 12);
+          this.needs.rest = Math.max(0, this.needs.rest - 0.2);
+          if (eventBus) {
+            eventBus.emit("CHILD_PLAY", { agentId: this.id, x: this.x, y: this.y });
+          }
+          this.currentAction = null;
+        } else {
+          this.moveToward(action.target, world, 1.2);
+        }
+        break;
+      }
+
+      case "fetch_town_water": {
+        if (!action.target) { this.currentAction = null; break; }
+        if (this.distanceTo(action.target) < 2.2) {
+          this.needs.water = Math.min(100, this.needs.water + 65);
+          if (eventBus) {
+            eventBus.emit("RESOURCE_CONSUMED", { agentId: this.id, resourceType: "water" });
+          }
+          this.currentAction = null;
+        } else {
+          this.moveToward(action.target, world);
+        }
+        break;
+      }
+
+      case "tend_town_farm": {
+        if (!action.target) { this.currentAction = null; break; }
+        if (this.distanceTo(action.target) < 2.4) {
+          this.skills.farm = (this.skills.farm || 1.0) + 0.03;
+          if (eventBus) {
+            eventBus.emit("FARMING", { agentId: this.id, x: this.x, y: this.y });
+          }
+          this.currentAction = null;
         } else {
           this.moveToward(action.target, world);
         }
@@ -1871,7 +2139,14 @@ export class Agent {
       // Resume determinism: in-flight decision/movement state must survive save/load,
       // otherwise the first tick after resume re-decides from scratch and diverges.
       currentAction: this.currentAction ?? null,
-      goals: Array.isArray(this.goals) ? this.goals.slice() : [],
+      goals: Array.isArray(this.goals) ? this.goals.map(g => ({
+        type: g.type,
+        priority: g.priority,
+        kind: g.kind,
+        target: g.target && typeof g.target === 'object' && typeof g.target.x === 'number'
+          ? { x: g.target.x, y: g.target.y, id: g.target.id }
+          : (g.target?.id ? { id: g.target.id } : null)
+      })) : [],
       path: Array.isArray(this.path) ? this.path.map(p => ({ x: p.x, y: p.y })) : null,
       wanderTicks: this.wanderTicks || 0,
       stuckTicks: this.stuckTicks || 0,
@@ -1893,6 +2168,8 @@ export class Agent {
       // deterministic even when saving mid-evaluation cycle.
       _warThreatTick: this._warThreatTick ?? null,
       _warThreat: this._warThreat ?? null,
+      _pendingBuildTick: this._pendingBuildTick ?? null,
+      _hasPendingBuild: this._hasPendingBuild ?? null,
       fleeFrom: this.fleeFrom ?? null,
       fleeTarget: this.fleeTarget ?? null,
       // Event-driven productivity modifier (e.g. festival/illness): restored
@@ -1990,6 +2267,8 @@ export class Agent {
     // saving mid-evaluation cycle (recomputed within ~4 ticks otherwise).
     agent._warThreatTick = data._warThreatTick ?? null;
     agent._warThreat = data._warThreat ?? null;
+    agent._pendingBuildTick = data._pendingBuildTick ?? null;
+    agent._hasPendingBuild = data._hasPendingBuild ?? null;
     agent.fleeFrom = data.fleeFrom ?? null;
     agent.fleeTarget = data.fleeTarget ?? null;
     // In-flight event productivity effect (festival/illness) must survive load.
