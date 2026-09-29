@@ -493,6 +493,18 @@ export class InfrastructureSystem {
         if (data.roads) this.roads = data.roads;
         if (data.irrigation) this.irrigation = data.irrigation;
         if (data.bridges) this.bridges = data.bridges;
+        // Re-apply bridge decks to the world's passability grid so agents can
+        // cross water after a load. WorldState.deserialize restores the raw
+        // bridgeTiles array, but legacy saves (or paths that rebuild the world)
+        // may lack it; re-marking from the bridge list keeps state consistent.
+        const world = this.sim && this.sim.world;
+        if (world && typeof world.setBridge === 'function') {
+            for (const bridge of this.bridges || []) {
+                for (const t of bridge.tiles || []) {
+                    world.setBridge(t.x, t.y, true);
+                }
+            }
+        }
     }
 
     static deserialize(data, sim) {

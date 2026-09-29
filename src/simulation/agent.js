@@ -37,11 +37,15 @@ export class Agent {
     // Back-reference to the owning Simulation, wired in addAgent(). Used for
     // deterministic memory recency (sim clock) and dyadic memory filing.
     this.sim = null;
-    // Determinism guard: prefer the injected seeded RNG. The fallback is a
+    // Deterministic guard: prefer the injected seeded RNG. The fallback is a
     // fixed-seed deterministic RNG (never Math.random) so that even agents
     // constructed without an injected stream stay reproducible; inside a
     // Simulation every construction site passes world.rng explicitly.
     this.rng = rng || new RNG(0);
+    // Workshop reference for supply-chain crafting actions (haul/collect).
+    // executeAction() overwrites this with the live system when called from
+    // the Simulation, so standalone Agent usage keeps working.
+    this.craftingSystem = null;
     const newborn = initialAge === 0;
     this.type = "agent";
     this.x = x;
@@ -109,6 +113,7 @@ export class Agent {
       tool_handle: 0,
       pickaxe: 0,
       bread: 1,
+      meat: 0,
       capacity: 15
     };
     
@@ -197,6 +202,9 @@ export class Agent {
       nearbyResources: [],
       nearbyBuildings: [],
       nearbyAnimals: [],
+      // Loot piles on the ground (Phase 1 deep economy). Not routed through
+      // the spatial index — passed in by Simulation.updateAgents() instead.
+      nearbyItems: [],
       dangers: [],
       opportunities: []
     };
@@ -385,8 +393,40 @@ export class Agent {
       this.goals.push({ type: "farm", priority: 75 });
     } else if (job === 'gatherer') {
       this.goals.push({ type: "gather_resources", priority: 70 });
-    } else if (job === 'craftsman' && this.workplace) {
-      this.goals.push({ type: "go_to_work", priority: 80 });
+    } else if (job === 'craftsman') {
+      // Supply chain: a craftsman without a workplace finds the nearest
+      // workshop building and takes a job there (deterministic, no RNG).
+      if (!this.workplace && simulation?.craftingSystem) {
+        const ws = simulation.craftingSystem.findNearestWorkshop(this.x, this.y);
+        if (ws) {
+          this.workplace = ws.id;
+          simulation.economySystem?.agentJobs?.set(this.id, {
+            job: 'craftsman', skillLevel: 1, experience: 0, assignedAt: tickOf(simulation)
+          });
+        }
+      }
+      if (this.workplace) {
+        const ws = simulation?.craftingSystem?.workshops?.get(this.workplace);
+        if (!ws) {
+          this.workplace = null; // orphaned (burned down?) — re-find next tick
+        } else {
+          const haul = simulation.craftingSystem.haulUnits(this.inventory);
+          if (haul >= 2) {
+            // Deliver raw materials to the shop before anything else.
+            this.goals.push({ type: "haul_to_workshop", priority: 86 });
+          } else if ((ws.storage.get('bread') || 0) > 0 && this.needs.food < 80) {
+            // Bread distribution: finished goods feed the town.
+            this.goals.push({ type: "collect_bread", priority: 88 });
+          } else if (this._workshopHasDemand(ws, simulation.craftingSystem)) {
+            // Workshop has queued/pending work and inputs on hand — go tend it.
+            this.goals.push({ type: "go_to_work", priority: 80 });
+          } else {
+            // Idle at home base otherwise: scavenge/gather will take over via
+            // other goals. No RNG draws here (determinism-safe).
+            this.goals.push({ type: "go_to_work", priority: 55 });
+          }
+        }
+      }
     } else if (job === 'soldier' || job === 'guard') {
       this.goals.push({ type: "patrol", priority: 65 });
     } else if (job === 'priest') {
@@ -420,13 +460,25 @@ export class Agent {
         const distToCenter = Math.hypot(this.x - settlement.center.x, this.y - settlement.center.y);
 
         // Communal Stockpile sharing: when workers have gathered a haul, bring it back to town!
-        const surplus = (this.inventory.wood_log || 0) + (this.inventory.ore_iron || 0) + (this.inventory.wheat || 0);
-        if (surplus >= 2) {
-          this.goals.push({ type: "deposit_to_stockpile", priority: 84, target: settlement.center });
+        // Craftsmen are exempt: their raw materials belong to the workshop
+        // supply chain (haul_to_workshop), not the general town stockpile.
+        const jobName = simulation.economySystem?.getAgentJob?.(this.id)?.job;
+        if (jobName !== 'craftsman') {
+          const surplus = (this.inventory.wood_log || 0) + (this.inventory.ore_iron || 0) + (this.inventory.wheat || 0);
+          if (surplus >= 2) {
+            this.goals.push({ type: "deposit_to_stockpile", priority: 84, target: settlement.center });
+          }
         }
         if (this.needs.food < 45 && (!this.inventory.wheat && !this.inventory.bread)) {
           if (settlement.stockpile && settlement.stockpile.food > 0) {
             this.goals.push({ type: "eat_from_stockpile", priority: 95, target: settlement.center });
+          } else if (simulation.craftingSystem) {
+            // Bread distribution: finished goods from workshops feed the town.
+            // Deterministic nearest-workshop scan, no RNG draws.
+            const bakery = simulation.craftingSystem.findNearestWorkshop(this.x, this.y, 16);
+            if (bakery && (bakery.storage.get('bread') || 0) > 0) {
+              this.goals.push({ type: "collect_bread", priority: 93, workplaceId: bakery.id });
+            }
           }
         }
 
@@ -520,6 +572,27 @@ export class Agent {
     const totalItems = Object.values(this.inventory).reduce((a, b) => typeof b === 'number' ? a + b : a, 0);
     if (totalItems < this.inventory.capacity) {
       this.goals.push({ type: "forage_nearby", priority: 35 });
+    }
+
+    // 8b. Scavenging (Phase 1 deep economy): loot piles near the agent or its
+    // camp pull in the hungry and the pack-mules. Deterministic: nearest pile
+    // by distance with id tiebreak — no RNG draws.
+    if (perception && perception.nearbyItems && perception.nearbyItems.length > 0 &&
+        totalItems < this.inventory.capacity) {
+      let bestItem = null;
+      let bestDist = Infinity;
+      for (const it of perception.nearbyItems) {
+        if (it.destroyed || it.total() <= 0) continue;
+        const d = this.distanceTo(it);
+        // Nearest pile wins; id tiebreak keeps selection deterministic.
+        if (d < bestDist || (d === bestDist && bestItem && it.id < bestItem.id)) {
+          bestDist = d;
+          bestItem = it;
+        }
+      }
+      if (bestItem) {
+        this.goals.push({ type: "scavenge", priority: this.needs.food < 45 ? 78 : 58, target: bestItem });
+      }
     }
     
     // 7b. Hunting: hungry agents (and job hunters) stalk nearby wildlife.
@@ -656,6 +729,30 @@ export class Agent {
             });
           }
           break;
+
+        case "haul_to_workshop":
+          if (this.workplace) {
+            actions.push({
+              type: "haul_to_workshop",
+              workplaceId: this.workplace,
+              score: goal.priority
+            });
+          }
+          break;
+
+        case "collect_bread": {
+          // Craftsmen use their own workplace; hungry townsfolk carry the
+          // bakery id on the goal itself (bread distribution).
+          const wp = goal.workplaceId || this.workplace;
+          if (wp) {
+            actions.push({
+              type: "collect_bread",
+              workplaceId: wp,
+              score: goal.priority
+            });
+          }
+          break;
+        }
           
         case "chop_wood":
           for (const res of perception.nearbyResources) {
@@ -721,6 +818,16 @@ export class Agent {
             type: "eat_from_inventory",
             score: goal.priority
           });
+          break;
+
+        case "scavenge":
+          if (goal.target && !goal.target.destroyed && goal.target.total() > 0) {
+            actions.push({
+              type: "scavenge",
+              target: goal.target,
+              score: goal.priority + (12 - Math.min(11, this.distanceTo(goal.target)))
+            });
+          }
           break;
           
         case "find_water":
@@ -1267,6 +1374,18 @@ export class Agent {
     return { x, y };
   }
 
+  // Deterministic check: does this workshop have craftable demand right now?
+  // (queue non-empty, or an active task — no RNG draws.)
+  _workshopHasDemand(ws, craftingSystem) {
+    if (!ws || !craftingSystem) return false;
+    if (ws.activeTask) return true;
+    for (const t of ws.queue) {
+      const r = craftingSystem.recipes.get(t.recipeId);
+      if (r && craftingSystem.canCraft(ws, r)) return true;
+    }
+    return false;
+  }
+
   // Workshop / forge spot to watch blacksmiths and craftsmen.
   pickWorkshopSpot(simulation, settlement) {
     if (!settlement) return null;
@@ -1330,6 +1449,7 @@ export class Agent {
 
   // Execute action for one tick
   executeAction(action, world, eventBus, craftingSystem, simulation) {
+    this.craftingSystem = craftingSystem || this.craftingSystem;
     if (!action) return null;
     
     this.currentAction = Agent.snapshotAction(action);
@@ -1459,6 +1579,47 @@ export class Agent {
         }
         break;
       }
+
+      // Supply chain: carry gathered raw materials to the workshop storage.
+      case "haul_to_workshop": {
+        const workshop = craftingSystem ? craftingSystem.workshops.get(action.workplaceId) : null;
+        if (!workshop) { this.workplace = null; this.currentAction = null; break; }
+        const site = { x: workshop.x + 1, y: workshop.y + 1 };
+        if (this.distanceTo(site) < 2) {
+          const delivered = craftingSystem.deliverHaul(workshop.id, this);
+          if (delivered > 0 && eventBus) {
+            eventBus.emit("HAUL_DELIVERED", { agentId: this.id, workshopId: workshop.id, units: delivered });
+          }
+          this.currentAction = null;
+        } else {
+          this.moveToward(site, world);
+        }
+        break;
+      }
+
+      // Distribution: collect fresh bread from the bakery for personal use.
+      case "collect_bread": {
+        const workshop = craftingSystem ? craftingSystem.workshops.get(action.workplaceId) : null;
+        if (!workshop) { this.currentAction = null; break; }
+        const site = { x: workshop.x + 1, y: workshop.y + 1 };
+        if (this.distanceTo(site) < 2) {
+          const taken = craftingSystem.takeFromWorkshop(workshop.id, this, 'bread', 2);
+          if (taken > 0) {
+            this.remember("GOOD_MEAL", simulation?.clock?.tick ?? 0, { food: "bread", from: "bakery" });
+            // Eat on the spot when hungry — bread distribution feeds the town.
+            let eaten = 0;
+            while (eaten < taken && this.needs.food < 75 && this.inventory.bread > 0) {
+              this.inventory.bread--;
+              this.needs.food = Math.min(100, this.needs.food + 45);
+              eaten++;
+            }
+          }
+          this.currentAction = null;
+        } else {
+          this.moveToward(site, world);
+        }
+        break;
+      }
         
       case "eat_from_inventory":
         if (this.inventory.bread > 0) {
@@ -1476,6 +1637,44 @@ export class Agent {
           this.currentAction = null;
         }
         break;
+
+      case "scavenge": {
+        // Pick up loot from a ground pile: eat edible goods directly if hungry,
+        // stash the rest into inventory (capacity respected). Deterministic —
+        // no RNG draws. Empty piles get destroyed and pruned by the sim.
+        const pile = action.target;
+        if (!pile || pile.destroyed || pile.total() <= 0) {
+          this.currentAction = null;
+          break;
+        }
+        if (this.distanceTo(pile) < 1.8) {
+          const EDIBLE = ["bread", "wheat", "meat"];
+          const held = Object.values(this.inventory).reduce((a, b) => typeof b === 'number' && b > 0 ? a + b : a, 0) - (this.inventory.capacity || 0);
+          let freeSpace = Math.max(0, (this.inventory.capacity || 15) - Math.max(0, held));
+          for (const key of Object.keys(pile.contents)) {
+            while (pile.contents[key] > 0) {
+              const wantEat = this.needs.food < 60 && EDIBLE.includes(key);
+              if (wantEat) {
+                pile.contents[key]--;
+                const gain = key === "bread" ? 45 : key === "meat" ? 35 : 25;
+                this.needs.food = Math.min(100, this.needs.food + gain);
+                this.remember("GOOD_MEAL", simulation?.clock?.tick ?? 0, { food: key, scavenged: true });
+              } else if (freeSpace > 0) {
+                pile.contents[key]--;
+                this.inventory[key] = (this.inventory[key] || 0) + 1;
+                freeSpace--;
+              } else {
+                break; // bag full — leave the rest for others
+              }
+            }
+          }
+          if (pile.total() <= 0) pile.destroyed = true;
+          this.currentAction = null;
+        } else {
+          this.moveToward(pile, world);
+        }
+        break;
+      }
         
       case "gather_food":
         if (!action.target || action.target.amount <= 0) {

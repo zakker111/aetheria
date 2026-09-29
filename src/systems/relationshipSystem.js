@@ -458,8 +458,12 @@ export class RelationshipSystem {
     };
   }
   
-  static deserialize(data) {
-    const system = new RelationshipSystem();
+  static deserialize(data, sim = null) {
+    // The sim back-reference matters: decay/marriage/interaction timestamps read
+    // this.sim.clock.tick. Without it a resumed run silently falls back to
+    // Date.now() wall-clock (non-deterministic) and relationship neglect decays
+    // on the wrong schedule — desyncing save/load determinism within one tick.
+    const system = new RelationshipSystem(sim);
     
     system.relationships = new Map(
       data.relationships.map(([id, entries]) => [id, new Map(entries)])

@@ -1,6 +1,12 @@
 // 2.5D Isometric & Top-Down Canvas Renderer with Procedural 3D Terrain Heights,
 // Full Visual Graphics for Biomes, Buildings, Resources, Agents, Animals & Atmosphere.
 // Conforms to Aetheria architecture (renderer receives state snapshots, zero side-effects).
+import { RNG } from "../core/rng.js";
+
+// Decorative-only visual randomness. Uses a fixed-seed stream instead of
+// Math.random so cloud shapes and lightning jitter are reproducible across
+// reloads and test runs (determinism guard: never Math.random).
+const _visualRng = new RNG(0xAE712);
 
 export class CanvasRenderer {
   constructor(canvas, world, simulation) {
@@ -70,12 +76,12 @@ export class CanvasRenderer {
     const count = 14;
     for (let i = 0; i < count; i++) {
       this.clouds.push({
-        x: Math.random() * (this.world.width + 40) - 20,
-        y: Math.random() * (this.world.height + 40) - 20,
-        speed: 0.02 + Math.random() * 0.03,
-        size: 8 + Math.random() * 14,
-        opacity: 0.22 + Math.random() * 0.22,
-        seed: Math.random() * 100
+        x: _visualRng.next() * (this.world.width + 40) - 20,
+        y: _visualRng.next() * (this.world.height + 40) - 20,
+        speed: 0.02 + _visualRng.next() * 0.03,
+        size: 8 + _visualRng.next() * 14,
+        opacity: 0.22 + _visualRng.next() * 0.22,
+        seed: _visualRng.next() * 100
       });
     }
   }
@@ -727,6 +733,19 @@ export class CanvasRenderer {
       }
     }
 
+    // 1b. Ground loot piles (Phase 1 — Deep Economy)
+    const loot = this.simulation.groundItems;
+    if (loot && loot.length > 0) {
+      const lLen = loot.length;
+      for (let i = 0; i < lLen; i++) {
+        const it = loot[i];
+        if (it.destroyed || it.total() <= 0) continue;
+        if (it.x >= minX - 1 && it.x <= maxX + 1 && it.y >= minY - 1 && it.y <= maxY + 1) {
+          list.push(this.getRenderItem("ground_item", it, it.x, it.y, it.x + it.y - 0.02));
+        }
+      }
+    }
+
     // 2. Buildings (from simulation + settlements + workshops)
     this._seenBuildingIds.clear();
     const buildings = this.simulation.buildings;
@@ -817,6 +836,9 @@ export class CanvasRenderer {
         case "resource":
           this.render25DResource(item.entity, screen, elev);
           break;
+        case "ground_item":
+          this.render25DGroundItem(item.entity, screen);
+          break;
         case "building":
           this.render25DBuilding(item.entity, screen, elev);
           break;
@@ -839,6 +861,40 @@ export class CanvasRenderer {
   /**
    * 2.5D Detailed Graphic for Trees, Berry Bushes, Ore Veins & Water Springs
    */
+  /**
+   * 2.5D Loot Sack: small brown bundle with a tie, sized by contents.
+   */
+  render25DGroundItem(item, screen) {
+    const ctx = this.ctx;
+    const zoom = this.camera.zoom;
+    const s = Math.max(2.5, zoom * 0.38);
+
+    ctx.save();
+    // shadow
+    ctx.fillStyle = "rgba(0, 0, 0, 0.22)";
+    ctx.beginPath();
+    ctx.ellipse(screen.x, screen.y + 1.5, s * 0.7, s * 0.3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // sack body
+    ctx.fillStyle = "#8a6a3b";
+    ctx.beginPath();
+    ctx.ellipse(screen.x, screen.y - s * 0.45, s * 0.62, s * 0.55, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // highlight
+    ctx.fillStyle = "rgba(255, 235, 190, 0.35)";
+    ctx.beginPath();
+    ctx.ellipse(screen.x - s * 0.2, screen.y - s * 0.6, s * 0.22, s * 0.18, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // tie
+    ctx.strokeStyle = "#5c4322";
+    ctx.lineWidth = Math.max(1, zoom * 0.06);
+    ctx.beginPath();
+    ctx.moveTo(screen.x - s * 0.3, screen.y - s * 0.9);
+    ctx.lineTo(screen.x + s * 0.3, screen.y - s * 0.9);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   render25DResource(res, screen, elev) {
     const ctx = this.ctx;
     const zoom = this.camera.zoom;
@@ -1787,7 +1843,7 @@ export class CanvasRenderer {
         ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
         ctx.lineWidth = Math.max(3, (1 - progress) * 8);
         ctx.beginPath();
-        ctx.moveTo(screen.x - 30 + Math.random() * 20, 0);
+        ctx.moveTo(screen.x - 30 + _visualRng.next() * 20, 0);
         ctx.lineTo(screen.x + 10, screen.y * 0.4);
         ctx.lineTo(screen.x - 15, screen.y * 0.7);
         ctx.lineTo(screen.x, screen.y);
