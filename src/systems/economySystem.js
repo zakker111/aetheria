@@ -55,10 +55,13 @@ export class EconomySystem {
         productivity: 1.0,
         wage: 4
       },
-      crafter: {
+      craftsman: {
         name: 'Craftsman',
         description: 'Makes tools and items',
-        requiredSkills: { build: 2.5, gather: 1.5 },
+        // Requirements tuned so skilled builders/gatherers can qualify after
+        // gaining XP on the job (previously unreachable: every agent starts at
+        // skill 1.0 but the old thresholds were 2.5/1.5).
+        requiredSkills: { build: 2.0, gather: 1.3 },
         productivity: 1.2,
         wage: 4
       }

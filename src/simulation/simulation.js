@@ -41,6 +41,7 @@ import { IDGenerator } from "../core/idGen.js";
 import { Agent } from "./agent.js";
 import { Resource } from "./resource.js";
 import { Building } from "./building.js";
+import { GroundItem } from "./groundItem.js";
 import { RelationshipSystem } from "../systems/relationshipSystem.js";
 import { SettlementSystem } from "../systems/settlementSystem.js";
 import { EconomySystem } from "../systems/economySystem.js";
@@ -93,6 +94,9 @@ export class Simulation {
     this.agents = [];
     this.resources = [];
     this.buildings = [];
+    // Ground loot piles (Phase 1 deep economy): dropped by the dead, scavenged
+    // by the living. Kept out of the spatial index; scanned directly per tick.
+    this.groundItems = [];
     this.birthsThisSession = 0;
     this.deathsThisSession = 0;
 
@@ -922,6 +926,18 @@ export class Simulation {
       
       // Perceive world using spatial index (much more efficient than passing all entities)
       const perception = agent.perceive(this.world, []);
+
+      // Ground loot is a small list — scan directly instead of polluting the
+      // entity spatial index (which would slow every perception query).
+      if (this.groundItems.length > 0) {
+        for (const it of this.groundItems) {
+          if (it.destroyed || it.total() <= 0) continue;
+          const dx = it.x - agent.x, dy = it.y - agent.y;
+          if (dx * dx + dy * dy <= 484 && perception.nearbyItems.length < 4) {
+            perception.nearbyItems.push(it);
+          }
+        }
+      }
       
       // Generate goals
       agent.generateGoals(this, perception);
@@ -994,22 +1010,58 @@ export class Simulation {
       });
       this.world.removeFromSpatialIndex(Math.floor(dead.x), Math.floor(dead.y), dead);
       
-      // Stockpile inheritance to community
+      // Stockpile inheritance to community: half of each good goes to the
+      // settlement; the other half drops as scavengable loot on the ground
+      // (Phase 1 — Deep Economy).
       if (dead.settlementId && this.settlementSystem) {
         const set = this.settlementSystem.settlements.get(dead.settlementId);
         if (set && set.stockpile) {
-          set.stockpile.wood = (set.stockpile.wood || 0) + (dead.inventory.wood_log || 0);
-          set.stockpile.ore = (set.stockpile.ore || 0) + (dead.inventory.ore_iron || 0);
-          set.stockpile.food = (set.stockpile.food || 0) + (dead.inventory.wheat || 0) + (dead.inventory.bread || 0);
+          const inv = dead.inventory;
+          set.stockpile.wood = (set.stockpile.wood || 0) + Math.floor((inv.wood_log || 0) / 2);
+          set.stockpile.ore = (set.stockpile.ore || 0) + Math.floor((inv.ore_iron || 0) / 2);
+          set.stockpile.food = (set.stockpile.food || 0) + Math.floor(((inv.wheat || 0) + (inv.bread || 0)) / 2);
         }
       }
+      this.dropInventoryOnGround(dead);
     }
     this.agents = this.agents.filter(a => a.alive);
+  }
+
+  // Drop the remainder of a dead entity's inventory as a ground loot pile.
+  // Deterministic: no RNG draws; odd units round down (floor halves).
+  dropInventoryOnGround(entity) {
+    if (!entity || !entity.inventory) return;
+    const contents = {};
+    let hasLoot = false;
+    for (const key of Object.keys(entity.inventory)) {
+      if (key === "capacity") continue;
+      const half = Math.floor((entity.inventory[key] || 0) / 2);
+      if (half > 0) {
+        contents[key] = half;
+        hasLoot = true;
+      }
+    }
+    if (!hasLoot) return;
+    const item = new GroundItem(entity.x, entity.y, contents, 600, this.idGen.next());
+    this.groundItems.push(item);
+    this.eventBus.emit("GROUND_ITEM_DROPPED", {
+      itemId: item.id,
+      x: item.x,
+      y: item.y,
+      fromId: entity.id,
+      total: item.total()
+    });
   }
 
   updateResources() {
     for (const resource of this.resources) {
       resource.update();
+    }
+
+    // Ground loot decay + cleanup (Phase 1 — Deep Economy)
+    if (this.groundItems.length > 0) {
+      for (const it of this.groundItems) it.update();
+      this.groundItems = this.groundItems.filter(it => !it.destroyed && it.total() > 0);
     }
     
     // Natural ecological replenishment: keep the world vibrant with food, wood, and ores
@@ -1251,6 +1303,7 @@ export class Simulation {
       idGen: this.idGen.getState(),
       agents: this.agents.map(a => a.serialize()),
       resources: this.resources.map(r => r.serialize()),
+      groundItems: this.groundItems.map(g => g.serialize()), // Phase 1 loot piles
       buildings: this.buildings.map(b => typeof b.serialize === 'function' ? b.serialize() : null).filter(Boolean),
       // Phase 1 systems (Complete)
       relationships: this.relationshipSystem.serialize(),
@@ -1323,6 +1376,10 @@ export class Simulation {
       // Burning tiles are ground state too: without restoring them a resumed world
       // silently extinguishes every active fire and diverges from an uninterrupted run.
       sim.world.fireTiles = new Uint16Array(data.world.fireTiles || new Uint16Array(sim.world.width * sim.world.height));
+      // Bridge decks are ground state too: without restoring them a resumed
+      // world loses every crossing, agents reroute (consuming RNG differently)
+      // and the run diverges from an uninterrupted one.
+      sim.world.bridgeTiles = new Uint8Array(data.world.bridgeTiles || new Uint8Array(sim.world.width * sim.world.height));
     }
     
     // Restore entities
@@ -1337,6 +1394,13 @@ export class Simulation {
       sim.resources.push(resource);
       sim.world.addToSpatialIndex(Math.floor(resource.x), Math.floor(resource.y), resource);
     }
+
+    // Ground loot piles: plain world objects — no spatial index entry needed.
+    // Backward compatible: old saves without the field simply start empty.
+    sim.groundItems = [];
+    for (const itemData of data.groundItems || []) {
+      sim.groundItems.push(GroundItem.deserialize(itemData, sim.idGen));
+    }
     
     for (const buildingData of data.buildings) {
       const building = Building.deserialize(buildingData, sim.idGen);
@@ -1346,7 +1410,7 @@ export class Simulation {
     
     // Restore Phase 1 systems (Complete)
     if (data.relationships) {
-      sim.relationshipSystem = RelationshipSystem.deserialize(data.relationships);
+      sim.relationshipSystem = RelationshipSystem.deserialize(data.relationships, sim);
     }
     if (data.settlements) {
       sim.settlementSystem = SettlementSystem.deserialize(data.settlements, sim);

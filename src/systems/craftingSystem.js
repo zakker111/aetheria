@@ -95,6 +95,13 @@ class CraftingSystem {
         return Array.from(this.recipes.values());
     }
 
+    // Deterministic monotonic key for workshops tied to a completed
+    // Building. Reused on load so activeTask references stay valid and
+    // no RNG/id-stream is consumed.
+    static buildingKey(building) {
+        return `b${building.id}`;
+    }
+
     /**
      * Create a workshop entity in the world
      */
@@ -204,10 +211,76 @@ class CraftingSystem {
         return true;
     }
 
+    // Auto-discovery: when a settlement completes a workshop Building, the
+    // CraftingSystem registers a matching workshop so craftsmen can be
+    // assigned and supply chains can run. Deterministic (no RNG).
+    syncFromBuildings(sim) {
+        if (!sim || !Array.isArray(sim.buildings)) return;
+        const seen = new Set();
+        for (const b of sim.buildings) {
+            if (b.buildingType !== 'workshop' || !b.complete) continue;
+            const key = CraftingSystem.buildingKey(b);
+            seen.add(key);
+            if (this.workshops.has(key)) continue;
+            const ws = {
+                id: key,
+                type: 'workshop',
+                subtype: 'general',
+                name: `Workshop #${b.id}`,
+                buildingId: b.id,
+                x: b.x,
+                y: b.y,
+                queue: [],
+                activeTask: null,
+                progress: 0,
+                storage: new Map(),
+                maxStorage: 50,
+                assignedWorkers: []
+            };
+            this.workshops.set(key, ws);
+            sim.eventBus?.emit('WORKSHOP_OPENED', { id: key, x: b.x, y: b.y });
+        }
+        // Buildings burned/removed -> drop their orphaned workshops.
+        for (const [id, ws] of this.workshops) {
+            if (ws.buildingId != null && !seen.has(id)) {
+                for (const aid of [...ws.assignedWorkers]) this.removeWorker(id, aid);
+                this.workshops.delete(id);
+            }
+        }
+    }
+
+    // Workshop within `radius` tiles of (x,y), or null. Deterministic scan.
+    findNearestWorkshop(x, y, radius = 24) {
+        let best = null, bestD = Infinity;
+        for (const ws of this.workshops.values()) {
+            const d = Math.hypot(ws.x - x, ws.y - y);
+            if (d <= radius && d < bestD) { bestD = d; best = ws; }
+        }
+        return best;
+    }
+
+    // Queue an automatic recipe from a small priority list, given what the
+    // workshop storage already holds. Zero RNG draws. Returns true if queued.
+    autoQueue(workshop) {
+        if (workshop.queue.length > 0 || workshop.activeTask) return false;
+        const order = ['wheat_to_flour', 'flour_plus_water_to_bread', 'log_to_plank', 'ore_to_ingot'];
+        for (const rid of order) {
+            const r = this.recipes.get(rid);
+            if (r && this.canCraft(workshop, r)) {
+                this.queueRecipe(workshop.id, rid, 1);
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Process crafting logic for all workshops
      */
     update() {
+        // Keep workshops in sync with completed workshop buildings.
+        this.syncFromBuildings(this.simulation);
+
         this.workshops.forEach((workshop, id) => {
             // If no active task, try to start one
             if (!workshop.activeTask && workshop.queue.length > 0) {
@@ -254,7 +327,74 @@ class CraftingSystem {
                     this.completeTask(workshop, recipe);
                 }
             }
+
+            // Keep the queue fed: craft whatever raw materials are in stock.
+            this.autoQueue(workshop);
         });
+    }
+
+    // ---- Supply-chain helpers (deterministic, zero RNG draws) ----
+
+    // Raw inputs of a recipe as list of types.
+    static recipeInputTypes(recipe) {
+        const inputs = Array.isArray(recipe.input) ? recipe.input : [recipe.input];
+        return inputs.map(i => i.type);
+    }
+
+    // Total units of any recipe input currently held by an inventory.
+    haulUnits(inventory) {
+        if (!inventory) return 0;
+        const wanted = new Set();
+        for (const r of this.recipes.values()) {
+            for (const t of CraftingSystem.recipeInputTypes(r)) wanted.add(t);
+        }
+        let n = 0;
+        for (const [k, v] of Object.entries(inventory)) {
+            if (wanted.has(k) && typeof v === 'number' && v > 0) n += v;
+        }
+        return n;
+    }
+
+    // Move all matching raw-material units from an agent inventory into a
+    // workshop storage (respecting maxStorage). Returns units delivered.
+    deliverHaul(workshopId, agent) {
+        const workshop = this.workshops.get(workshopId);
+        if (!workshop || !agent || !agent.inventory) return 0;
+        const wanted = new Set();
+        for (const r of this.recipes.values()) {
+            for (const t of CraftingSystem.recipeInputTypes(r)) wanted.add(t);
+        }
+        let delivered = 0;
+        for (const key of Object.keys(agent.inventory)) {
+            if (!wanted.has(key)) continue;
+            while (agent.inventory[key] > 0) {
+                const cur = workshop.storage.get(key) || 0;
+                if (cur >= workshop.maxStorage) return delivered;
+                workshop.storage.set(key, cur + 1);
+                agent.inventory[key] -= 1;
+                delivered++;
+            }
+            delete agent.inventory[key];
+        }
+        return delivered;
+    }
+
+    // Take up to `amount` units of `type` from workshop storage into an
+    // agent inventory (capacity-aware). Returns units actually taken.
+    takeFromWorkshop(workshopId, agent, type, amount = 999) {
+        const workshop = this.workshops.get(workshopId);
+        if (!workshop || !agent || !agent.inventory) return 0;
+        const avail = workshop.storage.get(type) || 0;
+        if (avail <= 0) return 0;
+        const used = Object.values(agent.inventory)
+            .reduce((a, b) => a + (typeof b === 'number' && b > 0 ? b : 0), 0);
+        const free = Math.max(0, (agent.inventory.capacity || 15) - used);
+        const take = Math.min(avail, amount, free);
+        if (take <= 0) return 0;
+        workshop.storage.set(type, avail - take);
+        if (workshop.storage.get(type) <= 0) workshop.storage.delete(type);
+        agent.inventory[type] = (agent.inventory[type] || 0) + take;
+        return take;
     }
 
     canCraft(workshop, recipe) {
@@ -379,6 +519,8 @@ class CraftingSystem {
                 activeTask: workshop.activeTask,
                 progress: workshop.progress,
                 storage: Array.from(workshop.storage.entries()),
+                maxStorage: workshop.maxStorage,
+                buildingId: workshop.buildingId ?? null,
                 assignedWorkers: workshop.assignedWorkers
             });
         });
@@ -406,7 +548,8 @@ class CraftingSystem {
                 activeTask: workshopData.activeTask,
                 progress: workshopData.progress,
                 storage: new Map(workshopData.storage),
-                maxStorage: 50,
+                maxStorage: workshopData.maxStorage ?? 50,
+                buildingId: workshopData.buildingId ?? null,
                 assignedWorkers: workshopData.assignedWorkers
             };
             craftingSystem.workshops.set(workshop.id, workshop);
