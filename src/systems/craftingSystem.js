@@ -17,7 +17,10 @@ class CraftingSystem {
             id: 'log_to_plank',
             name: 'Saw Log',
             input: { type: 'wood_log', amount: 1 },
-            output: { type: 'wood_plank', amount: 4 },
+            // Output key must match what the distribution loop and trade
+            // system look for ('plank'); previously 'wood_plank' meant planks
+            // were crafted but could never be collected or exported.
+            output: { type: 'plank', amount: 4 },
             time: 50, // ticks
             skill: 'carpentry',
             tool: 'saw'
@@ -65,21 +68,26 @@ class CraftingSystem {
             output: { type: 'pickaxe', amount: 1 },
             time: 100,
             skill: 'smithing',
-            tool: 'anvil'
+            tool: 'anvil',
+            // Phase 2 (skill-gated unlocks): advanced tier-2 recipes only
+            // become available once the workshop's crafter pool has reached
+            // the required skill level. Checked against max worker skill in
+            // canCraft via simulation; default 0 keeps tier-1 open.
+            requiresSkill: { smithing: 2 }
         });
 
         this.addRecipe('flour_plus_water_to_bread', {
             id: 'flour_plus_water_to_bread',
             name: 'Bake Bread',
-            input: [
-                { type: 'flour', amount: 1 },
-                { type: 'water', amount: 1 } // Simplified water usage
-            ],
-            output: { type: 'bread', amount: 3 },
+            input: { type: 'flour', amount: 1 }, // Water is ambient at any
+            // settlement bakery — requiring a 'water' item in workshop storage
+            // meant bread could never be crafted (nothing hauls water).
+            output: { type: 'bread', amount: 4 },
             time: 60,
             skill: 'cooking',
-            tool: 'oven',
-            requires: 'fire'
+            tool: 'oven'
+            // No 'fire' requirement: general village workshops bake fine.
+            // Smeltery-style recipes still demand a specialized subtype.
         });
     }
 
@@ -217,6 +225,7 @@ class CraftingSystem {
     syncFromBuildings(sim) {
         if (!sim || !Array.isArray(sim.buildings)) return;
         const seen = new Set();
+        let opened = false;
         for (const b of sim.buildings) {
             if (b.buildingType !== 'workshop' || !b.complete) continue;
             const key = CraftingSystem.buildingKey(b);
@@ -239,14 +248,82 @@ class CraftingSystem {
             };
             this.workshops.set(key, ws);
             sim.eventBus?.emit('WORKSHOP_OPENED', { id: key, x: b.x, y: b.y });
+            opened = true;
         }
         // Buildings burned/removed -> drop their orphaned workshops.
+        let orphaned = false;
         for (const [id, ws] of this.workshops) {
             if (ws.buildingId != null && !seen.has(id)) {
                 for (const aid of [...ws.assignedWorkers]) this.removeWorker(id, aid);
                 this.workshops.delete(id);
+                orphaned = true;
             }
         }
+        // Phase 2 job unification: whenever the workshop roster changes,
+        // reconcile assignedWorkers against agents whose economy record says
+        // they are craftsmen. Previously nothing ever called assignWorker,
+        // so assignedWorkers stayed empty forever and workshop progress was
+        // permanently paused ("No workers, pause progress") — the whole
+        // crafting → distribution → trade pipeline silently never ran.
+        this.reconcileCraftsmen(sim);
+    }
+
+    // Deterministic roster reconciliation: every living craftsman gets a
+    // workplace (their nearest workshop), and every workshop worker entry
+    // points at a living craftsman. Zero RNG draws.
+    reconcileCraftsmen(sim) {
+        if (!sim || !Array.isArray(sim.agents)) return;
+        const getJob = sim.economySystem?.getAgentJob?.bind(sim.economySystem);
+        for (const agent of sim.agents) {
+            if (!agent || !agent.alive) continue;
+            const rec = getJob ? getJob(agent.id) : null;
+            const isCraftsman = agent.job === 'craftsman' || (rec && rec.job === 'craftsman');
+            if (!isCraftsman) continue;
+            // Phase 2 life stages: children never hold workshop jobs — they
+            // apprentice via watch_crafts instead. Release them from any
+            // roster slot so adults fill the benches.
+            if (agent.lifeStage === 'child') {
+                if (agent.workplace && this.workshops.has(agent.workplace)) {
+                    this.removeWorker(agent.workplace, agent.id);
+                }
+                continue;
+            }
+            // Validate existing workplace; re-find if orphaned.
+            if (agent.workplace && !this.workshops.has(agent.workplace)) {
+                agent.workplace = null;
+            }
+            if (!agent.workplace) {
+                const ws = this.findNearestWorkshop(agent.x, agent.y, 32);
+                if (ws) {
+                    this.assignWorker(ws.id, agent.id);
+                    if (sim.economySystem?.agentJobs) {
+                        sim.economySystem.agentJobs.set(agent.id, {
+                            job: 'craftsman', skillLevel: 1, experience: 0,
+                            assignedAt: sim.clock?.tick ?? 0
+                        });
+                    }
+                }
+            } else {
+                const ws = this.workshops.get(agent.workplace);
+                if (ws && !ws.assignedWorkers.includes(agent.id)) {
+                    ws.assignedWorkers.push(agent.id);
+                }
+            }
+        }
+        // Drop dead / relocated workers from rosters. Note: assignWorker
+        // clears agent.job to 'unemployed', so we must collect first and
+        // remove after — otherwise the filter would go stale mid-sweep.
+        const removals = [];
+        for (const [wsId, ws] of this.workshops) {
+            if (ws.assignedWorkers.length === 0) continue;
+            for (const aid of ws.assignedWorkers) {
+                const a = sim.agents.find(x => x && x.id === aid);
+                if (!a || !a.alive || a.workplace !== wsId) {
+                    removals.push([wsId, aid]);
+                }
+            }
+        }
+        for (const [wsId, aid] of removals) this.removeWorker(wsId, aid);
     }
 
     // Workshop within `radius` tiles of (x,y), or null. Deterministic scan.
@@ -263,7 +340,9 @@ class CraftingSystem {
     // workshop storage already holds. Zero RNG draws. Returns true if queued.
     autoQueue(workshop) {
         if (workshop.queue.length > 0 || workshop.activeTask) return false;
-        const order = ['wheat_to_flour', 'flour_plus_water_to_bread', 'log_to_plank', 'ore_to_ingot'];
+        // Planks first: raw logs are the most common haul and sawmilling is
+        // the backbone of the finished-goods trade loop.
+        const order = ['log_to_plank', 'wheat_to_flour', 'flour_plus_water_to_bread', 'ore_to_ingot'];
         for (const rid of order) {
             const r = this.recipes.get(rid);
             if (r && this.canCraft(workshop, r)) {
@@ -415,7 +494,29 @@ class CraftingSystem {
                 return false;
             }
         }
-        
+
+        // Phase 2 (skill-gated recipe unlocks): advanced recipes require the
+        // workshop's crafter pool to contain at least one worker who has
+        // reached the required skill level. Deterministic scan of assigned
+        // workers — no RNG draws.
+        if (recipe.requiresSkill) {
+            const agents = this.simulation?.agents || [];
+            let best = null;
+            for (const wid of workshop.assignedWorkers) {
+                const a = typeof agents.find === 'function'
+                    ? agents.find(ag => ag && ag.id === wid)
+                    : null;
+                if (!a || !a.skills) continue;
+                if (!best || a.id < best.id) best = a; // deterministic pick
+            }
+            const skills = best ? best.skills : {};
+            for (const [skillName, minLevel] of Object.entries(recipe.requiresSkill)) {
+                if ((skills[skillName] || 0) < minLevel) {
+                    return false;
+                }
+            }
+        }
+
         return true;
     }
 

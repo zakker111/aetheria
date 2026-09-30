@@ -18,6 +18,7 @@ export class Agent {
   // Memory tuning constants (shared by remember()/chooseAction()).
   static MEMORIES_MAX = 8;               // personal salient-event window
   static MEMORY_RECENCY_TICKS = 400;     // ~2 sim years of "fresh" feeling
+  static SPATIAL_MEMORY_MAX = 12;        // remembered resource nodes per agent
   static SOCIAL_ACTION_TYPES = new Set([
     "socialize", "visit_neighbor", "reproduce", "gather_at_hearth", "visit_market", "pray_at_temple", "play_in_town"
   ]);
@@ -92,15 +93,28 @@ export class Agent {
       curious: this.rng.next()
     };
     
+    // All skills start at baseline 1.0 so job gating (requiredSkills) and
+    // recipe unlocks behave consistently — previously crafting trades started
+    // at 0, which meant calculateSkillLevel floored every craftsman's output
+    // quality and progress speed to zero.
     this.skills = {
       gather: 1.0,
       build: 1.0,
       farm: 1.0,
-      carpentry: 0,
-      smithing: 0,
-      milling: 0,
-      cooking: 0
+      hunt: 1.0,
+      combat: 1.0,
+      craft: 1.0,
+      carpentry: 1.0,
+      smithing: 1.0,
+      milling: 1.0,
+      cooking: 1.0
     };
+
+    // Spatial memory (Phase 2): bounded list of remembered resource nodes
+    // ({ x, y, type, richness, tick }). Written on successful harvests,
+    // consulted when foraging is otherwise blind. Deterministic: capped at
+    // SPATIAL_MEMORY_MAX entries, oldest evicted first, no RNG involved.
+    this.spatialMemory = [];
     
     // Inventory for crafted items and resources
     this.inventory = {
@@ -143,13 +157,67 @@ export class Agent {
     this.workplace = null;
   }
 
+  // Skill XP helper (Phase 2): every task type grants XP to its skill on a
+  // cadence (default every 5th completion) with diminishing returns toward
+  // the level cap. Deterministic — no RNG draws.
+  gainSkill(skill, amount = 0.05, cap = 5, cadence = 5, tickNow = 0) {
+    if (!this.skills) return 0;
+    const prev = this.skills[skill] || 0;
+    if (prev >= cap) return 0;
+    if ((this.id * 3 + tickNow) % cadence !== 0) return 0;
+    // Diminishing returns: high levels learn slower.
+    const gain = amount * (1 - prev / (cap + 1));
+    this.skills[skill] = Math.min(cap, prev + gain);
+    return this.skills[skill] - prev;
+  }
+
+  // Spatial memory helpers (Phase 2). Bounded and deterministic: rememberNode
+  // keeps at most SPATIAL_MEMORY_MAX entries (newest wins), recallNode finds
+  // the richest remembered node of a resource type within radius.
+  rememberNode(x, y, type, richness = 1, tick = 0) {
+    if (!Array.isArray(this.spatialMemory)) this.spatialMemory = [];
+    // Refresh an existing entry for the same tile instead of duplicating.
+    const existing = this.spatialMemory.find(m => m.x === x && m.y === y && m.type === type);
+    if (existing) {
+      existing.richness = Math.max(existing.richness, richness);
+      existing.tick = tick;
+      return;
+    }
+    this.spatialMemory.push({ x, y, type, richness, tick });
+    if (this.spatialMemory.length > Agent.SPATIAL_MEMORY_MAX) {
+      // Evict least recent (oldest visit first).
+      this.spatialMemory.sort((a, b) => (a.tick - b.tick) || (a.x - b.x) || (a.y - b.y));
+      this.spatialMemory.splice(0, this.spatialMemory.length - Agent.SPATIAL_MEMORY_MAX);
+    }
+  }
+
+  recallNode(type, x, y, radius = 20, maxAgeTicks = 4000, now = 0) {
+    let best = null, bestScore = -Infinity;
+    for (const m of this.spatialMemory || []) {
+      if (type && m.type !== type) continue;
+      if (now - (m.tick || 0) > maxAgeTicks) continue; // forgotten
+      const d = Math.hypot(m.x - x, m.y - y);
+      if (d > radius) continue;
+      // Prefer rich & close nodes; recency breaks ties deterministically.
+      const score = m.richness * 10 - d + (m.tick || 0) * 1e-6;
+      if (score > bestScore) { bestScore = score; best = m; }
+    }
+    return best;
+  }
+
   // Update needs over time (doc 03A: update urgent needs)
   updateNeeds() {
+    // Life-stage-scaled drains (Phase 2): children burn needs slower, elders
+    // tire faster and metabolize food/water quicker.
+    const stage = this.lifeStage;
+    const drainMul = stage === "child" ? 0.7 : (stage === "elder" ? 1.25 : 1.0);
+    const restMul = stage === "child" ? 0.6 : (stage === "elder" ? 1.4 : 1.0);
+
     // Slower drains so agents have time to actually find food/water instead
     // of cascading into starvation deaths.
-    this.needs.food = Math.max(0, this.needs.food - 0.10);
-    this.needs.water = Math.max(0, this.needs.water - 0.12);
-    this.needs.rest = Math.max(0, this.needs.rest - 0.05);
+    this.needs.food = Math.max(0, this.needs.food - 0.10 * drainMul);
+    this.needs.water = Math.max(0, this.needs.water - 0.12 * drainMul);
+    this.needs.rest = Math.max(0, this.needs.rest - 0.05 * restMul);
     this.needs.social = Math.max(0, this.needs.social - 0.04);
     
     // Aging: 100 ticks = 1 year of life
@@ -384,8 +452,13 @@ export class Agent {
       this.goals.push({ type: "build", priority: isBuilder ? 85 : 68 });
     }
     
-    // 4. Active Job-Specific Goals
-    if (job === 'lumberjack') {
+    // 4. Active Job-Specific Goals (children are exempt from labor — they
+    // apprentice at workshops via watch_crafts instead; Phase 2 life stages)
+    if (this.lifeStage === "child") {
+      if ((this.id * 11 + tickOf(simulation)) % 9 === 0) {
+        this.goals.push({ type: "play_in_town", priority: 45 });
+      }
+    } else if (job === 'lumberjack') {
       this.goals.push({ type: "chop_wood", priority: 75 });
     } else if (job === 'miner') {
       this.goals.push({ type: "mine_ore", priority: 75 });
@@ -460,13 +533,32 @@ export class Agent {
         const distToCenter = Math.hypot(this.x - settlement.center.x, this.y - settlement.center.y);
 
         // Communal Stockpile sharing: when workers have gathered a haul, bring it back to town!
-        // Craftsmen are exempt: their raw materials belong to the workshop
-        // supply chain (haul_to_workshop), not the general town stockpile.
+        // Craftsmen don't deposit raw materials (those feed the workshop
+        // supply chain via haul_to_workshop), but they DO distribute finished
+        // goods from the shop into the town stockpile (distribute_goods) —
+        // closing the production → storage → trade loop of Phase 1.
+        // Unified craftsman check (Phase 2 job unification): the workshop
+        // roster is the source of truth — economy records can lag a tick
+        // behind assignJob/reconcileCraftsmen, and a stale record used to
+        // starve the distribute_goods pipeline entirely.
         const jobName = simulation.economySystem?.getAgentJob?.(this.id)?.job;
-        if (jobName !== 'craftsman') {
+        const isCraftsman = this.job === 'craftsman' || jobName === 'craftsman';
+        if (!isCraftsman) {
           const surplus = (this.inventory.wood_log || 0) + (this.inventory.ore_iron || 0) + (this.inventory.wheat || 0);
           if (surplus >= 2) {
             this.goals.push({ type: "deposit_to_stockpile", priority: 84, target: settlement.center });
+          }
+        } else if (this.workplace && simulation.craftingSystem) {
+          const ws = simulation.craftingSystem.workshops.get(this.workplace);
+          if (ws) {
+            const breadStock = ws.storage.get('bread') || 0;
+            const plankStock = ws.storage.get('plank') || 0;
+            // Distribute once the shop holds more than the craftsmen's own
+            // bread runs need (threshold lowered from 6 so distribution
+            // actually triggers in typical throughput).
+            if ((breadStock >= 3 || plankStock >= 3) && this.distanceTo(settlement.center) < 24) {
+              this.goals.push({ type: "distribute_goods", priority: 78, workplaceId: ws.id });
+            }
           }
         }
         if (this.needs.food < 45 && (!this.inventory.wheat && !this.inventory.bread)) {
@@ -643,25 +735,17 @@ export class Agent {
           let candidate = null;
           let bestDist = Infinity;
           
-          if (simulation && simulation.buildings) {
-            for (const b of simulation.buildings) {
-              if (!b.complete && (b.constructionProgress || 0) < 100 && isFriendlySite(b.settlementId ?? null)) {
-                const dist = this.distanceTo(b);
-                if (dist < bestDist) {
-                  bestDist = dist;
-                  candidate = b;
-                }
-              }
-            }
-          }
-          if (simulation && simulation.constructionSystem && simulation.constructionSystem.pendingBuildings) {
-            for (const b of simulation.constructionSystem.pendingBuildings) {
-              if (!b.isComplete && (b.constructionProgress || 0) < 100 && isFriendlySite(b.settlementId ?? null)) {
-                const dist = this.distanceTo(b);
-                if (dist < bestDist) {
-                  bestDist = dist;
-                  candidate = b;
-                }
+          // Perf: agents used to scan the full building list every tick per
+          // agent (O(agents x buildings)). The simulation publishes a cached
+          // shortlist of unfinished sites (buildings + pending construction),
+          // rebuilt once per tick — same deterministic outcome, far cheaper.
+          const pendingList = (simulation && simulation.incompleteBuildings) || [];
+          for (const b of pendingList) {
+            if (isFriendlySite(b.settlementId ?? null)) {
+              const dist = this.distanceTo(b);
+              if (dist < bestDist) {
+                bestDist = dist;
+                candidate = b;
               }
             }
           }
@@ -753,6 +837,16 @@ export class Agent {
           }
           break;
         }
+
+        case "distribute_goods":
+          if (goal.workplaceId) {
+            actions.push({
+              type: "distribute_goods",
+              workplaceId: goal.workplaceId,
+              score: goal.priority
+            });
+          }
+          break;
           
         case "chop_wood":
           for (const res of perception.nearbyResources) {
@@ -794,15 +888,24 @@ export class Agent {
         case "gather_resources":
         case "forage_nearby":
         case "gather_supplies":
+          // Phase 2 spatial memory: nudge toward remembered rich nodes so a
+          // hungry agent prefers the grove it discovered last season over an
+          // equally-close blind patch. Pure scoring — no RNG, deterministic.
+          const memNow = tickOf(simulation);
           for (const res of perception.nearbyResources) {
             if (res.amount > 0) {
               let actType = "gather_food";
               if (res.resourceType === "wood") actType = "chop_wood";
               else if (res.resourceType === "ore") actType = "mine_ore";
               else if (res.resourceType === "water") actType = "drink_water";
+              let memoryBonus = 0;
+              const mem = this.recallNode(res.resourceType, this.x, this.y, 24, 4000, memNow);
+              if (mem && Math.hypot(mem.x - res.x, mem.y - res.y) < 2.5) {
+                memoryBonus = 6; // we've harvested here before — trust it
+              }
               // Pioneer camp-building: walk toward the goal site while working
               const score = goal.priority + (10 - Math.min(9, this.distanceTo(res))) -
-                (goal.target ? Math.min(8, this.distanceTo(goal.target)) : 0);
+                (goal.target ? Math.min(8, this.distanceTo(goal.target)) : 0) + memoryBonus;
               actions.push({
                 type: actType,
                 target: res,
@@ -1088,6 +1191,23 @@ export class Agent {
       }
       // Well-regarded agents pursue their proactive goals with more confidence.
       if (rep !== 0) action.score += rep * 0.02;
+
+      // Phase 2 (trauma deepening): a SURVIVED_FIRE memory imprints the
+      // disaster epicenter; actions that would take us back into the burn
+      // scar are penalized so survivors avoid fire-prone ground for a while.
+      // Pure scoring — deterministic, no RNG.
+      const tTarget = action.target;
+      if (tTarget && typeof tTarget.x === "number" && typeof tTarget.y === "number") {
+        for (const m of this.memories) {
+          if (m.type === "SURVIVED_FIRE" && now - (m.tick || 0) < Agent.MEMORY_RECENCY_TICKS * 2) {
+            const d = Math.hypot(tTarget.x - m.x, tTarget.y - m.y);
+            if (d <= (m.radius || 15)) {
+              action.score -= 10;
+              break;
+            }
+          }
+        }
+      }
 
       // Hearsay about us: if the target of a voluntary social overture has
       // heard bad (good) things about us, they are less (more) receptive.
@@ -1376,14 +1496,26 @@ export class Agent {
 
   // Deterministic check: does this workshop have craftable demand right now?
   // (queue non-empty, or an active task — no RNG draws.)
+  // Perf: cached per tick per workshop. This used to run canCraft() over the
+  // whole queue for EVERY craftsman EVERY tick — with ~100 agents and 10+
+  // workshops that O(agents x queue x recipes) scan dominated the tick budget
+  // (500 ticks took 42s at tick 3500). The answer depends only on workshop
+  // state (storage/queue/activeTask), not on the asking agent, so we key the
+  // cache by workshop id + current tick and reuse it across all craftsmen.
   _workshopHasDemand(ws, craftingSystem) {
     if (!ws || !craftingSystem) return false;
     if (ws.activeTask) return true;
+    if (ws.queue.length === 0) return false;
+    const tickNow = craftingSystem.simulation?.clock?.tick ?? 0;
+    if (ws._demandTick === tickNow) return ws._demandResult === true;
+    let result = false;
     for (const t of ws.queue) {
       const r = craftingSystem.recipes.get(t.recipeId);
-      if (r && craftingSystem.canCraft(ws, r)) return true;
+      if (r && craftingSystem.canCraft(ws, r)) { result = true; break; }
     }
-    return false;
+    ws._demandTick = tickNow;
+    ws._demandResult = result;
+    return result;
   }
 
   // Workshop / forge spot to watch blacksmiths and craftsmen.
@@ -1462,7 +1594,7 @@ export class Agent {
         }
         if (this.distanceTo(action.target) < 2.5) {
           action.target.constructionProgress = (action.target.constructionProgress || 0) + 4;
-          this.skills.build = (this.skills.build || 1.0) + 0.05;
+          this.gainSkill("build", 0.05, 5, 1, tickOf(simulation));
           
           if (action.target.constructionProgress >= 100) {
             action.target.isComplete = true;
@@ -1620,6 +1752,45 @@ export class Agent {
         }
         break;
       }
+
+      // Supply-chain distribution: carry finished goods from the workshop
+      // into the town stockpile so they can be consumed locally or exported
+      // by trade caravans (production -> storage -> trade loop). Deterministic.
+      case "distribute_goods": {
+        const workshop = craftingSystem ? craftingSystem.workshops.get(action.workplaceId) : null;
+        if (!workshop) { this.currentAction = null; break; }
+        const site = { x: workshop.x + 1, y: workshop.y + 1 };
+        if (this.distanceTo(site) < 2) {
+          // Take a load of whatever finished good is in surplus.
+          let taken = craftingSystem.takeFromWorkshop(workshop.id, this, 'bread', 5);
+          if (taken === 0) taken = craftingSystem.takeFromWorkshop(workshop.id, this, 'plank', 5);
+          if (taken > 0) {
+            const settlement = simulation?.settlementSystem?.getAgentSettlement?.(this.id);
+            let deposited = 0;
+            if (settlement) {
+              if (this.inventory.bread > 0) {
+                simulation.settlementSystem.depositToStockpile(settlement.id, 'food', this.inventory.bread);
+                if (eventBus) eventBus.emit("STOCKPILE_DEPOSITED", { settlementId: settlement.id, resource: 'bread', units: this.inventory.bread });
+                deposited += this.inventory.bread;
+                this.inventory.bread = 0;
+              }
+              if (this.inventory.plank > 0) {
+                simulation.settlementSystem.depositToStockpile(settlement.id, 'wood', this.inventory.plank);
+                if (eventBus) eventBus.emit("STOCKPILE_DEPOSITED", { settlementId: settlement.id, resource: 'plank', units: this.inventory.plank });
+                deposited += this.inventory.plank;
+                this.inventory.plank = 0;
+              }
+            }
+            if (deposited > 0 && eventBus) {
+              eventBus.emit("GOODS_DISTRIBUTED", { agentId: this.id, workshopId: workshop.id, units: taken });
+            }
+          }
+          this.currentAction = null;
+        } else {
+          this.moveToward(site, world);
+        }
+        break;
+      }
         
       case "eat_from_inventory":
         if (this.inventory.bread > 0) {
@@ -1685,7 +1856,14 @@ export class Agent {
           action.target.amount = Math.max(0, action.target.amount - 0.5);
           this.inventory.wheat = (this.inventory.wheat || 0) + 1;
           this.needs.food = Math.min(100, this.needs.food + 30);
-          this.skills.farm = (this.skills.farm || 1.0) + 0.05;
+          // Phase 2: skill XP with life-stage modifiers; rich nodes get
+          // imprinted in spatial memory so agents revisit productive spots.
+          {
+            const stageMul = this.lifeStage === "child" ? 1.5 : (this.lifeStage === "elder" ? 0.5 : 1.0);
+            this.gainSkill("farm", 0.05 * stageMul, 5, 1, tickOf(simulation));
+            this.rememberNode(Math.floor(action.target.x), Math.floor(action.target.y),
+              "food", action.target.amount || 1, tickOf(simulation));
+          }
           if (eventBus) {
             eventBus.emit("RESOURCE_GATHERED", { 
               agentId: this.id, 
@@ -1718,7 +1896,13 @@ export class Agent {
         if (this.distanceTo(action.target) < 1.8) {
           action.target.amount = Math.max(0, action.target.amount - 0.5);
           this.inventory.wood_log = (this.inventory.wood_log || 0) + 1;
-          this.skills.gather = (this.skills.gather || 1.0) + 0.05;
+          // Phase 2: woodcutters train gather; remember productive trees.
+          {
+            const stageMul = this.lifeStage === "child" ? 1.5 : (this.lifeStage === "elder" ? 0.5 : 1.0);
+            this.gainSkill("gather", 0.05 * stageMul, 5, 1, tickOf(simulation));
+            this.rememberNode(Math.floor(action.target.x), Math.floor(action.target.y),
+              "wood", action.target.amount || 1, tickOf(simulation));
+          }
           if (eventBus) {
             eventBus.emit("RESOURCE_GATHERED", { 
               agentId: this.id, 
@@ -1741,7 +1925,13 @@ export class Agent {
         if (this.distanceTo(action.target) < 1.8) {
           action.target.amount = Math.max(0, action.target.amount - 0.5);
           this.inventory.ore_iron = (this.inventory.ore_iron || 0) + 1;
-          this.skills.gather = (this.skills.gather || 1.0) + 0.05;
+          // Phase 2: mining trains gather too; remember ore veins.
+          {
+            const stageMul = this.lifeStage === "child" ? 1.5 : (this.lifeStage === "elder" ? 0.5 : 1.0);
+            this.gainSkill("gather", 0.05 * stageMul, 5, 1, tickOf(simulation));
+            this.rememberNode(Math.floor(action.target.x), Math.floor(action.target.y),
+              "ore", action.target.amount || 1, tickOf(simulation));
+          }
           if (eventBus) {
             eventBus.emit("RESOURCE_GATHERED", { 
               agentId: this.id, 
@@ -1831,8 +2021,14 @@ export class Agent {
         if (!action.target) { this.currentAction = null; break; }
         if (this.distanceTo(action.target) < 2.4) {
           this.needs.social = Math.min(100, this.needs.social + 5);
-          if (this.skills && this.skills.craft !== undefined) {
-            this.skills.craft = Math.min(5, (this.skills.craft || 1) + 0.02);
+          // Phase 2 apprenticeship: children absorb craft XP twice as fast
+          // by watching workshops; adults pick up a little too.
+          const appMul = this.lifeStage === "child" ? 2.0 : 1.0;
+          this.gainSkill("craft", 0.02 * appMul, 5, 1, tickOf(simulation));
+          if (this.lifeStage === "child") {
+            this.gainSkill("carpentry", 0.01, 5, 2, tickOf(simulation));
+            this.gainSkill("milling", 0.01, 5, 2, tickOf(simulation));
+            this.gainSkill("cooking", 0.01, 5, 2, tickOf(simulation));
           }
           if (eventBus) {
             eventBus.emit("CRAFT_WATCH", { agentId: this.id, x: this.x, y: this.y });
@@ -1848,9 +2044,7 @@ export class Agent {
         if (!action.target) { this.currentAction = null; break; }
         if (this.distanceTo(action.target) < 2.2) {
           this.needs.rest = Math.max(0, this.needs.rest - 0.4);
-          if (this.skills && this.skills.combat !== undefined) {
-            this.skills.combat = Math.min(5, (this.skills.combat || 1) + 0.03);
-          }
+          this.gainSkill("combat", 0.03, 5, 1, tickOf(simulation));
           if (eventBus) {
             eventBus.emit("TRAINING", { agentId: this.id, x: this.x, y: this.y });
           }
@@ -2060,7 +2254,7 @@ export class Agent {
           this.needs.food = Math.min(100, this.needs.food + gain);
           this.inventory.meat = (this.inventory.meat || 0) + 2;
           this.inventory.hide = (this.inventory.hide || 0) + 1;
-          this.skills.hunt = (this.skills.hunt || 1.0) + 0.06;
+          this.gainSkill("hunt", 0.06, 5, 1, tickOf(simulation));
           simulation?.animalSystem?.removeAnimal?.(prey);
           if (eventBus) {
             eventBus.emit("ANIMAL_KILLED", {
@@ -2337,6 +2531,12 @@ export class Agent {
       needs: { ...this.needs },
       personality: { ...this.personality },
       skills: { ...this.skills },
+      // Spatial memory must round-trip: agents that remember productive
+      // groves/veins would otherwise "amnesize" on load and re-explore,
+      // changing foraging trajectories after save/load resume.
+      spatialMemory: Array.isArray(this.spatialMemory)
+        ? this.spatialMemory.map(m => ({ x: m.x, y: m.y, type: m.type, richness: m.richness, tick: m.tick }))
+        : [],
       inventory: { ...this.inventory },
       job: this.job,
       jobTitle: this.jobTitle,
@@ -2435,6 +2635,9 @@ export class Agent {
     agent.needs = { ...data.needs };
     agent.personality = { ...data.personality };
     agent.skills = { ...data.skills };
+    agent.spatialMemory = Array.isArray(data.spatialMemory)
+      ? data.spatialMemory.map(m => ({ x: m.x, y: m.y, type: m.type, richness: m.richness ?? 1, tick: m.tick ?? 0 }))
+      : [];
     agent.inventory = data.inventory ? { ...data.inventory } : {
       wood_log: 0,
       wood_plank: 0,
