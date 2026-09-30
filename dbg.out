@@ -1,0 +1,140 @@
+tick 0: workshops=[]
+Agent 550 died at age 3.0 days
+Agent 548 died at age 3.0 days
+Agent 571 died at age 3.0 days
+Agent 573 died at age 3.0 days
+Agent 18 died at age 37.0 days
+Agent 587 died at age 3.0 days
+Agent 12 died at age 28.0 days
+Agent 15 died at age 26.0 days
+Agent 6 died at age 37.0 days
+Agent 3 died at age 28.0 days
+Agent 9 died at age 38.0 days
+Agent 547 died at age 10.0 days
+Agent 549 died at age 10.0 days
+Agent 592 died at age 7.0 days
+Agent 594 died at age 7.0 days
+Agent 591 died at age 7.0 days
+EVENT: Plague Outbreak - A deadly plague spreads through the population!
+Agent 7 died at age 30.0 days
+Agent 621 died at age 4.0 days
+Agent 577 died at age 10.0 days
+Agent 576 died at age 10.0 days
+Agent 662 died at age 1.0 days
+EVENT: Migrant Wave - New settlers arrive seeking a better life!
+EVENT: Earthquake - The ground shakes violently!
+Agent 10 died at age 44.0 days
+EVENT: Resource Discovery - A rich resource vein is discovered!
+Agent 4 died at age 33.0 days
+Agent 16 died at age 47.0 days
+tick 2000: workshops=[workshop@b562:{}, workshop@b563:{}, workshop@b584:{}, workshop@b586:{}, workshop@b644:{}, workshop@b645:{}, workshop@b649:{}, workshop@b647:{}, workshop@b703:{}]
+Agent 690 died at age 37.0 days
+Agent 692 died at age 27.0 days
+Agent 725 died at age 3.0 days
+Agent 575 died at age 20.0 days
+Agent 613 died at age 16.0 days
+Agent 595 died at age 18.0 days
+Agent 552 died at age 22.0 days
+Agent 611 died at age 16.0 days
+EVENT: Migrant Wave - New settlers arrive seeking a better life!
+Agent 556 died at age 24.0 days
+Agent 597 died at age 22.0 days
+EVENT: Cultural Festival - The people celebrate with a grand festival!
+Agent 663 died at age 16.0 days
+Agent 747 died at age 31.0 days
+EVENT: Earthquake - The ground shakes violently!
+EVENT: Meteor Shower - A spectacular meteor shower lights up the sky!
+Agent 20 died at age 59.0 days
+Agent 2 died at age 57.0 days
+EVENT: Migrant Wave - New settlers arrive seeking a better life!
+tick 4000: workshops=[workshop@b562:{}, workshop@b563:{}, workshop@b584:{wheat=1,flour=2}, workshop@b586:{}, workshop@b644:{}, workshop@b645:{wheat=1,flour=2}, workshop@b649:{}, workshop@b647:{}, workshop@b703:{}, workshop@b626:{}, workshop@b756:{}, workshop@b772:{}, workshop@b773:{}]
+EVENT: Mysterious Lights - Strange lights appear in the night sky...
+Agent 795 died at age 3.0 days
+EVENT: Resource Discovery - A rich resource vein is discovered!
+Agent 14 died at age 75.0 days
+Agent 801 died at age 3.0 days
+Agent 803 died at age 3.0 days
+Agent 792 died at age 32.0 days
+Agent 794 died at age 38.0 days
+EVENT: Plague Outbreak - A deadly plague spreads through the population!
+Agent 791 died at age 30.0 days
+Agent 13 died at age 67.0 days
+Agent 593 died at age 41.0 days
+Agent 551 died at age 45.0 days
+Agent 665 died at age 34.0 days
+Agent 745 died at age 45.0 days
+Agent 746 died at age 50.0 days
+Agent 749 died at age 42.0 days
+EVENT: Cultural Festival - The people celebrate with a grand festival!
+EVENT: Meteor Shower - A spectacular meteor shower lights up the sky!
+Agent 694 died at age 63.0 days
+Agent 11 died at age 76.0 days
+EVENT: Mysterious Lights - Strange lights appear in the night sky...
+EVENT: Seasonal Illness - A mild illness circulates among the people.
+Agent 1 died at age 76.0 days
+EVENT: Cultural Festival - The people celebrate with a grand festival!
+Agent 19 died at age 90.0 days
+tick 6000: workshops=[workshop@b562:{}, workshop@b563:{}, workshop@b584:{wheat=1,flour=2}, workshop@b586:{}, workshop@b644:{}, workshop@b645:{wheat=1,flour=2}, workshop@b649:{}, workshop@b647:{}, workshop@b703:{}, workshop@b626:{}, workshop@b756:{}, workshop@b772:{}, workshop@b773:{}]
+EVENT: Seasonal Illness - A mild illness circulates among the people.
+EVENT: Bountiful Harvest - The crops flourish beyond expectation!
+EVENT: Mysterious Lights - Strange lights appear in the night sky...
+Agent 17 died at age 84.0 days
+Agent 5 died at age 90.0 days
+EVENT: Migrant Wave - New settlers arrive seeking a better life!
+Agent 8 died at age 90.0 days
+EVENT: Seasonal Illness - A mild illness circulates among the people.
+Agent 837 died at age 27.0 days
+EVENT: Mysterious Lights - Strange lights appear in the night sky...
+Agent 836 died at age 29.0 days
+Agent 839 died at age 31.0 days
+Agent 691 died at age 77.0 days
+EVENT: Mysterious Lights - Strange lights appear in the night sky...
+Agent 568 died at age 77.0 days
+EVENT: Migrant Wave - New settlers arrive seeking a better life!
+EVENT: Bountiful Harvest - The crops flourish beyond expectation!
+tick 8000: workshops=[workshop@b562:{}, workshop@b563:{}, workshop@b584:{wheat=1,flour=2}, workshop@b586:{}, workshop@b644:{}, workshop@b645:{wheat=1,flour=2}, workshop@b649:{wheat=2}, workshop@b647:{}, workshop@b703:{}, workshop@b626:{}, workshop@b756:{}, workshop@b772:{}, workshop@b773:{}]
+EVENT: Mysterious Lights - Strange lights appear in the night sky...
+Agent 610 died at age 75.0 days
+EVENT: Meteor Shower - A spectacular meteor shower lights up the sky!
+Agent 855 died at age 3.0 days
+EVENT: Wildfire - A wildfire sweeps through the area!
+Agent 598 died at age 79.0 days
+Agent 570 died at age 82.0 days
+Agent 856 died at age 3.0 days
+Agent 693 died at age 90.0 days
+EVENT: Seasonal Illness - A mild illness circulates among the people.
+Agent 796 died at age 45.0 days
+Agent 854 died at age 25.0 days
+Agent 850 died at age 28.0 days
+Agent 851 died at age 33.0 days
+Agent 553 died at age 90.0 days
+Agent 596 died at age 87.0 days
+Agent 661 died at age 81.0 days
+EVENT: Mysterious Lights - Strange lights appear in the night sky...
+Agent 748 died at age 90.0 days
+Agent 726 died at age 79.0 days
+EVENT: Meteor Shower - A spectacular meteor shower lights up the sky!
+EVENT: Bountiful Harvest - The crops flourish beyond expectation!
+Agent 730 died at age 79.0 days
+Agent 787 died at age 63.0 days
+Agent 840 died at age 35.0 days
+Agent 843 died at age 31.0 days
+Agent 845 died at age 29.0 days
+tick 10000: workshops=[workshop@b562:{}, workshop@b563:{}, workshop@b584:{wheat=1,flour=2}, workshop@b586:{}, workshop@b644:{}, workshop@b645:{wheat=1,flour=2}, workshop@b649:{wheat=2}, workshop@b647:{}, workshop@b703:{}, workshop@b626:{}, workshop@b756:{}, workshop@b772:{}, workshop@b773:{}]
+Agent 753 died at age 75.0 days
+Agent 664 died at age 90.0 days
+EVENT: Seasonal Illness - A mild illness circulates among the people.
+Agent 790 died at age 90.0 days
+Agent 793 died at age 90.0 days
+EVENT: Wildfire - A wildfire sweeps through the area!
+EVENT: Wildfire - A wildfire sweeps through the area!
+EVENT: Mysterious Lights - Strange lights appear in the night sky...
+EVENT: Earthquake - The ground shakes violently!
+Agent 769 died at age 83.0 days
+EVENT: Resource Discovery - A rich resource vein is discovered!
+Agent 800 died at age 80.0 days
+Agent 835 died at age 81.0 days
+FINAL workshops: [{"id":"b562","type":"workshop","keys":{}},{"id":"b563","type":"workshop","keys":{}},{"id":"b584","type":"workshop","keys":{"wheat":1,"flour":2}},{"id":"b586","type":"workshop","keys":{}},{"id":"b644","type":"workshop","keys":{}},{"id":"b645","type":"workshop","keys":{"wheat":1,"flour":2}},{"id":"b649","type":"workshop","keys":{"wheat":2}},{"id":"b647","type":"workshop","keys":{}},{"id":"b703","type":"workshop","keys":{}},{"id":"b626","type":"workshop","keys":{}},{"id":"b756","type":"workshop","keys":{}},{"id":"b772","type":"workshop","keys":{}},{"id":"b773","type":"workshop","keys":{}}]
+jobs: {"gatherer":6}
+settlements: [{"name":"Oakwood Town","stockpile":{"food":43,"wood":25,"stone":15,"ore":15},"surplus":[]},{"name":"Fairview Hold","stockpile":{"food":9150,"wood":25,"stone":15,"ore":15},"surplus":[{"resource":"food","amount":9150}]},{"name":"Sunreach Hold","stockpile":{"food":58,"wood":25,"stone":15,"ore":15},"surplus":[{"resource":"food","amount":58}]},{"name":"Eldergrove Haven","stockpile":{"food":1675,"wood":25,"stone":15,"ore":15},"surplus":[{"resource":"food","amount":1675}]},{"name":"Hillcrest Town","stockpile":{"food":29,"wood":25,"stone":15,"ore":15},"surplus":[]},{"name":"Thornbury Landing","stockpile":{"food":1964,"wood":3874,"stone":15,"ore":15},"surplus":[{"resource":"food","amount":1964},{"resource":"wood","amount":3874}]},{"name":"Stonehold Town","stockpile":{"food":1298,"wood":25,"stone":15,"ore":15},"surplus":[{"resource":"food","amount":1298}]},{"name":"Clearwater Town","stockpile":{"food":62,"wood":25,"stone":15,"ore":15},"surplus":[{"resource":"food","amount":62}]}]
+routes: 0 caravans: 0

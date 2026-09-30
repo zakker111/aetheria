@@ -356,6 +356,17 @@ export class EventSystem {
           x: fireZone.x + (dx / dist) * 20,
           y: fireZone.y + (dy / dist) * 20
         };
+
+        // Phase 2 (trauma): survivors of the blaze imprint the disaster's
+        // epicenter as a danger zone they will later avoid when choosing
+        // where to forage/work/explore. remember() is a pure data write —
+        // consumes no RNG, so determinism is unaffected.
+        if (typeof agent.remember === 'function') {
+          const tick = (simulation && simulation.clock && simulation.clock.tick) || 0;
+          agent.remember('SURVIVED_FIRE', tick, {
+            x: fireZone.x, y: fireZone.y, radius: fireZone.radius, rep: -1
+          });
+        }
       }
     }
     

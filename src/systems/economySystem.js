@@ -61,7 +61,7 @@ export class EconomySystem {
         // Requirements tuned so skilled builders/gatherers can qualify after
         // gaining XP on the job (previously unreachable: every agent starts at
         // skill 1.0 but the old thresholds were 2.5/1.5).
-        requiredSkills: { build: 2.0, gather: 1.3 },
+        requiredSkills: { build: 1.0, gather: 1.0 },
         productivity: 1.2,
         wage: 4
       }
@@ -124,9 +124,21 @@ export class EconomySystem {
         score += agentSkill / required; // Bonus for exceeding requirements
       }
       
-      if (qualified && score > bestScore) {
-        bestScore = score;
-        bestJob = jobId;
+      if (qualified) {
+        // Demand weighting (deterministic, zero RNG): finished goods are the
+        // scarcest commodities in the economy — every settlement stockpile
+        // runs a bread/plank deficit until workshops ship product — so
+        // craftsmen earn a standing bonus and traders a smaller one. This
+        // guarantees workshops keep getting staffed even while food is
+        // plentiful. Skill floors stay low (baseline skills start at 1.0):
+        // without a craftsman pipeline the whole Phase-1 supply chain
+        // (workshops -> distribution -> trade) starves.
+        if (jobId === 'craftsman') score += 2.0;
+        else if (jobId === 'trader') score += 1.5;
+        if (score > bestScore) {
+          bestScore = score;
+          bestJob = jobId;
+        }
       }
     }
     

@@ -16,7 +16,9 @@ export class TradeSystem {
         // Configuration
         this.CARAVAN_SIZE = 3; // Agents per caravan
         this.TRADE_CHECK_INTERVAL = 2000; // Ticks between trade checks
-        this.MIN_SURPLUS = 50; // Minimum surplus to trigger trade
+        this.MIN_SURPLUS = 12; // Minimum surplus to trigger trade (finished
+        // craft goods accumulate slowly — one caravan load is 20 units, so a
+        // threshold of 50 meant routes/caravans essentially never spawned)
         this.MIN_DEFICIT = 10; // Minimum deficit to request trade
         
         this.lastCheckTick = 0;
@@ -57,11 +59,30 @@ export class TradeSystem {
             };
 
             const stockpile = settlement.stockpile || {};
-            // Check key resources
-            ['food', 'wood', 'stone', 'ore'].forEach(res => {
+            // Check key resources. Finished craft goods (bread, planks) are
+            // tradable too: workshops produce them and craftsmen deposit
+            // surplus into the town stockpile, so caravans can export them
+            // to settlements that lack production but have food demand.
+            ['food', 'wood', 'stone', 'ore', 'bread', 'plank'].forEach(res => {
                 const amount = stockpile[res] || 0;
                 const consumption = this.sim.settlementSystem.getConsumptionRate(settlement.id, res);
                 
+                // Raw staples and finished craft goods are SEPARATE commodity
+                // lines: bread must never count against the food surplus, or
+                // every town reports a food deficit and no pair ever matches
+                // (routes/caravans could never spawn). Finished goods have no
+                // raw stock by default, so they only appear as deficits until
+                // craftsmen distribute them — exactly the demand signal the
+                // export loop needs.
+                if (res === 'bread' || res === 'plank') {
+                    if (amount >= this.MIN_SURPLUS) {
+                        settlement.tradeProfile.surplus.push({ resource: res, amount });
+                    } else {
+                        settlement.tradeProfile.deficit.push({ resource: res, needed: this.MIN_SURPLUS - amount + 6 });
+                    }
+                    return;
+                }
+
                 if (amount > this.MIN_SURPLUS && (!consumption || amount > consumption * 5)) {
                     settlement.tradeProfile.surplus.push({ resource: res, amount });
                 } else if (amount < this.MIN_DEFICIT) {
@@ -136,9 +157,12 @@ export class TradeSystem {
         const fromSettlement = this.sim.settlementSystem.settlements.get(route.from);
         if (!fromSettlement) return;
 
-        // Verify surplus exists
-        const itemToTrade = fromSettlement.tradeProfile.surplus[0];
-        if (!itemToTrade || fromSettlement.stockpile[itemToTrade.resource] < itemToTrade.amount / 2) {
+        // Verify a genuinely tradeable surplus exists (raw resources must
+        // keep the town's own reserves intact; finished goods can export fully).
+        const candidates = (fromSettlement.tradeProfile?.surplus || [])
+            .filter(item => this.tradeableAmount(fromSettlement, item.resource) > 0);
+        const itemToTrade = candidates[0];
+        if (!itemToTrade) {
             return; // Not enough to trade yet
         }
 
@@ -248,18 +272,33 @@ export class TradeSystem {
         }
     }
 
+    // Largest surplus the origin can actually part with. Raw resources must
+    // leave a settlement's own reserves intact (deficit threshold), but
+    // finished craft goods (bread/plank) are pure production surplus, so they
+    // may export down to zero.
+    tradeableAmount(settlement, resource) {
+        const held = settlement.stockpile?.[resource] || 0;
+        if (resource === 'bread' || resource === 'plank') return held;
+        return Math.max(0, held - this.MIN_DEFICIT);
+    }
+
     executeTrade(caravan, from, to) {
         caravan.state = 'trading';
-        
-        // Identify goods
+
+        // Identify goods: prefer what the destination actually needs
+        // (matching deficit), fall back to any real surplus. Deterministic.
         const agent = this.getAgent(caravan.agents[0]);
         if (!agent || !agent.cargo) {
-            // Load goods if not loaded
-            const item = from.tradeProfile.surplus[0];
-            if (item) {
-                const amount = Math.min(20, from.stockpile[item.resource]);
-                from.stockpile[item.resource] -= amount;
-                if (agent && agent.cargo) {
+            const deficits = new Set((to.tradeProfile?.deficit || []).map(d => d.resource));
+            const candidates = (from.tradeProfile?.surplus || [])
+                .filter(item => this.tradeableAmount(from, item.resource) > 0);
+            const item =
+                candidates.find(c => deficits.has(c.resource)) ||
+                candidates[0];
+            if (item && agent && agent.cargo) {
+                const amount = Math.min(20, this.tradeableAmount(from, item.resource));
+                if (amount > 0) {
+                    from.stockpile[item.resource] -= amount;
                     agent.cargo.resource = item.resource;
                     agent.cargo.amount = amount;
                 }

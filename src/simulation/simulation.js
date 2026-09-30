@@ -94,6 +94,12 @@ export class Simulation {
     this.agents = [];
     this.resources = [];
     this.buildings = [];
+    // Perf: cached shortlist of unfinished construction sites, rebuilt once
+    // per tick at the start of updateAgents(). Agents scan this instead of
+    // the full buildings + pendingBuildings lists (O(agents x buildings) ->
+    // O(buildings) per tick). Pure data - no RNG involved, determinism-safe.
+    this.incompleteBuildings = [];
+    this._incompleteBuildingsTick = -1;
     // Ground loot piles (Phase 1 deep economy): dropped by the dead, scavenged
     // by the living. Kept out of the spatial index; scanned directly per tick.
     this.groundItems = [];
@@ -212,7 +218,6 @@ export class Simulation {
     
     this.eventBus.on("AGENT_DIED", (data) => {
       this.deathsThisSession++;
-      console.log(`Agent ${data.agentId} died at age ${data.age.toFixed(1)} days`);
       // Memory: nearby survivors witness the death and remember it (trauma).
       if (Number.isFinite(data.x) && Number.isFinite(data.y)) {
         const tick = this.clock?.tick ?? 0;
@@ -788,7 +793,12 @@ export class Simulation {
                     agent.skills.build >= 1.2) {
                   this.economySystem.assignJob(agent, ['builder']);
                 } else if (needsFood.has(homeSid) && agent.job !== 'farmer' && agent.job !== 'gatherer' &&
-                           agent.job !== 'lumberjack' && agent.job !== 'hunter') {
+                           agent.job !== 'lumberjack' && agent.job !== 'hunter' &&
+                           // Protect the workshop roster: poaching craftsmen
+                           // into food production starved the entire
+                           // crafting -> distribution -> trade pipeline while
+                           // granaries overflowed.
+                           agent.job !== 'craftsman') {
                   this.economySystem.assignJob(agent, ['farmer', 'gatherer', 'lumberjack']);
                 }
               }
@@ -868,7 +878,6 @@ export class Simulation {
       
       if (newEvent) {
         this.eventSystem.applyEventEffects(newEvent, this);
-        console.log(`EVENT: ${newEvent.name} - ${newEvent.description}`);
         this.eventBus.emit("EVENT_OCCURRED", newEvent);
       }
     }
@@ -886,7 +895,7 @@ export class Simulation {
       );
       
       for (const faction of newFactions) {
-        console.log(`FACTION FOUNDED: ${faction.name} by agent ${faction.founderId}`);
+        // Faction founding is observable via the event bus; no console spam.
       }
     }
     
@@ -917,6 +926,21 @@ export class Simulation {
 
   updateAgents() {
     const births = [];
+
+    // Rebuild the incomplete-construction shortlist once per tick.
+    if (this._incompleteBuildingsTick !== this.clock.tick) {
+      this._incompleteBuildingsTick = this.clock.tick;
+      const list = [];
+      for (const b of this.buildings) {
+        if (!b.complete && (b.constructionProgress || 0) < 100) list.push(b);
+      }
+      if (this.constructionSystem && this.constructionSystem.pendingBuildings) {
+        for (const b of this.constructionSystem.pendingBuildings) {
+          if (!b.isComplete && (b.constructionProgress || 0) < 100) list.push(b);
+        }
+      }
+      this.incompleteBuildings = list;
+    }
     
     for (const agent of this.agents) {
       if (!agent.alive) continue;
