@@ -45,7 +45,26 @@ export const STORAGE_CAPACITY = {
   barracks: 30,
   castle: 120,
   tower: 20,
-  windmill: 50
+  windmill: 50,
+  inn: 40
+};
+
+// Building material costs (units of plank / iron_ingot / gem). Construction
+// consumes real goods from the town stockpile: a site without materials is
+// stalled until craftsmen produce more. Planks come from sawmills (log ->
+// plank) and gems only from rare crystal veins — so grand civic projects
+// genuinely depend on the mining -> crafting pipeline.
+export const BUILD_COSTS = {
+  house:     { plank: 2 },
+  farm:      { plank: 2 },
+  workshop:  { plank: 4 },
+  temple:    { plank: 4, iron_ingot: 2 },
+  tower:     { plank: 4, iron_ingot: 2 },
+  barracks:  { plank: 4, iron_ingot: 2 },
+  inn:       { plank: 4, iron_ingot: 1 },
+  market:    { plank: 4, iron_ingot: 1 },
+  warehouse: { plank: 6 },
+  castle:    { plank: 8, iron_ingot: 4, gem: 2 }
 };
 
 export const RESOURCE_TYPES = {

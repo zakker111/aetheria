@@ -1,0 +1,2 @@
+soak exit=0
+gossip exit=0

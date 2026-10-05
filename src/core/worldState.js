@@ -2,6 +2,10 @@
 // Phase 8: Procedural Terrain & Hydrology - Milestone 8.1 & 8.2
 import { RNG } from "./rng.js";
 
+// Shared immutable result for empty spatial-index cells (avoids allocating a
+// fresh array on every miss; callers only read/iterate it).
+const EMPTY_CELL = Object.freeze([]);
+
 export class WorldState {
   constructor(width = 128, height = 128, seed = Date.now(), options = {}) {
     this.width = width;
@@ -642,21 +646,68 @@ export class WorldState {
     }
   }
 
-  // Spatial indexing for fast entity lookup
+  // Spatial indexing for fast entity lookup.
+  // Cell keys are numeric (y * width + x) — string keys ("x,y") allocated a
+  // new string per query and dominated the tick loop once perception started
+  // hitting the index every agent-tick. Cells keep insertion order (some
+  // callers rely on it); removal is swap-with-last, which is why duplicate
+  // registrations of one entity in a cell must be avoided.
+  _cellKey(x, y) {
+    return y * this.width + x;
+  }
+
+  // NOTE: x/y may be FLOAT positions here — Math.floor runs exactly once, in
+  // _cellKey. (The old contract required callers to pre-floor; mixing both
+  // floors was harmless but moveToward's per-step remove/add pair made
+  // spatial maintenance ~3% of total CPU.)
   addToSpatialIndex(x, y, entity) {
-    const key = `${x},${y}`;
-    if (!this.spatialIndex.has(key)) {
-      this.spatialIndex.set(key, []);
+    const key = this._cellKey(Math.floor(x), Math.floor(y));
+    let cell = this.spatialIndex.get(key);
+    if (!cell) {
+      cell = [];
+      this.spatialIndex.set(key, cell);
     }
-    this.spatialIndex.get(key).push(entity);
+    cell.push(entity);
+    // Track registration cell so updateMovedAgents() can relocate the entry
+    // without scanning. Must stay in sync with every add/remove path.
+    if (entity) {
+      entity._sx = Math.floor(x);
+      entity._sy = Math.floor(y);
+    }
   }
 
   removeFromSpatialIndex(x, y, entity) {
-    const key = `${x},${y}`;
-    const entities = this.spatialIndex.get(key);
-    if (entities) {
-      const idx = entities.indexOf(entity);
-      if (idx >= 0) entities.splice(idx, 1);
+    const key = this._cellKey(Math.floor(x), Math.floor(y));
+    const cell = this.spatialIndex.get(key);
+    if (!cell) return;
+    const idx = cell.indexOf(entity);
+    if (idx >= 0) {
+      cell[idx] = cell[cell.length - 1];
+      cell.pop();
+    }
+    if (cell.length === 0) this.spatialIndex.delete(key);
+    if (entity) {
+      entity._sx = undefined;
+      entity._sy = undefined;
+    }
+  }
+
+  // Batched per-tick index maintenance for moving entities. Agents drift out
+  // of their indexed tile every tick, but perception only needs approximate
+  // positions (the periodic rebuildSpatialIndex is the authority). Instead of
+  // a remove+add Map-pair per entity per tile-crossing inside moveToward, the
+  // simulation collects moved entities and flushes them here with one lookup
+  // per entity. `entity._sx/_sy` track where the entity is currently
+  // registered (stamped by addToSpatialIndex, cleared on removal).
+  updateMovedAgents(moved) {
+    for (const e of moved) {
+      const nx = Math.floor(e.x);
+      const ny = Math.floor(e.y);
+      if (e._sx === nx && e._sy === ny) continue;
+      if (e._sx !== undefined) {
+        this.removeFromSpatialIndex(e._sx, e._sy, e);
+      }
+      this.addToSpatialIndex(nx, ny, e);
     }
   }
 
@@ -683,16 +734,25 @@ export class WorldState {
   }
 
   getEntitiesAt(x, y) {
-    return this.spatialIndex.get(`${x},${y}`) || [];
+    return this.spatialIndex.get(this._cellKey(x, y)) || EMPTY_CELL;
   }
 
   getEntitiesNear(x, y, radius) {
+    // Single allocation grown with push (the old `push(...spread)` form
+    // re-expanded arrays per cell); bounds-clamped so out-of-map cells are
+    // skipped without touching the Map at all.
     const entities = [];
-    for (let dy = -radius; dy <= radius; dy++) {
-      for (let dx = -radius; dx <= radius; dx++) {
-        if (dx * dx + dy * dy <= radius * radius) {
-          entities.push(...this.getEntitiesAt(x + dx, y + dy));
-        }
+    const r = Math.max(0, radius | 0);
+    const minX = Math.max(0, x - r), maxX = Math.min(this.width - 1, x + r);
+    const minY = Math.max(0, y - r), maxY = Math.min(this.height - 1, y + r);
+    const rSq = radius * radius;
+    for (let cy = minY; cy <= maxY; cy++) {
+      const dy = cy - y;
+      for (let cx = minX; cx <= maxX; cx++) {
+        const dx = cx - x;
+        if (dx * dx + dy * dy > rSq) continue;
+        const cell = this.spatialIndex.get(cy * this.width + cx);
+        if (cell) for (const e of cell) entities.push(e);
       }
     }
     return entities;

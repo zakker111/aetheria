@@ -154,6 +154,16 @@ export class Agent {
     // Job and workplace
     this.job = null;
     this.jobTitle = null;
+    // Career-change ("boredom") bookkeeping: tick the current job was taken.
+    // Restless adults may quit and retrain after a long enough stint; the
+    // simulation reads/writes this alongside the economy job record so the
+    // decision survives save/load (serialized below).
+    this._jobAssignedTick = 0;
+    // Re-hire patience window: the tick the last job offer landed. The
+    // unemployment sweep compares against it (60-tick cooldown + permanent
+    // settle after 3 failed attempts) and consumes RNG differently per value,
+    // so it MUST round-trip through save/load or a resumed run diverges.
+    this._lastJobAssignedTick = null;
     this.workplace = null;
   }
 
@@ -263,28 +273,65 @@ export class Agent {
     if (this.combat) this.combat.health = this.health;
   }
 
+  // Ensure the reusable perception object exists (empty; items untouched if
+  // Simulation already filled them this tick).
+  _ensurePerception() {
+    let perception = this._perception;
+    if (!perception) {
+      perception = this._perception = {
+        nearbyAgents: [],
+        nearbyResources: [],
+        nearbyBuildings: [],
+        nearbyAnimals: [],
+        // Loot piles on the ground (Phase 1 deep economy). Not routed through
+        // the spatial index — filled by Simulation.updateAgents() instead.
+        nearbyItems: [],
+        dangers: [],
+        opportunities: []
+      };
+    }
+    perception.nearbyAgents.length = 0;
+    perception.nearbyResources.length = 0;
+    perception.nearbyBuildings.length = 0;
+    perception.nearbyAnimals.length = 0;
+    if (!this._perceptionItemsFilled) perception.nearbyItems.length = 0;
+    perception.dangers.length = 0;
+    perception.opportunities.length = 0;
+    return perception;
+  }
+
   // Perceive nearby entities (doc 03A: perceive nearby people, resources, structures)
-  perceive(world, entities) {
-    const perception = {
-      nearbyAgents: [],
-      nearbyResources: [],
-      nearbyBuildings: [],
-      nearbyAnimals: [],
-      // Loot piles on the ground (Phase 1 deep economy). Not routed through
-      // the spatial index — passed in by Simulation.updateAgents() instead.
-      nearbyItems: [],
-      dangers: [],
-      opportunities: []
-    };
-    
-    const radius = 22;
-    // Perf guard: cap perception fan-out so dense settlements never freeze
-    // the tick loop (unbounded neighbor scans were the main soak-test hazard).
-    const MAX_NEARBY_AGENTS = 12;
-    const MAX_NEARBY_RESOURCES = 8;
-    const MAX_NEARBY_BUILDINGS = 6;
-    const MAX_NEARBY_ANIMALS = 6;
-    const nearby = world.getEntitiesNear(Math.floor(this.x), Math.floor(this.y), Math.ceil(radius));
+  //
+  // Perf: the perception object and its category arrays are reused across
+  // ticks (arrays cleared, not reallocated). The spatial-index query costs
+  // ~(2r)^2 tile lookups plus one visit per scanned entity — at 700+ agents
+  // that scan dominated the whole tick. Most agents on most ticks never
+  // consult the spatial lists (their chosen goals are inventory/work/move
+  // based), so Simulation.updateAgents() marks perception stale each tick
+  // via invalidatePerception() and the scan runs lazily through
+  // ensurePerception(), only when a goal/action actually reads it. Same
+  // data, same order, no RNG draws — strictly fewer scans, identical sim.
+  perceive(world, entities, radius = 12) {
+    const perception = this._ensurePerception();
+    this._perceptionWorld = world;
+    this._perceptionTick = world.clock ? world.clock.tick : 0;
+    this._perceptionItemsFilled = true;
+    this._perceptionValid = true;
+
+    // Perception radius. The spatial index is per-tile, so cost scales with
+    // r^2 tile lookups per agent per tick; 22 was scanning ~1500 empty cells
+    // per agent and dominated the tick loop at 200+ agents. 12 covers every
+    // interaction distance the action AI actually uses (social 4, combat
+    // 6-8, scavenging 22px items are passed separately by Simulation).
+    const r = Math.max(0, radius | 0);
+    // Cap grows with radius so the wider "explore" scan (Simulation uses 24)
+    // can still see distant targets, while the common case stays cheap.
+    const MAX_NEARBY_AGENTS = r <= 12 ? 12 : 24;
+    const MAX_NEARBY_RESOURCES = r <= 12 ? 8 : 16;
+    const MAX_NEARBY_BUILDINGS = r <= 12 ? 6 : 12;
+    const MAX_NEARBY_ANIMALS = r <= 12 ? 6 : 12;
+
+    const nearby = world.getEntitiesNear(Math.floor(this.x), Math.floor(this.y), r);
 
     for (const entity of nearby) {
       if (entity.id === this.id) continue;
@@ -305,8 +352,27 @@ export class Agent {
         }
       }
     }
-    
+
     return perception;
+  }
+
+  // Mark this tick's perception as not-yet-computed (see perceive()).
+  invalidatePerception() {
+    this._perceptionValid = false;
+    this._perceptionItemsFilled = false;
+  }
+
+  // Return a valid perception for this tick, running the spatial scan only
+  // if something actually needed it after being marked stale. Falls back to
+  // wiring from the simulation when no world has been seen yet.
+  ensurePerception(simulation) {
+    const world = this._perceptionWorld || (simulation && simulation.world) ||
+      (this.sim && this.sim.world);
+    const tickNow = world && world.clock ? world.clock.tick : 0;
+    if (!this._perceptionValid || !world || this._perceptionTick !== tickNow) {
+      this.perceive(world, [], 12);
+    }
+    return this._perception;
   }
 
   // Generate goals based on needs, jobs, reproduction, building, and community
@@ -708,6 +774,19 @@ export class Agent {
   generateActions(perception, world, simulation) {
     const actions = [];
     
+    // Lazy perception: Simulation.updateAgents() marks perception stale each
+    // tick; the spatial scan runs here only if a goal below actually reads
+    // the nearby-entity lists. Same data, same order, no RNG draws — strictly
+    // fewer scans, identical simulation.
+    let _lazyChecked = false;
+    const needScan = () => {
+      if (_lazyChecked) return;
+      _lazyChecked = true;
+      if (!this._perceptionValid || this._perceptionTick !== (world && world.clock ? world.clock.tick : 0)) {
+        this.perceive(world, [], 12);
+      }
+    };
+    
     for (const goal of this.goals) {
       switch (goal.type) {
         case "build": {
@@ -763,6 +842,7 @@ export class Agent {
         }
         
         case "reproduce":
+          needScan();
           for (const agent of perception.nearbyAgents) {
             if (agent.alive && agent !== this &&
                 agent.lifeStage === "adult" &&
@@ -793,6 +873,7 @@ export class Agent {
           break;
 
         case "socialize":
+          needScan();
           for (const agent of perception.nearbyAgents) {
             if (agent.alive && agent !== this) {
               actions.push({
@@ -849,6 +930,7 @@ export class Agent {
           break;
           
         case "chop_wood":
+          needScan();
           for (const res of perception.nearbyResources) {
             if (res.resourceType === "wood" && res.amount > 0) {
               actions.push({
@@ -861,12 +943,16 @@ export class Agent {
           break;
           
         case "mine_ore":
+          needScan();
           for (const res of perception.nearbyResources) {
-            if (res.resourceType === "ore" && res.amount > 0) {
+            if ((res.resourceType === "ore" || res.resourceType === "gem") && res.amount > 0) {
               actions.push({
                 type: "mine_ore",
                 target: res,
-                score: goal.priority + (15 - Math.min(14, this.distanceTo(res)))
+                score: goal.priority + (15 - Math.min(14, this.distanceTo(res))) +
+                  // Crystal veins are rare and precious — miners actively
+                  // prefer them over ordinary iron when both are in sight.
+                  (res.resourceType === "gem" ? 8 : 0)
               });
             }
           }
@@ -874,6 +960,7 @@ export class Agent {
           
         case "farm":
         case "find_food":
+          needScan();
           for (const res of perception.nearbyResources) {
             if (res.resourceType === "food" && res.amount > 0) {
               actions.push({
@@ -892,6 +979,7 @@ export class Agent {
           // hungry agent prefers the grove it discovered last season over an
           // equally-close blind patch. Pure scoring — no RNG, deterministic.
           const memNow = tickOf(simulation);
+          needScan();
           for (const res of perception.nearbyResources) {
             if (res.amount > 0) {
               let actType = "gather_food";
@@ -934,6 +1022,7 @@ export class Agent {
           break;
           
         case "find_water":
+          needScan();
           for (const res of perception.nearbyResources) {
             if (res.resourceType === "water") {
               actions.push({
@@ -966,6 +1055,7 @@ export class Agent {
           // Walk over to a nearby friend/relative's position and chat on arrival
           let best = null;
           let bestScore = -Infinity;
+          needScan();
           for (const agent of perception.nearbyAgents) {
             if (!agent.alive || agent === this) continue;
             const d = this.distanceTo(agent);
@@ -1853,7 +1943,10 @@ export class Agent {
           break;
         }
         if (this.distanceTo(action.target) < 1.8) {
+          // First harvest of a refilled node restores its living label.
+          if (action.target.normalLabel) action.target.label = action.target.normalLabel;
           action.target.amount = Math.max(0, action.target.amount - 0.5);
+          if (action.target.amount <= 0) action.target.markDepleted();
           this.inventory.wheat = (this.inventory.wheat || 0) + 1;
           this.needs.food = Math.min(100, this.needs.food + 30);
           // Phase 2: skill XP with life-stage modifiers; rich nodes get
@@ -1894,7 +1987,9 @@ export class Agent {
           break;
         }
         if (this.distanceTo(action.target) < 1.8) {
+          if (action.target.normalLabel) action.target.label = action.target.normalLabel;
           action.target.amount = Math.max(0, action.target.amount - 0.5);
+          if (action.target.amount <= 0) action.target.markDepleted();
           this.inventory.wood_log = (this.inventory.wood_log || 0) + 1;
           // Phase 2: woodcutters train gather; remember productive trees.
           {
@@ -1923,19 +2018,28 @@ export class Agent {
           break;
         }
         if (this.distanceTo(action.target) < 1.8) {
+          if (action.target.normalLabel) action.target.label = action.target.normalLabel;
           action.target.amount = Math.max(0, action.target.amount - 0.5);
-          this.inventory.ore_iron = (this.inventory.ore_iron || 0) + 1;
+          if (action.target.amount <= 0) action.target.markDepleted();
+          // Crystal veins yield the rare gem stone castles demand — a distinct
+          // inventory good that flows through deposit -> stockpile -> craft.
+          const isGemNode = action.target.resourceType === "gem";
+          if (isGemNode) {
+            this.inventory.gem_raw = (this.inventory.gem_raw || 0) + 1;
+          } else {
+            this.inventory.ore_iron = (this.inventory.ore_iron || 0) + 1;
+          }
           // Phase 2: mining trains gather too; remember ore veins.
           {
             const stageMul = this.lifeStage === "child" ? 1.5 : (this.lifeStage === "elder" ? 0.5 : 1.0);
             this.gainSkill("gather", 0.05 * stageMul, 5, 1, tickOf(simulation));
             this.rememberNode(Math.floor(action.target.x), Math.floor(action.target.y),
-              "ore", action.target.amount || 1, tickOf(simulation));
+              isGemNode ? "gem" : "ore", action.target.amount || 1, tickOf(simulation));
           }
           if (eventBus) {
             eventBus.emit("RESOURCE_GATHERED", { 
               agentId: this.id, 
-              resourceType: "ore",
+              resourceType: isGemNode ? "gem" : "ore",
               x: action.target.x,
               y: action.target.y
             });
@@ -2202,6 +2306,10 @@ export class Agent {
                 simulation.settlementSystem.depositToStockpile(sid, "ore", this.inventory.ore_iron);
                 this.inventory.ore_iron = 0;
               }
+              if (this.inventory.gem_raw > 0) {
+                simulation.settlementSystem.depositToStockpile(sid, "gem", this.inventory.gem_raw);
+                this.inventory.gem_raw = 0;
+              }
               if (this.inventory.wheat > 1) {
                 const donate = this.inventory.wheat - 1;
                 simulation.settlementSystem.depositToStockpile(sid, "food", donate);
@@ -2429,9 +2537,6 @@ export class Agent {
       const newTileY = Math.floor(newY);
       
       if (world.isWalkable(newTileX, newTileY)) {
-        const oldTileX = Math.floor(this.x);
-        const oldTileY = Math.floor(this.y);
-
         // Emergent paths: repeated foot traffic tramples desire-paths into roads
         // (deterministic — no RNG involved).
         if (world.footTraffic) {
@@ -2442,12 +2547,11 @@ export class Agent {
             world.setRoad(newTileX, newTileY, true);
           }
         }
-        
-        if (oldTileX !== newTileX || oldTileY !== newTileY) {
-          world.removeFromSpatialIndex(oldTileX, oldTileY, this);
-          world.addToSpatialIndex(newTileX, newTileY, this);
-        }
-        
+
+        // Spatial-index maintenance is batched per tick by
+        // Simulation.updateAgents -> WorldState.updateMovedAgents; the old
+        // inline remove/add pair cost two Map lookups per tile crossing.
+
         this.x = newX;
         this.y = newY;
         this.stuckTicks = 0;
@@ -2470,12 +2574,7 @@ export class Agent {
           const tileY = Math.floor(clampedY);
           
           if (world.isWalkable(tileX, tileY)) {
-            const oldTileX = Math.floor(this.x);
-            const oldTileY = Math.floor(this.y);
-            if (oldTileX !== tileX || oldTileY !== tileY) {
-              world.removeFromSpatialIndex(oldTileX, oldTileY, this);
-              world.addToSpatialIndex(tileX, tileY, this);
-            }
+            // Index update deferred to Simulation's batched flush (see above).
             this.x = clampedX;
             this.y = clampedY;
             moved = true;
@@ -2540,6 +2639,10 @@ export class Agent {
       inventory: { ...this.inventory },
       job: this.job,
       jobTitle: this.jobTitle,
+      jobAssignedTick: this._jobAssignedTick ?? 0,
+      // NOTE: Infinity must survive the round-trip (JSON turns it into null);
+      // encode the "settled permanently" sentinel as a string instead.
+      lastJobAssignedTick: this._lastJobAssignedTick === Infinity ? 'inf' : (this._lastJobAssignedTick ?? null),
       workplace: this.workplace,
       settlementId: this.settlementId,
       // Resume determinism: in-flight decision/movement state must survive save/load,
@@ -2652,6 +2755,13 @@ export class Agent {
     };
     agent.job = data.job || null;
     agent.jobTitle = data.jobTitle || null;
+    agent._jobAssignedTick = typeof data.jobAssignedTick === 'number' ? data.jobAssignedTick : 0;
+    // Re-hire patience window must round-trip: the unemployment sweep's
+    // 60-tick cooldown and Infinity "settled" sentinel drive RNG-consuming
+    // decisions, so losing it desyncs save/load resume from a plain run.
+    // 'inf' is the string encoding of Infinity (JSON cannot carry it).
+    agent._lastJobAssignedTick = data.lastJobAssignedTick === 'inf' ? Infinity
+      : (typeof data.lastJobAssignedTick === 'number' ? data.lastJobAssignedTick : null);
     agent.workplace = data.workplace || null;
     agent.settlementId = data.settlementId || null;
     // Resume determinism: restore in-flight decision/movement state.

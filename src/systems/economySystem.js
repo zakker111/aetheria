@@ -144,7 +144,36 @@ export class EconomySystem {
     
     return bestJob;
   }
-  
+
+  // Career-change pool for bored workers: honest village trades only. A
+  // specialist who wants out of their current job picks among these; the
+  // sim-side demand filter may further narrow the list (e.g. don't quit
+  // crafting when the workshop benches are already short-staffed).
+  static CAREER_ALTERNATIVES = ['gatherer', 'farmer', 'lumberjack', 'miner', 'builder'];
+
+  // Deterministic reassignment for an agent who *chose* to switch careers:
+  // pick the highest-scoring qualified job among `candidates` (never their
+  // current role), update both the economy record and the agent's own job
+  // fields, and clear any stale workplace pointer. Zero RNG draws here -
+  // callers roll their dice through the seeded world stream before calling.
+  switchCareer(agent, candidates) {
+    const pool = candidates.filter(j => j !== agent.job && this.jobDefinitions[j]);
+    if (pool.length === 0) return null;
+    const bestJob = this.findBestJob(agent, pool);
+    if (!bestJob || bestJob === 'unemployed' || bestJob === agent.job) return null;
+
+    this.agentJobs.set(agent.id, {
+      job: bestJob,
+      skillLevel: this.calculateSkillLevel(agent, bestJob),
+      experience: 0,
+      assignedAt: this.sim?.clock?.tick ?? 0
+    });
+    agent.job = bestJob;
+    agent.jobTitle = this.jobDefinitions[bestJob]?.name || bestJob;
+    agent.workplace = null; // roster entry released; reconcileCraftsmen prunes it
+    return bestJob;
+  }
+
   // Calculate skill level for job
   calculateSkillLevel(agent, job) {
     const jobDef = this.jobDefinitions[job];

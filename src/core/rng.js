@@ -35,4 +35,16 @@ export class RNG {
     this.seed = state.seed;
     this.state = state.state;
   }
+
+  // Create an independent stream that starts at this stream's current
+  // position. Used by WorldState.deserialize to rehydrate the terrain RNG
+  // without replacing the object identity — agents hold live references to
+  // `world.rng` and share its state as they draw (their own streams advance
+  // the shared one), so swapping the object here would orphan every agent
+  // onto a dead stream and desync save/load resume from uninterrupted runs.
+  static fromState(state) {
+    const rng = new RNG(state.seed);
+    rng.state = state.state;
+    return rng;
+  }
 }

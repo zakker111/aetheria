@@ -1,0 +1,385 @@
+PASS: gossip spreads to at least one agent
+PASS: gossip reaches multiple agents (rumor mill is not dead code)
+PASS: agent 1 gossip cap <= 12
+PASS: agent 1 view on 674 in [-10,10]
+PASS: agent 1 never gossips about themselves
+PASS: agent 1 view on 718 in [-10,10]
+PASS: agent 1 never gossips about themselves
+PASS: agent 3 gossip cap <= 12
+PASS: agent 3 view on 878 in [-10,10]
+PASS: agent 3 never gossips about themselves
+PASS: agent 4 gossip cap <= 12
+PASS: agent 5 gossip cap <= 12
+PASS: agent 6 gossip cap <= 12
+PASS: agent 6 view on 604 in [-10,10]
+PASS: agent 6 never gossips about themselves
+PASS: agent 7 gossip cap <= 12
+PASS: agent 7 view on 674 in [-10,10]
+PASS: agent 7 never gossips about themselves
+PASS: agent 7 view on 718 in [-10,10]
+PASS: agent 7 never gossips about themselves
+PASS: agent 7 view on 756 in [-10,10]
+PASS: agent 7 never gossips about themselves
+PASS: agent 8 gossip cap <= 12
+PASS: agent 8 view on 754 in [-10,10]
+PASS: agent 8 never gossips about themselves
+PASS: agent 10 gossip cap <= 12
+PASS: agent 11 gossip cap <= 12
+PASS: agent 13 gossip cap <= 12
+PASS: agent 14 gossip cap <= 12
+PASS: agent 16 gossip cap <= 12
+PASS: agent 17 gossip cap <= 12
+PASS: agent 18 gossip cap <= 12
+PASS: agent 20 gossip cap <= 12
+PASS: agent 577 gossip cap <= 12
+PASS: agent 577 view on 805 in [-10,10]
+PASS: agent 577 never gossips about themselves
+PASS: agent 577 view on 12 in [-10,10]
+PASS: agent 577 never gossips about themselves
+PASS: agent 577 view on 807 in [-10,10]
+PASS: agent 577 never gossips about themselves
+PASS: agent 578 gossip cap <= 12
+PASS: agent 578 view on 579 in [-10,10]
+PASS: agent 578 never gossips about themselves
+PASS: agent 578 view on 780 in [-10,10]
+PASS: agent 578 never gossips about themselves
+PASS: agent 579 gossip cap <= 12
+PASS: agent 579 view on 15 in [-10,10]
+PASS: agent 579 never gossips about themselves
+PASS: agent 579 view on 594 in [-10,10]
+PASS: agent 579 never gossips about themselves
+PASS: agent 579 view on 738 in [-10,10]
+PASS: agent 579 never gossips about themselves
+PASS: agent 579 view on 595 in [-10,10]
+PASS: agent 579 never gossips about themselves
+PASS: agent 585 gossip cap <= 12
+PASS: agent 585 view on 740 in [-10,10]
+PASS: agent 585 never gossips about themselves
+PASS: agent 585 view on 755 in [-10,10]
+PASS: agent 585 never gossips about themselves
+PASS: agent 585 view on 14 in [-10,10]
+PASS: agent 585 never gossips about themselves
+PASS: agent 586 gossip cap <= 12
+PASS: agent 586 view on 875 in [-10,10]
+PASS: agent 586 never gossips about themselves
+PASS: agent 586 view on 897 in [-10,10]
+PASS: agent 586 never gossips about themselves
+PASS: agent 593 gossip cap <= 12
+PASS: agent 593 view on 15 in [-10,10]
+PASS: agent 593 never gossips about themselves
+PASS: agent 593 view on 622 in [-10,10]
+PASS: agent 593 never gossips about themselves
+PASS: agent 594 gossip cap <= 12
+PASS: agent 594 view on 15 in [-10,10]
+PASS: agent 594 never gossips about themselves
+PASS: agent 594 view on 595 in [-10,10]
+PASS: agent 594 never gossips about themselves
+PASS: agent 594 view on 579 in [-10,10]
+PASS: agent 594 never gossips about themselves
+PASS: agent 594 view on 593 in [-10,10]
+PASS: agent 594 never gossips about themselves
+PASS: agent 595 gossip cap <= 12
+PASS: agent 595 view on 15 in [-10,10]
+PASS: agent 595 never gossips about themselves
+PASS: agent 595 view on 593 in [-10,10]
+PASS: agent 595 never gossips about themselves
+PASS: agent 595 view on 617 in [-10,10]
+PASS: agent 595 never gossips about themselves
+PASS: agent 595 view on 594 in [-10,10]
+PASS: agent 595 never gossips about themselves
+PASS: agent 604 gossip cap <= 12
+PASS: agent 604 view on 15 in [-10,10]
+PASS: agent 604 never gossips about themselves
+PASS: agent 604 view on 605 in [-10,10]
+PASS: agent 604 never gossips about themselves
+PASS: agent 604 view on 6 in [-10,10]
+PASS: agent 604 never gossips about themselves
+PASS: agent 606 gossip cap <= 12
+PASS: agent 606 view on 6 in [-10,10]
+PASS: agent 606 never gossips about themselves
+PASS: agent 606 view on 604 in [-10,10]
+PASS: agent 606 never gossips about themselves
+PASS: agent 606 view on 878 in [-10,10]
+PASS: agent 606 never gossips about themselves
+PASS: agent 617 gossip cap <= 12
+PASS: agent 617 view on 15 in [-10,10]
+PASS: agent 617 never gossips about themselves
+PASS: agent 617 view on 12 in [-10,10]
+PASS: agent 617 never gossips about themselves
+PASS: agent 617 view on 595 in [-10,10]
+PASS: agent 617 never gossips about themselves
+PASS: agent 617 view on 877 in [-10,10]
+PASS: agent 617 never gossips about themselves
+PASS: agent 617 view on 787 in [-10,10]
+PASS: agent 617 never gossips about themselves
+PASS: agent 617 view on 769 in [-10,10]
+PASS: agent 617 never gossips about themselves
+PASS: agent 622 gossip cap <= 12
+PASS: agent 622 view on 15 in [-10,10]
+PASS: agent 622 never gossips about themselves
+PASS: agent 635 gossip cap <= 12
+PASS: agent 664 gossip cap <= 12
+PASS: agent 664 view on 12 in [-10,10]
+PASS: agent 664 never gossips about themselves
+PASS: agent 664 view on 622 in [-10,10]
+PASS: agent 664 never gossips about themselves
+PASS: agent 664 view on 743 in [-10,10]
+PASS: agent 664 never gossips about themselves
+PASS: agent 664 view on 907 in [-10,10]
+PASS: agent 664 never gossips about themselves
+PASS: agent 674 gossip cap <= 12
+PASS: agent 674 view on 1 in [-10,10]
+PASS: agent 674 never gossips about themselves
+PASS: agent 675 gossip cap <= 12
+PASS: agent 693 gossip cap <= 12
+PASS: agent 703 gossip cap <= 12
+PASS: agent 714 gossip cap <= 12
+PASS: agent 718 gossip cap <= 12
+PASS: agent 718 view on 1 in [-10,10]
+PASS: agent 718 never gossips about themselves
+PASS: agent 718 view on 674 in [-10,10]
+PASS: agent 718 never gossips about themselves
+PASS: agent 718 view on 756 in [-10,10]
+PASS: agent 718 never gossips about themselves
+PASS: agent 718 view on 696 in [-10,10]
+PASS: agent 718 never gossips about themselves
+PASS: agent 718 view on 7 in [-10,10]
+PASS: agent 718 never gossips about themselves
+PASS: agent 729 gossip cap <= 12
+PASS: agent 730 gossip cap <= 12
+PASS: agent 730 view on 577 in [-10,10]
+PASS: agent 730 never gossips about themselves
+PASS: agent 730 view on 780 in [-10,10]
+PASS: agent 730 never gossips about themselves
+PASS: agent 737 gossip cap <= 12
+PASS: agent 738 gossip cap <= 12
+PASS: agent 738 view on 14 in [-10,10]
+PASS: agent 738 never gossips about themselves
+PASS: agent 738 view on 579 in [-10,10]
+PASS: agent 738 never gossips about themselves
+PASS: agent 740 gossip cap <= 12
+PASS: agent 740 view on 755 in [-10,10]
+PASS: agent 740 never gossips about themselves
+PASS: agent 740 view on 769 in [-10,10]
+PASS: agent 740 never gossips about themselves
+PASS: agent 742 gossip cap <= 12
+PASS: agent 742 view on 593 in [-10,10]
+PASS: agent 742 never gossips about themselves
+PASS: agent 742 view on 703 in [-10,10]
+PASS: agent 742 never gossips about themselves
+PASS: agent 743 gossip cap <= 12
+PASS: agent 743 view on 577 in [-10,10]
+PASS: agent 743 never gossips about themselves
+PASS: agent 744 gossip cap <= 12
+PASS: agent 745 gossip cap <= 12
+PASS: agent 745 view on 595 in [-10,10]
+PASS: agent 745 never gossips about themselves
+PASS: agent 745 view on 579 in [-10,10]
+PASS: agent 745 never gossips about themselves
+PASS: agent 754 gossip cap <= 12
+PASS: agent 754 view on 780 in [-10,10]
+PASS: agent 754 never gossips about themselves
+PASS: agent 755 gossip cap <= 12
+PASS: agent 755 view on 787 in [-10,10]
+PASS: agent 755 never gossips about themselves
+PASS: agent 755 view on 595 in [-10,10]
+PASS: agent 755 never gossips about themselves
+PASS: agent 756 gossip cap <= 12
+PASS: agent 756 view on 1 in [-10,10]
+PASS: agent 756 never gossips about themselves
+PASS: agent 756 view on 674 in [-10,10]
+PASS: agent 756 never gossips about themselves
+PASS: agent 756 view on 718 in [-10,10]
+PASS: agent 756 never gossips about themselves
+PASS: agent 767 gossip cap <= 12
+PASS: agent 767 view on 617 in [-10,10]
+PASS: agent 767 never gossips about themselves
+PASS: agent 768 gossip cap <= 12
+PASS: agent 768 view on 577 in [-10,10]
+PASS: agent 768 never gossips about themselves
+PASS: agent 768 view on 743 in [-10,10]
+PASS: agent 768 never gossips about themselves
+PASS: agent 769 gossip cap <= 12
+PASS: agent 769 view on 593 in [-10,10]
+PASS: agent 769 never gossips about themselves
+PASS: agent 769 view on 866 in [-10,10]
+PASS: agent 769 never gossips about themselves
+PASS: agent 770 gossip cap <= 12
+PASS: agent 771 gossip cap <= 12
+PASS: agent 771 view on 788 in [-10,10]
+PASS: agent 771 never gossips about themselves
+PASS: agent 773 gossip cap <= 12
+PASS: agent 773 view on 579 in [-10,10]
+PASS: agent 773 never gossips about themselves
+PASS: agent 773 view on 806 in [-10,10]
+PASS: agent 773 never gossips about themselves
+PASS: agent 773 view on 787 in [-10,10]
+PASS: agent 773 never gossips about themselves
+PASS: agent 780 gossip cap <= 12
+PASS: agent 780 view on 745 in [-10,10]
+PASS: agent 780 never gossips about themselves
+PASS: agent 781 gossip cap <= 12
+PASS: agent 781 view on 703 in [-10,10]
+PASS: agent 781 never gossips about themselves
+PASS: agent 785 gossip cap <= 12
+PASS: agent 785 view on 577 in [-10,10]
+PASS: agent 785 never gossips about themselves
+PASS: agent 786 gossip cap <= 12
+PASS: agent 787 gossip cap <= 12
+PASS: agent 787 view on 617 in [-10,10]
+PASS: agent 787 never gossips about themselves
+PASS: agent 787 view on 853 in [-10,10]
+PASS: agent 787 never gossips about themselves
+PASS: agent 788 gossip cap <= 12
+PASS: agent 788 view on 12 in [-10,10]
+PASS: agent 788 never gossips about themselves
+PASS: agent 788 view on 754 in [-10,10]
+PASS: agent 788 never gossips about themselves
+PASS: agent 789 gossip cap <= 12
+PASS: agent 792 gossip cap <= 12
+PASS: agent 796 gossip cap <= 12
+PASS: agent 799 gossip cap <= 12
+PASS: agent 805 gossip cap <= 12
+PASS: agent 806 gossip cap <= 12
+PASS: agent 806 view on 14 in [-10,10]
+PASS: agent 806 never gossips about themselves
+PASS: agent 807 gossip cap <= 12
+PASS: agent 807 view on 617 in [-10,10]
+PASS: agent 807 never gossips about themselves
+PASS: agent 808 gossip cap <= 12
+PASS: agent 816 gossip cap <= 12
+PASS: agent 816 view on 866 in [-10,10]
+PASS: agent 816 never gossips about themselves
+PASS: agent 818 gossip cap <= 12
+PASS: agent 818 view on 755 in [-10,10]
+PASS: agent 818 never gossips about themselves
+PASS: agent 818 view on 740 in [-10,10]
+PASS: agent 818 never gossips about themselves
+PASS: agent 830 gossip cap <= 12
+PASS: agent 830 view on 807 in [-10,10]
+PASS: agent 830 never gossips about themselves
+PASS: agent 837 gossip cap <= 12
+PASS: agent 838 gossip cap <= 12
+PASS: agent 840 gossip cap <= 12
+PASS: agent 840 view on 577 in [-10,10]
+PASS: agent 840 never gossips about themselves
+PASS: agent 849 gossip cap <= 12
+PASS: agent 849 view on 577 in [-10,10]
+PASS: agent 849 never gossips about themselves
+PASS: agent 849 view on 877 in [-10,10]
+PASS: agent 849 never gossips about themselves
+PASS: agent 850 gossip cap <= 12
+PASS: agent 851 gossip cap <= 12
+PASS: agent 852 gossip cap <= 12
+PASS: agent 852 view on 921 in [-10,10]
+PASS: agent 852 never gossips about themselves
+PASS: agent 853 gossip cap <= 12
+PASS: agent 853 view on 787 in [-10,10]
+PASS: agent 853 never gossips about themselves
+PASS: agent 854 gossip cap <= 12
+PASS: agent 855 gossip cap <= 12
+PASS: agent 855 view on 14 in [-10,10]
+PASS: agent 855 never gossips about themselves
+PASS: agent 856 gossip cap <= 12
+PASS: agent 857 gossip cap <= 12
+PASS: agent 857 view on 853 in [-10,10]
+PASS: agent 857 never gossips about themselves
+PASS: agent 857 view on 787 in [-10,10]
+PASS: agent 857 never gossips about themselves
+PASS: agent 857 view on 579 in [-10,10]
+PASS: agent 857 never gossips about themselves
+PASS: agent 857 view on 595 in [-10,10]
+PASS: agent 857 never gossips about themselves
+PASS: agent 860 gossip cap <= 12
+PASS: agent 860 view on 875 in [-10,10]
+PASS: agent 860 never gossips about themselves
+PASS: agent 860 view on 897 in [-10,10]
+PASS: agent 860 never gossips about themselves
+PASS: agent 860 view on 913 in [-10,10]
+PASS: agent 860 never gossips about themselves
+PASS: agent 860 view on 850 in [-10,10]
+PASS: agent 860 never gossips about themselves
+PASS: agent 860 view on 586 in [-10,10]
+PASS: agent 860 never gossips about themselves
+PASS: agent 866 gossip cap <= 12
+PASS: agent 872 gossip cap <= 12
+PASS: agent 872 view on 743 in [-10,10]
+PASS: agent 872 never gossips about themselves
+PASS: agent 872 view on 4 in [-10,10]
+PASS: agent 872 never gossips about themselves
+PASS: agent 875 gossip cap <= 12
+PASS: agent 875 view on 897 in [-10,10]
+PASS: agent 875 never gossips about themselves
+PASS: agent 875 view on 850 in [-10,10]
+PASS: agent 875 never gossips about themselves
+PASS: agent 875 view on 586 in [-10,10]
+PASS: agent 875 never gossips about themselves
+PASS: agent 875 view on 913 in [-10,10]
+PASS: agent 875 never gossips about themselves
+PASS: agent 876 gossip cap <= 12
+PASS: agent 877 gossip cap <= 12
+PASS: agent 878 gossip cap <= 12
+PASS: agent 878 view on 769 in [-10,10]
+PASS: agent 878 never gossips about themselves
+PASS: agent 879 gossip cap <= 12
+PASS: agent 879 view on 1 in [-10,10]
+PASS: agent 879 never gossips about themselves
+PASS: agent 879 view on 7 in [-10,10]
+PASS: agent 879 never gossips about themselves
+PASS: agent 887 gossip cap <= 12
+PASS: agent 897 gossip cap <= 12
+PASS: agent 897 view on 850 in [-10,10]
+PASS: agent 897 never gossips about themselves
+PASS: agent 897 view on 586 in [-10,10]
+PASS: agent 897 never gossips about themselves
+PASS: agent 897 view on 913 in [-10,10]
+PASS: agent 897 never gossips about themselves
+PASS: agent 903 gossip cap <= 12
+PASS: agent 907 gossip cap <= 12
+PASS: agent 907 view on 921 in [-10,10]
+PASS: agent 907 never gossips about themselves
+PASS: agent 911 gossip cap <= 12
+PASS: agent 913 gossip cap <= 12
+PASS: agent 914 gossip cap <= 12
+PASS: agent 914 view on 745 in [-10,10]
+PASS: agent 914 never gossips about themselves
+PASS: agent 920 gossip cap <= 12
+PASS: agent 921 gossip cap <= 12
+PASS: agent 924 gossip cap <= 12
+PASS: agent 930 gossip cap <= 12
+PASS: agent 938 gossip cap <= 12
+PASS: agent 941 gossip cap <= 12
+PASS: agent 941 view on 593 in [-10,10]
+PASS: agent 941 never gossips about themselves
+PASS: agent 941 view on 986 in [-10,10]
+PASS: agent 941 never gossips about themselves
+PASS: agent 942 gossip cap <= 12
+PASS: agent 942 view on 852 in [-10,10]
+PASS: agent 942 never gossips about themselves
+PASS: agent 942 view on 921 in [-10,10]
+PASS: agent 942 never gossips about themselves
+PASS: agent 947 gossip cap <= 12
+PASS: agent 953 gossip cap <= 12
+PASS: agent 954 gossip cap <= 12
+PASS: agent 958 gossip cap <= 12
+PASS: agent 965 gossip cap <= 12
+PASS: agent 967 gossip cap <= 12
+PASS: agent 969 gossip cap <= 12
+PASS: agent 970 gossip cap <= 12
+PASS: agent 973 gossip cap <= 12
+PASS: agent 983 gossip cap <= 12
+PASS: agent 984 gossip cap <= 12
+PASS: agent 986 gossip cap <= 12
+PASS: agent 987 gossip cap <= 12
+PASS: agent 987 view on 986 in [-10,10]
+PASS: agent 987 never gossips about themselves
+PASS: agent 988 gossip cap <= 12
+PASS: agent 990 gossip cap <= 12
+PASS: agent 992 gossip cap <= 12
+PASS: agent 993 gossip cap <= 12
+PASS: agent 994 gossip cap <= 12
+PASS: agent 995 gossip cap <= 12
+PASS: agent 998 gossip cap <= 12
+PASS: affect read runs with mixed evidence
+PASS: gossip state survives save/load and resume is deterministic
+GOSSIP OK
