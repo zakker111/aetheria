@@ -1,0 +1,4 @@
+PASS: same-seed runs are identical
+PASS: different seeds diverge
+PASS: save/load resume matches uninterrupted run
+DETERMINISM OK

@@ -89,6 +89,19 @@ class CraftingSystem {
             // No 'fire' requirement: general village workshops bake fine.
             // Smeltery-style recipes still demand a specialized subtype.
         });
+
+        // Rare-goods lapidary: cut raw gems into polished jewels. Gems only
+        // come from scarce crystal veins (miners), and finished jewels are a
+        // luxury trade good + civic prestige item for grand buildings.
+        this.addRecipe('gem_to_jewel', {
+            id: 'gem_to_jewel',
+            name: 'Cut Jewel',
+            input: { type: 'gem_raw', amount: 2 },
+            output: { type: 'jewel', amount: 1 },
+            time: 90,
+            skill: 'crafting',
+            tool: 'lapidary'
+        });
     }
 
     addRecipe(id, recipe) {
@@ -341,8 +354,10 @@ class CraftingSystem {
     autoQueue(workshop) {
         if (workshop.queue.length > 0 || workshop.activeTask) return false;
         // Planks first: raw logs are the most common haul and sawmilling is
-        // the backbone of the finished-goods trade loop.
-        const order = ['log_to_plank', 'wheat_to_flour', 'flour_plus_water_to_bread', 'ore_to_ingot'];
+        // the backbone of the finished-goods trade loop. Jewels last: only a
+        // workshop holding rare gem_raw will ever queue them (miners must
+        // first prospect a crystal vein), keeping luxury output genuinely rare.
+        const order = ['log_to_plank', 'wheat_to_flour', 'flour_plus_water_to_bread', 'ore_to_ingot', 'gem_to_jewel'];
         for (const rid of order) {
             const r = this.recipes.get(rid);
             if (r && this.canCraft(workshop, r)) {

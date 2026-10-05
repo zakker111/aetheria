@@ -66,7 +66,21 @@ export class Simulation {
   // The fallback is a lazily-created fixed-seed stream (never Math.random)
   // so standalone/test usage stays reproducible.
   _rng() {
-    if (this.world.rng) return this.world.rng;
+    // Determinism: every randomness consumer in a Simulation must share ONE
+    // stream object. Agents hold a live reference to world.rng from birth and
+    // mutate that object's state with each draw; if any code path ever swaps
+    // world.rng for a new object, agents keep drawing on the orphan while the
+    // sim draws on the replacement and the run forks. `_agentRng` caches the
+    // canonical stream so _rng() always returns the very object the agents
+    // were wired to — even after a deserialization replaced world.rng.
+    if (this.world.rng && this._agentRng !== this.world.rng) {
+      if (!this._agentRng) {
+        this._agentRng = this.world.rng; // first use: adopt as canonical
+      } else {
+        this.world.rng = this._agentRng; // re-point the world at the shared stream
+      }
+    }
+    if (this._agentRng) return this._agentRng;
     if (!this._fallbackRng) this._fallbackRng = new RNG(0);
     return this._fallbackRng;
   }
@@ -103,6 +117,14 @@ export class Simulation {
     // Ground loot piles (Phase 1 deep economy): dropped by the dead, scavenged
     // by the living. Kept out of the spatial index; scanned directly per tick.
     this.groundItems = [];
+    // Career-change ("boredom") state: the 60-tick re-hire window below is a
+    // determinism guard so released workers never churn every economy pass;
+    // the demand snapshot is recomputed once per pass and read by the
+    // boredom sweep (e.g. craftsmen only quit when benches are already full).
+    this._jobDemand = { needsBuilders: new Set(), needsFood: new Set(), craftsmanSurplus: new Set() };
+    // Anti-churn guard: counts forced re-hires per agent. After a few failed
+    // job hunts an agent settles into their role permanently (see below).
+    this._jobChangeCount = new Map();
     this.birthsThisSession = 0;
     this.deathsThisSession = 0;
 
@@ -311,7 +333,7 @@ export class Simulation {
       agent.job = assigned;
       agent.jobTitle = assigned.charAt(0).toUpperCase() + assigned.slice(1);
       if (this.economySystem) {
-        this.economySystem.agentJobs.set(agent.id, { job: assigned, salary: 12, satisfaction: 85 });
+        this.economySystem.agentJobs.set(agent.id, { job: assigned, salary: 12, satisfaction: 85, assignedAt: 0 });
       }
     }
 
@@ -758,18 +780,31 @@ export class Simulation {
       // food producers) so agents can voluntarily switch jobs when needed.
       const needsBuilders = new Set();
       const needsFood = new Set();
+      const craftsmanSurplus = new Set();
       for (const [sid, settlement] of this.settlementSystem.settlements) {
-        let builders = 0, foodWorkers = 0;
+        let builders = 0, foodWorkers = 0, craftsmen = 0;
         for (const agentId of settlement.agentIds) {
           const a = this.agents.find(x => x.id === agentId);
           if (!a || !a.alive) continue;
           if (a.job === 'builder') builders++;
-          else if (a.job === 'farmer' || a.job === 'gatherer' || a.job === 'lumberjack') foodWorkers++;
+          else if (a.job === 'craftsman') craftsmen++;
+          else if (a.job !== 'unemployed') foodWorkers++;
         }
         const pop = settlement.agentIds.size;
         if (pop >= 2 && builders === 0) needsBuilders.add(sid);
         if (pop >= 3 && foodWorkers <= 1) needsFood.add(sid);
+        // Workshop staffing target: one bench-worker per ~3 residents, capped
+        // at 4 per workshop building. When a town's craftsman roster exceeds
+        // that target the surplus hands are free to answer the call of
+        // boredom and retrain (see _updateCareerChanges). Zero RNG here.
+        const wsCount = this.buildings.reduce((n, b) =>
+          n + (b.settlementId === sid && b.buildingType === 'workshop' && b.complete ? 1 : 0), 0);
+        const wsCap = Math.max(1, wsCount) * 4;
+        const target = Math.min(wsCap, Math.max(2, Math.floor(pop / 3)));
+        if (craftsmen > target) craftsmanSurplus.add(sid);
       }
+      // Publish the demand snapshot for the voluntary career-change pass.
+      this._jobDemand = { needsBuilders, needsFood, craftsmanSurplus };
       // Any pending construction anywhere raises builder demand
       const hasPendingWork = this.buildings.some(b => !b.complete && (b.constructionProgress || 0) < 100);
 
@@ -779,7 +814,22 @@ export class Simulation {
           if (agent && agent.alive) {
             const currentJob = this.economySystem.getAgentJob(agentId);
             if (!currentJob || currentJob.job === 'unemployed') {
+              // Determinism guard: without this window, agents released from
+              // workshops (removeWorker sets job='unemployed') were instantly
+              // re-hired as craftsmen on the next 10-tick pass - the churn
+              // loop that made whole towns permanently craftsmen. Give them
+              // 60 ticks to seek other work first.
+              if (this.clock.tick - (agent._lastJobAssignedTick ?? -9999) < 60) continue;
+              // Churn guard: an agent bounced between "unemployed" and hired
+              // several times keeps failing to hold a post (workshop roster
+              // pressure, missing skills). Let them settle permanently rather
+              // than ping-pong the whole town through the same cycle.
+              const attempts = (this._jobChangeCount.get(agent.id) || 0) + 1;
+              this._jobChangeCount.set(agent.id, attempts);
+              if (attempts > 3) { agent._lastJobAssignedTick = Infinity; continue; }
               this.economySystem.assignJob(agent, availableJobs);
+              agent._lastJobAssignedTick = this.clock.tick;
+              agent._jobAssignedTick = this.clock.tick;
             } else if (agent.lifeStage === 'adult' && this.clock.tick % 40 === 0 &&
                        agent.personality.curious > 0.4) {
               // Career change: switch role if the community is short-staffed
@@ -792,6 +842,9 @@ export class Simulation {
                 if (needsBuilders.has(homeSid) && hasPendingWork && agent.job !== 'builder' &&
                     agent.skills.build >= 1.2) {
                   this.economySystem.assignJob(agent, ['builder']);
+                  agent._jobAssignedTick = this.clock.tick;
+                  agent._lastJobAssignedTick = this.clock.tick;
+                  this._jobChangeCount.set(agent.id, (this._jobChangeCount.get(agent.id) || 0) + 1);
                 } else if (needsFood.has(homeSid) && agent.job !== 'farmer' && agent.job !== 'gatherer' &&
                            agent.job !== 'lumberjack' && agent.job !== 'hunter' &&
                            // Protect the workshop roster: poaching craftsmen
@@ -800,19 +853,32 @@ export class Simulation {
                            // granaries overflowed.
                            agent.job !== 'craftsman') {
                   this.economySystem.assignJob(agent, ['farmer', 'gatherer', 'lumberjack']);
+                  agent._jobAssignedTick = this.clock.tick;
+                  agent._lastJobAssignedTick = this.clock.tick;
+                  this._jobChangeCount.set(agent.id, (this._jobChangeCount.get(agent.id) || 0) + 1);
                 }
               }
             }
           }
         }
       }
-      // Also ensure any unemployed agent receives a role
+      // Also ensure any unemployed agent receives a role (same 60-tick
+      // patience window - no instant re-hiring churn).
       for (const agent of this.agents) {
         if (agent.alive && (!agent.job || agent.job === 'unemployed')) {
+          if (this.clock.tick - (agent._lastJobAssignedTick ?? -9999) < 60) continue;
+          const attempts = (this._jobChangeCount.get(agent.id) || 0) + 1;
+          this._jobChangeCount.set(agent.id, attempts);
+          if (attempts > 3) { agent._lastJobAssignedTick = Infinity; continue; }
           this.economySystem.assignJob(agent, availableJobs);
+          agent._lastJobAssignedTick = this.clock.tick;
+          agent._jobAssignedTick = this.clock.tick;
         }
       }
     }
+
+    // Voluntary career changes: bored specialists switch trades on their own.
+    this._updateCareerChanges();
     
     // Update market prices periodically
     if (this.clock.tick % 50 === 0) {
@@ -831,6 +897,85 @@ export class Simulation {
     }
   }
   
+  // Voluntary career changes ("I feel bored / I want something else").
+  // Every few days of village time, settled adults who have been stuck in the
+  // same trade for a long while may quit and retrain. Motivation is a mix of
+  // personality (curious & restless types switch more often; diligent ones
+  // stay put), how stale the current job feels, and community demand:
+  //   - craftsmen only leave when their town's workshop benches are already
+  //     over-staffed (protects the crafting -> distribution -> trade pipeline),
+  //   - builders/farmers only leave when their role isn't critically short,
+  //   - hungry towns actively recruit ex-craftsmen toward food trades first.
+  // All randomness flows through the seeded world RNG in deterministic agent
+  // order, so save/load resume stays bit-identical to an uninterrupted run.
+  _updateCareerChanges() {
+    if (this.clock.tick % 20 !== 0) return;
+    const demand = this._jobDemand;
+    const rng = this._rng();
+
+    for (const agent of this.agents) {
+      if (!agent.alive || agent.lifeStage !== 'adult') continue;
+      const rec = this.economySystem.getAgentJob(agent.id);
+      if (!rec || !rec.job || rec.job === 'unemployed') continue;
+      // Tenure clock: agent-side field (serialized with the agent, so it
+      // survives save/load) with the economy record as a fallback for legacy
+      // records created before this feature existed.
+      const assignedAt = Math.max(
+        typeof agent._jobAssignedTick === 'number' ? agent._jobAssignedTick : -1,
+        typeof rec.assignedAt === 'number' ? rec.assignedAt : -1);
+      if (assignedAt < 0 || this.clock.tick - assignedAt < 600) continue; // still fresh on the job
+
+      const p26 = agent.personality;
+      // Restlessness: curious + low diligence + a dash of social wanderlust.
+      const restlessness = (p26.curious ?? 0.5) * 0.5
+        + (1 - (p26.industrious ?? 0.7)) * 0.35
+        + (p26.social ?? 0.5) * 0.15;
+      // Staleness grows with tenure (caps at ~2000 ticks on the same bench).
+      const staleness = Math.min(1, (this.clock.tick - assignedAt) / 2000);
+      const chance = restlessness * (0.04 + 0.10 * staleness);
+      if (rng.next() >= chance) continue;
+
+      // Where do we work relative to where we live? (No cross-town poaching.)
+      const homeSid = this.settlementSystem.getAgentSettlement(agent.id)?.id ?? null;
+      const jobSid = this._jobSettlementId(agent);
+      if (jobSid != null && homeSid != null && jobSid !== homeSid) continue;
+
+      // Role-specific permission to quit, given what the town needs.
+      let pool = EconomySystem.CAREER_ALTERNATIVES.filter(j => j !== rec.job);
+      if (rec.job === 'craftsman') {
+        if (!demand.craftsmanSurplus.has(homeSid)) continue; // benches need us
+        if (demand.needsFood.has(homeSid)) pool = ['farmer', 'gatherer', 'lumberjack'];
+      } else if (rec.job === 'builder') {
+        if (demand.needsBuilders.has(homeSid)) continue; // the town needs walls
+      } else if (rec.job === 'farmer' || rec.job === 'gatherer' || rec.job === 'lumberjack') {
+        if (demand.needsFood.has(homeSid)) continue; // the granaries need us
+      }
+      if (pool.length === 0) continue;
+
+      const newJob = this.economySystem.switchCareer(agent, pool);
+      if (!newJob) continue;
+      agent._lastJobAssignedTick = this.clock.tick;
+      agent._jobAssignedTick = this.clock.tick;
+      this._jobChangeCount.delete(agent.id); // a chosen trade is held, not hunted
+
+      // A workshop hand hanging up their tools leaves the roster immediately
+      // (reconcileCraftsmen prunes the stale entry next tick otherwise).
+      if (agent.workplace && this.craftingSystem?.workshops?.has(agent.workplace)) {
+        this.craftingSystem.removeWorker(agent.workplace, agent.id);
+      }
+
+      this.eventBus.emit("CAREER_CHANGED", {
+        agentId: agent.id,
+        name: agent.name,
+        from: rec.job,
+        to: newJob,
+        reason: staleness > 0.6 ? "bored" : "wanderlust",
+        settlementId: homeSid,
+        tick: this.clock.tick
+      });
+    }
+  }
+
   updateCrafting() {
     // Update all workshops and crafting progress
     this.craftingSystem.update();
@@ -926,6 +1071,9 @@ export class Simulation {
 
   updateAgents() {
     const births = [];
+    // Agents whose position changed this tick; index repositioned
+    // in one batched flush after the decision loop (see below).
+    const moved = [];
 
     // Rebuild the incomplete-construction shortlist once per tick.
     if (this._incompleteBuildingsTick !== this.clock.tick) {
@@ -948,8 +1096,15 @@ export class Simulation {
       // Update needs (includes aging and death check)
       agent.updateNeeds();
       
-      // Perceive world using spatial index (much more efficient than passing all entities)
-      const perception = agent.perceive(this.world, []);
+      // Pass 1: prepare perception state for ALL agents before any of them
+      // acts, so nobody observes a neighbor's post-decision teleport from
+      // this tick. The expensive spatial scan is lazy: Agent.generateActions
+      // runs it (via needScan()) only when a goal actually reads the nearby-
+      // entity lists. Here we only reset the reusable arrays and mark the
+      // snapshot stale, plus fill ground loot (cheap direct scan — loot
+      // piles stay out of the spatial index on purpose).
+      const perception = agent._ensurePerception();
+      agent.invalidatePerception();
 
       // Ground loot is a small list — scan directly instead of polluting the
       // entity spatial index (which would slow every perception query).
@@ -962,7 +1117,14 @@ export class Simulation {
           }
         }
       }
-      
+    }
+
+    // Pass 2: decide and act on the pass-1 snapshots (`agent._perception` is
+    // a reused per-agent object — no allocation).
+    for (const agent of this.agents) {
+      if (!agent.alive) continue;
+      const perception = agent._perception;
+
       // Generate goals
       agent.generateGoals(this, perception);
       
@@ -983,7 +1145,9 @@ export class Simulation {
       const chosenAction = agent.chooseAction(actions, { targetGossip });
       
       // Execute action with crafting system and simulation references
+      const px = agent.x, py = agent.y;
       const result = agent.executeAction(chosenAction, this.world, this.eventBus, this.craftingSystem, this);
+      if (agent.x !== px || agent.y !== py) moved.push(agent);
       
       // Handle birth result
       if (result && result.type === "birth") {
@@ -991,6 +1155,12 @@ export class Simulation {
       }
     }
     
+    // Batched spatial-index repositioning for everything that moved this
+    // tick (one Map remove/add pair per tile-crossing agent, replacing the
+    // inline pair inside moveToward). Between rebuilds the index is
+    // approximate by design; rebuildSpatialIndex() stays the authority.
+    this.world.updateMovedAgents(moved);
+
     // Create newborn agents
     for (const birth of births) {
       if (this.world.isWalkable(Math.floor(birth.x), Math.floor(birth.y))) {
@@ -1033,6 +1203,12 @@ export class Simulation {
         cause: dead.deathCause || "natural"
       });
       this.world.removeFromSpatialIndex(Math.floor(dead.x), Math.floor(dead.y), dead);
+      // If the agent was registered at a drifted cell (updateMovedAgents
+      // tracks that in _sx/_sy), prune that entry too. removeFromSpatialIndex
+      // clears the tracking stamps itself.
+      if (dead._sx !== undefined) {
+        this.world.removeFromSpatialIndex(dead._sx, dead._sy, dead);
+      }
       
       // Stockpile inheritance to community: half of each good goes to the
       // settlement; the other half drops as scavengable loot on the ground
@@ -1362,6 +1538,12 @@ export class Simulation {
         warbands: Array.from(this.warfareSystem.warbands.entries()),
         nextWarbandId: this.warfareSystem.nextWarbandId,
         combatEffects: this.warfareSystem.combatEffects.map(e => ({ ...e }))
+      },
+      // Career-change churn counter (3 failed hires => agent settles
+      // permanently). The unemployment sweep branches on it before consuming
+      // RNG, so a resumed run must see identical counts or it diverges.
+      career: {
+        jobChangeCount: Array.from(this._jobChangeCount.entries())
       }
     };
   }
@@ -1371,8 +1553,18 @@ export class Simulation {
     // consuming RNG draws and creating default entities that then get cleared —
     // both a determinism hazard and wasted work. We restore everything from data.
     const sim = new Simulation(data.seed, 128, 128, { skipInit: true });
+    // Determinism fix: WorldState.deserialize() replaces `world.rng` with a
+    // fresh object restored from the terrain save's stream position. Agents
+    // hold live references to the ORIGINAL world.rng (their behavior draws
+    // mutate that shared object), so after deserialization every agent was
+    // drawing from an orphaned stream while sim._rng()/systems read the new
+    // one — resumed runs diverged from uninterrupted ones on the very first
+    // tick. Adopt the agents' shared stream as canonical BEFORE restoring
+    // state, then write the authoritative saved position onto that single
+    // object (sim._rng() re-points world.rng at it on first call).
+    sim._agentRng = sim.world.rng;
     if (data.rngState) {
-      sim.world.rng.setState(data.rngState);
+      sim._agentRng.setState(data.rngState);
     }
     sim.clock = SimulationClock.deserialize(data.clock);
     sim.idGen.setState(data.idGen);
@@ -1499,6 +1691,12 @@ export class Simulation {
       sim.warfareSystem.combatEffects = Array.isArray(data.warfare.combatEffects)
         ? data.warfare.combatEffects.map(e => ({ ...e }))
         : [];
+    }
+
+    // Restore the career-change churn counter (see serialize()). Legacy saves
+    // without this field simply start fresh — agents keep their jobs.
+    if (data.career && Array.isArray(data.career.jobChangeCount)) {
+      sim._jobChangeCount = new Map(data.career.jobChangeCount);
     }
 
     return sim;
