@@ -331,7 +331,20 @@ export class Agent {
     const MAX_NEARBY_BUILDINGS = r <= 12 ? 6 : 12;
     const MAX_NEARBY_ANIMALS = r <= 12 ? 6 : 12;
 
-    const nearby = world.getEntitiesNear(Math.floor(this.x), Math.floor(this.y), r);
+    // Perf: shared one-scan-per-tile cache (world._scanCache). Dense areas
+    // used to run an identical r^2 tile sweep once per observing agent —
+    // with hundreds of clustered agents that dominated generateActions().
+    // The cache holds the raw cell-membership list for (tile, r): supersets
+    // are never cached, so a cheaper small-radius scan can never poison a
+    // later wide-radius query. Every consumer below re-applies its own exact
+    // circle test and caps, so results match a fresh scan bit-for-bit.
+    // Determinism: pure memoization — no RNG draws, same iteration order.
+    let nearby;
+    if (world && typeof world._getScan === "function") {
+      nearby = world._getScan(Math.floor(this.x), Math.floor(this.y), r);
+    } else {
+      nearby = world.getEntitiesNear(Math.floor(this.x), Math.floor(this.y), r);
+    }
 
     for (const entity of nearby) {
       if (entity.id === this.id) continue;
@@ -1669,6 +1682,25 @@ export class Agent {
     return snap;
   }
 
+  // Resume determinism: in-flight social/hunt/scavenge actions are stored as
+  // flat snapshots (see snapshotAction). When such an action is executed, its
+  // target may be either a live entity (fresh decision this tick) or a plain
+  // {x,y,id} snapshot restored from a save. Resolve snapshots to the live
+  // entity by id so mutation semantics match an uninterrupted run; if the id
+  // is gone from the registry, fall back to the snapshot itself and let the
+  // case's alive/validity checks handle it exactly as before.
+  _resolveLiveTarget(targetOrAction, world) {
+    const t = (targetOrAction && typeof targetOrAction === 'object' && 'target' in targetOrAction)
+      ? targetOrAction.target : targetOrAction;
+    if (!t || typeof t !== 'object') return t ?? null;
+    const needsResolve = t.id != null && typeof t.needs !== 'object' && typeof t.total !== 'function';
+    if (needsResolve && world && typeof world.getEntityById === 'function') {
+      const ent = world.getEntityById(t.id);
+      if (ent) return ent;
+    }
+    return t;
+  }
+
   // Execute action for one tick
   executeAction(action, world, eventBus, craftingSystem, simulation) {
     this.craftingSystem = craftingSystem || this.craftingSystem;
@@ -1706,11 +1738,15 @@ export class Agent {
       }
 
       case "reproduce": {
-        if (!action.target || !action.target.alive) {
+        // Resume determinism: a restored in-flight action carries a flat
+        // target snapshot ({x,y,id}); resolve it to the live agent so mate
+        // state mutations behave exactly like an uninterrupted run.
+        const mate = this._resolveLiveTarget(action, world);
+        if (!mate || !mate.alive) {
           this.currentAction = null;
           break;
         }
-        if (this.distanceTo(action.target) < 2.2) {
+        if (this.distanceTo(mate) < 2.2) {
           this.needs.social = Math.min(100, this.needs.social + 20);
           // Modest reproduction cost — previously 18/18 which starved parents.
           this.needs.food = Math.max(0, this.needs.food - 7);
@@ -1718,9 +1754,9 @@ export class Agent {
           this.children++;
           this.reproduceCooldown = 150; // Sustained cooldown
           
-          action.target.children++;
-          action.target.reproduceCooldown = 150;
-          action.target.needs.social = Math.min(100, action.target.needs.social + 20);
+          mate.children++;
+          mate.reproduceCooldown = 150;
+          mate.needs.social = Math.min(100, mate.needs.social + 20);
           
           const babyX = Math.max(2, Math.min(world.width - 2, this.x + (this.rng.next() - 0.5) * 2));
           const babyY = Math.max(2, Math.min(world.height - 2, this.y + (this.rng.next() - 0.5) * 2));
@@ -1728,35 +1764,36 @@ export class Agent {
           if (eventBus) {
             eventBus.emit("AGENT_BORN", {
               parentId1: this.id,
-              parentId2: action.target.id,
+              parentId2: mate.id,
               x: babyX,
               y: babyY
             });
           }
           
           this.currentAction = null;
-          return { type: "birth", x: babyX, y: babyY, parentId1: this.id, parentId2: action.target.id };
+          return { type: "birth", x: babyX, y: babyY, parentId1: this.id, parentId2: mate.id };
         } else {
-          this.moveToward(action.target, world);
+          this.moveToward(mate, world);
         }
         break;
       }
 
       case "socialize": {
-        if (!action.target || !action.target.alive) {
+        const peer = this._resolveLiveTarget(action, world);
+        if (!peer || !peer.alive) {
           this.currentAction = null;
           break;
         }
-        if (this.distanceTo(action.target) < 2.5) {
+        if (this.distanceTo(peer) < 2.5) {
           this.needs.social = Math.min(100, this.needs.social + 18);
-          action.target.needs.social = Math.min(100, action.target.needs.social + 18);
+          peer.needs.social = Math.min(100, peer.needs.social + 18);
           
-          const relKey = `${action.target.id}`;
+          const relKey = `${peer.id}`;
           const currentRel = this.relationships.get(relKey) || 0;
           this.relationships.set(relKey, Math.min(100, currentRel + 6));
           
           if (simulation && simulation.relationshipSystem) {
-            simulation.relationshipSystem.modifyRelationship(this.id, action.target.id, {
+            simulation.relationshipSystem.modifyRelationship(this.id, peer.id, {
               friendship: 6,
               trust: 3
             });
@@ -1765,26 +1802,26 @@ export class Agent {
           if (eventBus) {
             eventBus.emit("RELATIONSHIP_CHANGED", {
               agentId1: this.id,
-              agentId2: action.target.id,
+              agentId2: peer.id,
               change: 6
             });
           }
           // Memory: both parties remember the good conversation.
-          this.remember("MADE_FRIEND", simulation?.clock?.tick ?? 0, { subjectId: action.target.id, rep: 1 });
-          if (typeof action.target.remember === "function") {
-            action.target.remember("MADE_FRIEND", simulation?.clock?.tick ?? 0, { subjectId: this.id, rep: 1 });
+          this.remember("MADE_FRIEND", simulation?.clock?.tick ?? 0, { subjectId: peer.id, rep: 1 });
+          if (typeof peer.remember === "function") {
+            peer.remember("MADE_FRIEND", simulation?.clock?.tick ?? 0, { subjectId: this.id, rep: 1 });
           }
           if (simulation?.relationshipSystem) {
-            simulation.relationshipSystem.addMemory(this.id, action.target.id, {
-              type: "positive", description: `Shared stories with ${action.target.name}`, impact: 2
+            simulation.relationshipSystem.addMemory(this.id, peer.id, {
+              type: "positive", description: `Shared stories with ${peer.name}`, impact: 2
             });
           }
           // Conversation is a gossip channel: trade second-hand news about
           // mutual acquaintances (bounded, one hop per chat).
-          this._exchangeGossip(action.target, tickOf(simulation));
+          this._exchangeGossip(peer, tickOf(simulation));
           this.currentAction = null;
         } else {
-          this.moveToward(action.target, world);
+          this.moveToward(peer, world);
         }
         break;
       }
@@ -1903,7 +1940,7 @@ export class Agent {
         // Pick up loot from a ground pile: eat edible goods directly if hungry,
         // stash the rest into inventory (capacity respected). Deterministic —
         // no RNG draws. Empty piles get destroyed and pruned by the sim.
-        const pile = action.target;
+        const pile = this._resolveLiveTarget(action, world);
         if (!pile || pile.destroyed || pile.total() <= 0) {
           this.currentAction = null;
           break;
@@ -2254,25 +2291,26 @@ export class Agent {
       }
 
       case "visit_neighbor": {
-        if (!action.target || !action.target.alive) {
+        const neighbor = this._resolveLiveTarget(action, world);
+        if (!neighbor || !neighbor.alive) {
           this.currentAction = null;
           break;
         }
-        if (this.distanceTo(action.target) < 2.5) {
+        if (this.distanceTo(neighbor) < 2.5) {
           // Arrived: say hello and catch up
           this.needs.social = Math.min(100, this.needs.social + 12);
-          action.target.needs.social = Math.min(100, action.target.needs.social + 6);
+          neighbor.needs.social = Math.min(100, neighbor.needs.social + 6);
           if (simulation && simulation.relationshipSystem) {
-            simulation.relationshipSystem.modifyRelationship(this.id, action.target.id, {
+            simulation.relationshipSystem.modifyRelationship(this.id, neighbor.id, {
               friendship: 3
             });
           }
           // Neighborly chats are prime gossip: trade news about others.
-          this._exchangeGossip(action.target, tickOf(simulation));
+          this._exchangeGossip(neighbor, tickOf(simulation));
           this.currentAction = null;
         } else {
           // Follow them around the map — keeps both parties moving
-          this.moveToward(action.target, world);
+          this.moveToward(neighbor, world);
         }
         break;
       }
@@ -2350,7 +2388,7 @@ export class Agent {
         break;
 
       case "hunt": {
-        const prey = action.target;
+        const prey = this._resolveLiveTarget(action, world);
         if (!prey || prey.alive === false) {
           this.currentAction = null;
           break;
@@ -2376,7 +2414,10 @@ export class Agent {
         } else {
           // The chase: sprint after the quarry.
           this.moveToward(prey, world, 1.5);
-          this.currentAction = action;
+          // Store a flat snapshot like every other in-flight action — a live
+          // prey ref here made serialize() emit deep objects, desyncing
+          // save/load resume (determinism).
+          this.currentAction = Agent.snapshotAction(action);
         }
         break;
       }
@@ -2665,6 +2706,11 @@ export class Agent {
       reputation: this.reputation || 0,
       gossipViews: this.gossipViews ? Array.from(this.gossipViews.entries()) : [],
       _gossipHeard: this._gossipHeard ? Array.from(this._gossipHeard.entries()) : [],
+      // Determinism: agents draw from the ONE shared world stream. Persisting
+      // each agent's private stream position lets serialize() be called at any
+      // moment (e.g. autosave during a tick) without forking the resumed run:
+      // deserialize restores that exact position instead of guessing.
+      rngState: this.rng && typeof this.rng.getState === 'function' ? this.rng.getState() : null,
       // Pioneer flag drives behavior branches (local wander vs world-center
       // pull, camp-steered gathering). Deserialized agents never run the
       // constructor, so it must round-trip or a resumed run diverges on the
@@ -2701,7 +2747,7 @@ export class Agent {
     };
   }
 
-  static deserialize(data, idGen, rng = null) {
+  static deserialize(data, idGen, rng = null, world = null, sim = null) {
     // Determinism fix: constructing through `new Agent(...)` here — even with a
     // stubbed RNG — consumed ~13 draws per agent from the restored world.rng
     // stream before it was re-set, desynchronizing save/load resume vs an
@@ -2710,8 +2756,19 @@ export class Agent {
     // instance without running the randomized constructor at all and fill
     // every field directly from data.
     const agent = Object.create(Agent.prototype);
-    agent.sim = null;
+    // sim back-reference must be set here too: RelationshipSystem.deserialize
+    // runs after agents are restored and files memories directly onto them,
+    // so addAgent()'s late assignment would miss those writes (resume bug).
+    agent.sim = sim || null;
     agent.rng = rng || new RNG(0); // live seeded stream for future behavior
+    // Determinism: restore the exact stream position captured at save time
+    // (see serialize()). All agents share one object, so every restore is a
+    // no-op except the last one, which leaves the shared stream precisely
+    // where the saved world left it — even if serialize() ran mid-tick.
+    // Legacy saves without the field keep the current position (unchanged).
+    if (data.rngState && typeof agent.rng.setState === 'function') {
+      agent.rng.setState(data.rngState);
+    }
     agent.relationships = new Map(); // transient runtime map (rebuilt by RelationshipSystem)
     agent.id = data.id;
     agent.type = "agent";
@@ -2765,8 +2822,32 @@ export class Agent {
     agent.workplace = data.workplace || null;
     agent.settlementId = data.settlementId || null;
     // Resume determinism: restore in-flight decision/movement state.
+    // Resume determinism: goals/currentAction are serialized as plain
+    // {x,y,id} snapshots (live entity refs would make the save circular).
+    // Re-link them to the restored world entities by id so that a resumed
+    // run continues its in-flight action instead of bailing out on a
+    // snapshot-only target and re-deciding from scratch (which diverged
+    // from an uninterrupted run within ~10 ticks). Ids absent from the
+    // registry keep their coordinate snapshots — identical to the old
+    // behavior, and safe for systems that only read x/y.
+    const relinkTarget = (t) => {
+      if (!t || typeof t !== 'object') return t ?? null;
+      if (t.id != null && world && typeof world.getEntityById === 'function') {
+        const ent = world.getEntityById(t.id);
+        if (ent) return ent;
+      }
+      return t;
+    };
+    // Keep currentAction as the flat snapshot exactly as an uninterrupted run
+    // stores it (executeAction re-snapshots every tick). Live-target consumers
+    // (socialize/reproduce/hunt/scavenge/visit_neighbor) resolve the snapshot
+    // by id at execution time via _resolveLiveTarget — relinking here instead
+    // would serialize back as deep objects and desync resume determinism.
     agent.currentAction = data.currentAction ?? null;
-    agent.goals = Array.isArray(data.goals) ? data.goals.slice() : [];
+    agent.goals = Array.isArray(data.goals) ? data.goals.map(g => {
+      if (g && g.target) return { ...g, target: relinkTarget(g.target) };
+      return g;
+    }) : [];
     agent.path = Array.isArray(data.path) ? data.path.map(p => ({ x: p.x, y: p.y })) : null;
     agent.wanderTicks = data.wanderTicks || 0;
     agent.stuckTicks = data.stuckTicks || 0;

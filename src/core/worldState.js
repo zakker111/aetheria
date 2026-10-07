@@ -35,6 +35,9 @@ export class WorldState {
 
     // Spatial index for fast queries (doc 02: spatial indexes)
     this.spatialIndex = new Map();
+    // Shared per-tick perception scan cache (see _getScan). Never serialized;
+    // always empty at tick boundaries because updateAgents() clears it.
+    this._scanCache = new Map();
 
     // Entity registry: id -> entity (O(1) lookups; kept in sync by add/removeFromSpatialIndex)
     this.entityRegistry = new Map();
@@ -674,6 +677,8 @@ export class WorldState {
       entity._sx = Math.floor(x);
       entity._sy = Math.floor(y);
     }
+    // Scan cache holds raw cell lists — any mutation invalidates it all.
+    this.invalidateScanCache();
   }
 
   removeFromSpatialIndex(x, y, entity) {
@@ -690,6 +695,7 @@ export class WorldState {
       entity._sx = undefined;
       entity._sy = undefined;
     }
+    this.invalidateScanCache();
   }
 
   // Batched per-tick index maintenance for moving entities. Agents drift out
@@ -756,6 +762,33 @@ export class WorldState {
       }
     }
     return entities;
+  }
+
+  // ── Shared per-tick scan cache ─────────────────────────────────────────
+  // Agent perception queries getEntitiesNear() from every agent every tick;
+  // in dense settlements hundreds of agents on the same tile repeat an
+  // identical r^2 sweep. `_getScan` memoizes the raw cell-membership list
+  // per (tile, radius) for one tick only. Safety contract:
+  //  * The cached array is a SUPERSET-safe raw list (square bound only —
+  //    callers must still apply their own exact distance test). It is never
+  //    mutated after caching except by invalidation below, and consumers
+  //    only read it.
+  //  * Any spatial-index mutation (entity moved/added/removed, rebuild)
+  //    calls invalidateScanCache(), clearing every entry — stale lists can
+  //    never survive into a later query.
+  //  * Results are bit-identical to a fresh getEntitiesNear() call: same
+  //    cells, same insertion order, no RNG involved. Determinism preserved.
+  _getScan(x, y, r) {
+    const key = `${x},${y},${r}`;
+    let list = this._scanCache.get(key);
+    if (list !== undefined) return list;
+    list = this.getEntitiesNear(x, y, r);
+    this._scanCache.set(key, list);
+    return list;
+  }
+
+  invalidateScanCache() {
+    if (this._scanCache.size > 0) this._scanCache.clear();
   }
 
   // Helper methods for systems to query nearby entities

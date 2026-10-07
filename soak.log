@@ -1,5 +1,0 @@
-ticks=3000 seed=1234
-population=49 births=80 deaths=22
-settlements=4 buildings=67 resources=693
-avgTickMs=3.629 maxTickMs=67.33 wallSec=10.9
-SOAK OK

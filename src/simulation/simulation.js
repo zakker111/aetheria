@@ -1161,6 +1161,12 @@ export class Simulation {
     // approximate by design; rebuildSpatialIndex() stays the authority.
     this.world.updateMovedAgents(moved);
 
+    // Belt-and-suspenders: the scan cache is already invalidated by every
+    // spatial-index mutation, but clearing it at the tick boundary also
+    // bounds memory and guarantees no entry can ever be read after a later
+    // mutation path that bypasses addToSpatialIndex/removeFromSpatialIndex.
+    this.world.invalidateScanCache();
+
     // Create newborn agents
     for (const birth of births) {
       if (this.world.isWalkable(Math.floor(birth.x), Math.floor(birth.y))) {
@@ -1598,17 +1604,35 @@ export class Simulation {
       sim.world.bridgeTiles = new Uint8Array(data.world.bridgeTiles || new Uint8Array(sim.world.width * sim.world.height));
     }
     
-    // Restore entities
-    for (const agentData of data.agents) {
-      const agent = Agent.deserialize(agentData, sim.idGen, sim.world.rng);
-      sim.addAgent(agent);
-      sim.world.addToSpatialIndex(Math.floor(agent.x), Math.floor(agent.y), agent);
-    }
-    
+    // Restore entities. Ordering matters for resume determinism: resources
+    // and buildings are created (and registered in world.entityRegistry)
+    // BEFORE agents, because Agent.deserialize re-links goal/action target
+    // ids against the registry — an agent restored first could never resolve
+    // a building/resource target and would re-decide from scratch on resume.
     for (const resourceData of data.resources) {
       const resource = Resource.deserialize(resourceData, sim.idGen);
       sim.resources.push(resource);
-      sim.world.addToSpatialIndex(Math.floor(resource.x), Math.floor(resource.y), resource);
+      // Match rebuildSpatialIndex(): depleted nodes stay OUT of the spatial
+      // index until they refill. Registering them here made a resumed world
+      // perceive "amount 0" trees/veins that an uninterrupted run cannot see,
+      // changing action scores on the very first resumed tick (determinism).
+      if (resource.depleted !== true && resource.amount > 0) {
+        sim.world.addToSpatialIndex(Math.floor(resource.x), Math.floor(resource.y), resource);
+      }
+      sim.world.entityRegistry.set(resource.id, resource);
+    }
+
+    for (const buildingData of data.buildings) {
+      const building = Building.deserialize(buildingData, sim.idGen);
+      sim.buildings.push(building);
+      sim.world.addToSpatialIndex(Math.floor(building.x), Math.floor(building.y), building);
+      sim.world.entityRegistry.set(building.id, building);
+    }
+
+    for (const agentData of data.agents) {
+      const agent = Agent.deserialize(agentData, sim.idGen, sim.world.rng, sim.world, sim);
+      sim.addAgent(agent);
+      sim.world.addToSpatialIndex(Math.floor(agent.x), Math.floor(agent.y), agent);
     }
 
     // Ground loot piles: plain world objects — no spatial index entry needed.
@@ -1616,12 +1640,6 @@ export class Simulation {
     sim.groundItems = [];
     for (const itemData of data.groundItems || []) {
       sim.groundItems.push(GroundItem.deserialize(itemData, sim.idGen));
-    }
-    
-    for (const buildingData of data.buildings) {
-      const building = Building.deserialize(buildingData, sim.idGen);
-      sim.buildings.push(building);
-      sim.world.addToSpatialIndex(Math.floor(building.x), Math.floor(building.y), building);
     }
     
     // Restore Phase 1 systems (Complete)
