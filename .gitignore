@@ -1,16 +1,6 @@
-# Logs and temporary files
+# Dependencies
+node_modules/
+
+# Logs and temp files
 *.log
-
-# Profiling output directories
-profnow/
-profout/
-profout2/
-
-# Temporary debug/probe scripts (optional, but often generated during dev)
-# Note: The prompt asks to ignore based on rules. These are .mjs source-like files. 
-# Rule 6 says if ONLY source/config and NO build artifacts/temp -> empty. 
-# However, there ARE .log files and profiling outputs (.cpuprofile is a binary/artifact).
-# So we must ignore the artifacts.
-
-# CPU Profiles (Binary/Artifact)
-*.cpuprofile
+*.out
