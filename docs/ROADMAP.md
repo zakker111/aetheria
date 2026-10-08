@@ -161,6 +161,7 @@ Aetheria is a 2D god simulation game where players influence a living world, man
 - [ ] **Scenario Mode**: 
   - Pre-defined challenges (Survive winter, Defeat the Orc King).
   - Victory/Defeat conditions.
+  - ⚠️ *Design note:* per [CORE_DESIGN_RULES.md](CORE_DESIGN_RULES.md) Rules 13 & 20, win states are secondary to emergent storytelling — scenarios must not become mandatory micromanagement.
 
 ---
 

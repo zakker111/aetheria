@@ -1,7 +1,9 @@
 # 01 — Game Pillars
 
+> These pillars are a condensed expression of the full design constitution in [CORE_DESIGN_RULES.md](CORE_DESIGN_RULES.md). If this summary and the core rules ever disagree, **CORE_DESIGN_RULES.md wins**.
+
 ## Fantasy
-The player is a visible-but-remote god. The world continues acting without the player.
+The player is a visible-but-remote god. The world continues acting without the player. The primary experience loop is: Watch → Notice → Inspect → Understand → Intervene → Wait → Discover.
 
 ## Pillars
 1. **Autonomous people** — people have needs, goals, skills, relationships and memory.
