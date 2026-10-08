@@ -2,6 +2,8 @@
 
 A browser-based god simulation game built with pure JavaScript and ES modules where players influence a living world, manage resources, spawn agents, and watch civilizations emerge.
 
+> **Design constitution:** all features are governed by [docs/CORE_DESIGN_RULES.md](docs/CORE_DESIGN_RULES.md) — *"Aetheria is not about controlling the world. It is about watching the world become a story."* The loop: **WATCH → NOTICE → INSPECT → UNDERSTAND → INTERVENE → WAIT → DISCOVER**.
+
 ## 🎮 Project Overview
 
 Aetheria is a 2D god simulation game featuring a robust entity-component-system architecture. Watch autonomous agents form settlements, develop relationships, and build societies while you shape their world as a deity.

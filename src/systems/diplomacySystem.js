@@ -146,20 +146,120 @@ export class DiplomacySystem {
           if (rel.score >= 38) {
             rel.status = DIPLOMATIC_STATUS.PEACE;
           } else if (rel.score <= 12 && rel.truceUntilTick <= tick) {
-            // High probability of war declaration if one side is militaristic or hungry
-            const s1Food = s1.stockpile?.food ?? 20;
-            const s2Food = s2.stockpile?.food ?? 20;
-            const aggro = Math.max(belligerence1, belligerence2);
-
-            if (aggro > 0.4 || (s1Food < 8 && s2Food > 20) || (s2Food < 8 && s1Food > 20)) {
-              const attackerId = belligerence1 >= belligerence2 ? s1.id : s2.id;
-              const defenderId = attackerId === s1.id ? s2.id : s1.id;
-              this.declareWar(attackerId, defenderId, "Border Skirmish & Granary Raid", tick);
+            // Evaluate all potential casus belli for each direction and pick the best-justified war
+            const grievance = this.evaluateCasusBelli(s1, s2);
+            if (grievance) {
+              this.declareWar(grievance.attackerId, grievance.defenderId, grievance.reason, tick);
             }
           }
         }
       }
     }
+  }
+
+  /**
+   * Dominant faith of a settlement: majority beliefId among its living agents.
+   * Deterministic — iterates sim.agents Map in insertion order.
+   */
+  dominantFaith(settlement) {
+    const counts = new Map();
+    for (const agent of this.sim.agents.values()) {
+      if (!agent.alive || agent.settlementId !== settlement.id) continue;
+      const b = agent.religion?.beliefId;
+      if (!b) continue;
+      counts.set(b, (counts.get(b) || 0) + 1);
+    }
+    let best = null, bestN = 0;
+    for (const [belief, n] of counts) {
+      if (n > bestN) { best = belief; bestN = n; }
+    }
+    return best;
+  }
+
+  /**
+   * Casus belli engine: scores every plausible grievance in BOTH directions and
+   * returns the best-justified war ({ attackerId, defenderId, reason, score }) or null.
+   * Causes: resource hunger, diplomatic rift, religious difference, cultural militarism drift.
+   * Purely deterministic (no RNG) so save/load resumes behave identically.
+   */
+  evaluateCasusBelli(s1, s2) {
+    const candidates = [];
+    const pairs = [[s1, s2], [s2, s1]]; // [attacker, defender] orientations
+
+    // Precompute dominant faiths once per pair evaluation
+    const faith1 = this.dominantFaith(s1);
+    const faith2 = this.dominantFaith(s2);
+
+    for (const [att, def] of pairs) {
+      const attFood = att.stockpile?.food ?? 20;
+      const defFood = def.stockpile?.food ?? 20;
+      const attOre = att.stockpile?.ore ?? 10;
+      const defOre = def.stockpile?.ore ?? 10;
+      const attWood = att.stockpile?.wood ?? 15;
+      const defWood = def.stockpile?.wood ?? 15;
+      const belligerence = att.culture?.values?.belligerence ?? 0.3;
+
+      // 1) Resource hunger — starving/impoverished attacker eyes richer neighbor's stockpiles
+      const foodGap = defFood - attFood;
+      if (attFood < 10 && defFood > 18) {
+        candidates.push({ attackerId: att.id, defenderId: def.id,
+          reason: "Resource Wars — Granary Hunger",
+          score: 30 + Math.min(40, foodGap * 2) });
+      }
+      const oreGap = defOre - attOre;
+      if (attOre < 6 && defOre > 12) {
+        candidates.push({ attackerId: att.id, defenderId: def.id,
+          reason: "Resource Wars — Ore Greed",
+          score: 25 + Math.min(30, oreGap * 1.5) });
+      }
+      const woodGap = defWood - attWood;
+      if (attWood < 6 && defWood > 15) {
+        candidates.push({ attackerId: att.id, defenderId: def.id,
+          reason: "Resource Wars — Timber Raids",
+          score: 22 + Math.min(25, woodGap) });
+      }
+
+      // 2) Diplomatic rift — deep mutual distrust / betrayed proximity friction
+      const rel = this.getRelation(s1.id, s2.id);
+      if (rel && rel.score <= 12) {
+        candidates.push({ attackerId: att.id, defenderId: def.id,
+          reason: "Diplomatic Rift — Border Skirmish",
+          score: 20 + (12 - rel.score) * 1.5 });
+      }
+
+      // 3) Religious difference — zealous attacker vs heretic neighbor of a different faith
+      const attFaith = att.id === s1.id ? faith1 : faith2;
+      const defFaith = att.id === s1.id ? faith2 : faith1;
+      if (attFaith && defFaith && attFaith !== defFaith) {
+        // Zealotry proxy: average faith of attacker's believers of that creed
+        let zealSum = 0, zealN = 0;
+        for (const agent of this.sim.agents.values()) {
+          if (!agent.alive || agent.settlementId !== att.id) continue;
+          if (agent.religion?.beliefId === attFaith) {
+            zealSum += agent.religion.faith ?? 50;
+            zealN++;
+          }
+        }
+        const zeal = zealN > 0 ? zealSum / zealN : 0;
+        if (zeal >= 65) {
+          candidates.push({ attackerId: att.id, defenderId: def.id,
+            reason: "Holy War — Crusade Against Heretics",
+            score: 28 + (zeal - 65) * 1.2 });
+        }
+      }
+
+      // 4) Cultural militarism drift — highly belligerent society picking fights
+      if (belligerence > 0.55) {
+        candidates.push({ attackerId: att.id, defenderId: def.id,
+          reason: "Militarist Aggression — Conquest",
+          score: 15 + belligerence * 35 });
+      }
+    }
+
+    if (candidates.length === 0) return null;
+    // Deterministic pick: highest score; tie-break by attacker id then defender id
+    candidates.sort((a, b) => (b.score - a.score) || (a.attackerId - b.attackerId) || (a.defenderId - b.defenderId));
+    return candidates[0];
   }
 
   declareWar(attackerId, defenderId, casusBelli = "Territorial Conquest", tick = 0) {
