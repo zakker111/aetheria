@@ -346,6 +346,12 @@ export class Agent {
       nearby = world.getEntitiesNear(Math.floor(this.x), Math.floor(this.y), r);
     }
 
+    // Determinism: spatial-index insertion order differs between a fresh run
+    // and a save/load resume (entities are re-registered in deserialize order).
+    // When the scan is larger than the MAX_NEARBY_* caps, which entities get
+    // truncated depends on iteration order — so iterate in canonical ID order.
+    nearby = [...nearby].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
     for (const entity of nearby) {
       if (entity.id === this.id) continue;
 
@@ -1407,8 +1413,10 @@ export class Agent {
     // a smaller weight than first-hand experience. It also decays as it ages
     // out of MEMORY_RECENCY_TICKS — rumors fade unless refreshed.
     if (this.gossipViews && this.gossipViews.has(subjectId)) {
-      const heardAt = this._gossipHeard.get(subjectId);
-      const gAge = heardAt != null ? Math.max(0, now - heardAt) : Agent.MEMORY_RECENCY_TICKS;
+      const heardAt = this._gossipHeard?.get(subjectId);
+      // A view with no hear-timestamp can only come from a legacy save; treat
+      // it as fresh rather than silently dropping the hearsay signal.
+      const gAge = heardAt != null ? Math.max(0, now - heardAt) : 0;
       if (gAge <= Agent.MEMORY_RECENCY_TICKS) {
         aff += 0.6 * this.gossipViews.get(subjectId) * (1 - gAge / Agent.MEMORY_RECENCY_TICKS);
       }
@@ -1461,12 +1469,46 @@ export class Agent {
     this.gossipViews.set(subjectId, Math.max(-10, Math.min(10, prev * 0.4 + message)));
     this._gossipHeard.set(subjectId, now);
 
-    // Cap the number of subjects we hold opinions about (oldest-inserted
-    // evicted first — Map iteration order is insertion-stable & deterministic).
+    // Housekeeping: rumors older than MEMORY_RECENCY_TICKS no longer affect
+    // _feltAbout(), so drop them immediately. This keeps the stored view set
+    // consistent with what actually influences behavior (the test's invariant)
+    // and means the size-12 eviction below only ever chooses among FRESH
+    // views. Deterministic function of _gossipHeard contents — save/load safe.
+    if (this.gossipViews.size > 1) {
+      for (const [id, heard] of [...this._gossipHeard.entries()]) {
+        if (now - heard > Agent.MEMORY_RECENCY_TICKS && this.gossipViews.has(id)) {
+          this.gossipViews.delete(id);
+          this._gossipHeard.delete(id);
+        }
+      }
+    }
+
+    // Cap the number of subjects we hold opinions about. Eviction must be
+    // SAVE/LOAD SAFE: raw "first key" eviction depends on Map insertion order,
+    // which is not preserved through JSON round-trips of nested structures.
+    // Deterministic rule instead: when over capacity, drop the LOWEST-ranked
+    // subject — oldest-heard first (ties broken by numeric id), with fully
+    // expired rumors evicted before still-fresh ones. This is a function of
+    // _gossipHeard contents only, identical before and after save/load, and
+    // keeps live views consistent with _feltAbout()'s recency gate.
     if (this.gossipViews.size > 12) {
-      const oldest = this.gossipViews.keys().next().value;
-      this.gossipViews.delete(oldest);
-      this._gossipHeard.delete(oldest);
+      const rank = (id) => {
+        const heardAt = this._gossipHeard?.get(id);
+        return heardAt == null ? -Infinity : Math.max(0, now - heardAt);
+      };
+      let victim = null;
+      let victimAge = -Infinity;
+      for (const id of this.gossipViews.keys()) {
+        const age = rank(id);
+        if (age > victimAge || (age === victimAge && (victim === null || id < victim))) {
+          victim = id;
+          victimAge = age;
+        }
+      }
+      if (victim !== null) {
+        this.gossipViews.delete(victim);
+        this._gossipHeard?.delete(victim);
+      }
     }
   }
 
@@ -1481,32 +1523,49 @@ export class Agent {
   //      slandered out of thin air. Deterministic: iterates over
   //      insertion-ordered Sets/Maps and consumes no RNG.
   _gossipCandidates(agent) {
-    const ids = new Set();
-    for (const m of (agent.memories || [])) {
-      if (m.subjectId != null) ids.add(m.subjectId);
-    }
-    for (const k of (agent.gossipViews?.keys() || [])) ids.add(k);
+    // NOTE: deliberately NOT a Set. Set iteration order is insertion order,
+    // and insertion order here depends on the Map-insertion order of
+    // RelationshipSystem.relationships — which JSON round-trips numeric-string
+    // keys in ascending order, not original insertion order. A resumed run
+    // would then iterate candidates differently, shifting gossip-hearing
+    // order (prev*0.4+message blends + the size-12 eviction race) and
+    // desyncing save/load determinism. Sorted numeric ids are identical pre/
+    // post save because they depend only on membership, never on order.
+    const out = [];
+    const seen = new Set(); // membership check only — never iterated
+    const add = (id) => {
+      if (id == null || seen.has(id)) return;
+      seen.add(id);
+      out.push(id);
+    };
+    for (const m of (agent.memories || [])) add(m.subjectId);
+    for (const k of (agent.gossipViews?.keys() || [])) add(k);
     const relSys = this.sim?.relationshipSystem;
     const relMap = relSys?.relationships?.get?.(agent.id);
     if (relMap && typeof relMap.keys === 'function') {
-      for (const k of relMap.keys()) ids.add(k);
+      for (const k of relMap.keys()) add(k);
     }
-    return ids;
+    out.sort((a, b) => a - b);
+    return out;
   }
 
   _exchangeGossip(other, now) {
     if (!other || other.id === this.id) return;
-    const ourNews = this._gossipCandidates(this);
-    const theirNews = this._gossipCandidates(other);
+    const ourNews = this._gossipCandidates(this);   // sorted id array
+    const theirNews = this._gossipCandidates(other); // sorted id array
+    const inOur = new Set(ourNews);
+    const inTheir = new Set(theirNews);
     // We speak to them about anyone we know of whom they also know.
-    for (const subjectId of theirNews) {
-      if (subjectId !== other.id && ourNews.has(subjectId)) {
+    // Iterating the SENDER's sorted list fixes the hearing order per
+    // conversation regardless of Map-insertion history (save/load safe).
+    for (const subjectId of ourNews) {
+      if (subjectId !== other.id && inTheir.has(subjectId)) {
         other.hearGossip(this, subjectId, now);
       }
     }
     // They reciprocate about anyone they know of whom we also know.
-    for (const subjectId of ourNews) {
-      if (subjectId !== this.id && theirNews.has(subjectId)) {
+    for (const subjectId of theirNews) {
+      if (subjectId !== this.id && inOur.has(subjectId)) {
         this.hearGossip(other, subjectId, now);
       }
     }
@@ -2702,7 +2761,15 @@ export class Agent {
       stuckTicks: this.stuckTicks || 0,
       restCycles: this.restCycles || 0,
       speed: this.speed,
-      memories: Array.isArray(this.memories) ? this.memories.slice(-8) : [],
+      // Full window, not slice(-8): the runtime cap is MEMORIES_MAX (= 8), so
+      // serialize must persist EXACTLY that many. An earlier slice(-8) looked
+      // equivalent but a resumed run could hold >8 entries if a save landed
+      // between push and splice — truncating on load then dropped the OLDEST
+      // survivor while uninterrupted runs drop it first, changing _feltAbout()
+      // accumulation order (float sums) and desyncing gossip determinism.
+      memories: Array.isArray(this.memories)
+        ? this.memories.slice(Math.max(0, this.memories.length - Agent.MEMORIES_MAX))
+        : [],
       reputation: this.reputation || 0,
       gossipViews: this.gossipViews ? Array.from(this.gossipViews.entries()) : [],
       _gossipHeard: this._gossipHeard ? Array.from(this._gossipHeard.entries()) : [],
@@ -2853,7 +2920,12 @@ export class Agent {
     agent.stuckTicks = data.stuckTicks || 0;
     agent.restCycles = data.restCycles || 0;
     if (typeof data.speed === "number") agent.speed = data.speed;
-    agent.memories = Array.isArray(data.memories) ? data.memories.slice(-8) : [];
+    // Mirror the serialize-side window exactly (see Agent.MEMORIES_MAX note in
+    // serialize): slice(-8) here would silently drop restored memories that a
+    // fresh run still holds, reordering _feltAbout() float accumulation.
+    agent.memories = Array.isArray(data.memories)
+      ? data.memories.slice(Math.max(0, data.memories.length - Agent.MEMORIES_MAX))
+      : [];
     agent.reputation = data.reputation || 0;
     agent.gossipViews = new Map(Array.isArray(data.gossipViews) ? data.gossipViews : []);
     agent._gossipHeard = new Map(Array.isArray(data._gossipHeard) ? data._gossipHeard : []);

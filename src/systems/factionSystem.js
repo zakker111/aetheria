@@ -514,8 +514,11 @@ export class FactionSystem {
     };
   }
   
-  static deserialize(data) {
-    const system = new FactionSystem();
+  static deserialize(data, sim = null) {
+    // Determinism: foundedAt/startedAt/signedAt and faction RNG draws read
+    // this.sim — without the back-reference a resumed run falls back to
+    // Date.now()/private streams and desyncs save/load.
+    const system = new FactionSystem(sim);
     
     system.factions = new Map(
       data.factions.map(([id, f]) => [

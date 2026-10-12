@@ -321,8 +321,13 @@ export class EconomySystem {
     };
   }
   
-  static deserialize(data) {
-    const system = new EconomySystem();
+  static deserialize(data, sim = null) {
+    // Determinism: the sim back-reference matters — assignJob()/market events
+    // stamp `this.sim?.clock?.tick ?? Date.now()`. Without it a resumed run
+    // silently falls back to wall-clock (Date.now()), corrupting job-staleness
+    // math in Simulation's reassignment pass and desyncing save/load within
+    // ~30 ticks. Restore the reference exactly like RelationshipSystem does.
+    const system = new EconomySystem(sim);
     
     system.agentJobs = new Map(data.agentJobs);
     system.marketPrices = data.marketPrices || { ...system.marketPrices };

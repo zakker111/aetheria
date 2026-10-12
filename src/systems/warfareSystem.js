@@ -28,7 +28,7 @@ export class WarfareSystem {
     if (!settlement) return null;
 
     // Check if settlement already has an active warband
-    for (const [id, wb] of this.warbands) {
+    for (const wb of this.warbands.values()) {
       if (wb.settlementId === settlementId && wb.active) {
         if (targetSettlementId && !wb.targetSettlementId) {
           wb.targetSettlementId = targetSettlementId;
@@ -64,30 +64,49 @@ export class WarfareSystem {
     // Equip soldiers with weapons and gear from settlement stockpile
     const hasOre = (settlement.stockpile?.ore ?? 0) >= 2;
     const hasWood = (settlement.stockpile?.wood ?? 0) >= 2;
+    // Step 3: forged spears in the stockpile are real weapons — each recruit
+    // draws one (deterministically, in recruitment order). A smithing
+    // settlement marches an armed warband; a poor one marches farmers with
+    // hoes. Visible quality difference on the battlefield.
+    let spearStock = Math.floor(settlement.stockpile?.weapon_spear ?? 0);
 
     recruited.forEach((soldier, idx) => {
       soldier.militaryDuty = true;
       soldier.warbandId = warbandId;
       soldier.job = "soldier";
       soldier.combatRole = idx === 0 ? "commander" : (role === "defense" ? "shieldbearer" : "vanguard");
-      
+
       // Weaponry and defense
-      soldier.hasWeapon = hasOre || (soldier.inventory.tool_pickaxe || soldier.inventory.tool_axe);
+      const armed = spearStock > 0;
+      if (armed) {
+        spearStock--;
+        settlement.stockpile.weapon_spear = (settlement.stockpile.weapon_spear || 0) - 1;
+        soldier.inventory.weapon_spear = (soldier.inventory.weapon_spear || 0) + 1;
+      }
+      soldier.hasWeapon = armed || hasOre || !!(soldier.inventory.tool_pickaxe || soldier.inventory.tool_axe);
       soldier.hasShield = role === "defense" || hasWood;
-      
+
+      // Training + equipment determine combat stats.
+      const training = soldier.skills?.combat ?? 1.0;
+      const weaponDamage = armed ? 22 : (soldier.hasWeapon ? 15 : 9);
+      const dmg = Math.round(weaponDamage * (0.8 + 0.2 * training));
+      const def = (soldier.hasShield ? 0.35 : 0.1) + Math.min(0.15, (training - 1) * 0.05);
+
       if (!soldier.combat) {
         soldier.combat = {
           health: 100,
           maxHealth: 100,
-          damage: soldier.hasWeapon ? 18 : 10,
-          defense: soldier.hasShield ? 0.35 : 0.1,
-          range: 1.8,
+          damage: dmg,
+          defense: def,
+          range: armed ? 2.2 : 1.8,
           attackCooldown: 0,
-          attackSpeed: 45
+          attackSpeed: armed ? 40 : 45
         };
       } else {
-        soldier.combat.damage = soldier.hasWeapon ? 18 : 10;
-        soldier.combat.defense = soldier.hasShield ? 0.35 : 0.1;
+        soldier.combat.damage = dmg;
+        soldier.combat.defense = def;
+        soldier.combat.range = armed ? 2.2 : 1.8;
+        soldier.combat.attackSpeed = armed ? 40 : 45;
       }
     });
 
@@ -107,6 +126,7 @@ export class WarfareSystem {
       targetSettlementId,
       marchTarget,
       morale: 100,
+      initialSize: recruited.length,
       active: true,
       plunderCargo: { food: 0, wood: 0, ore: 0 }
     };
@@ -148,7 +168,7 @@ export class WarfareSystem {
 
   // Demobilize warbands for a settlement when peace is signed
   demobilizeSettlement(settlementId) {
-    for (const [id, wb] of this.warbands) {
+    for (const wb of this.warbands.values()) {
       if (wb.settlementId === settlementId && wb.active) {
         wb.active = false;
         wb.state = "disbanded";
@@ -176,7 +196,7 @@ export class WarfareSystem {
     }
 
     // 2. Update active warbands
-    for (const [id, warband] of this.warbands) {
+    for (const warband of this.warbands.values()) {
       if (!warband.active) continue;
       this.updateWarband(warband);
     }
@@ -206,6 +226,24 @@ export class WarfareSystem {
         warband.active = false;
         return;
       }
+    }
+
+    // Step 3: a band whose morale collapses breaks and routs home. This is
+    // the "losing side penalty" — casualties drain morale, low morale drains
+    // further fights, and routed bands abandon the field instead of dying
+    // to a last stand. Deterministic (no RNG draw needed).
+    if (warband.morale <= 25 && warband.state !== "retreating") {
+      warband.state = "retreating";
+      if (this.sim.eventBus) {
+        this.sim.eventBus.emit("WARBAND_ROUTED", {
+          warbandId: warband.id, settlementName: warband.settlementName
+        });
+      }
+    }
+    // Wounded, under-strength bands retreat too (fewer than 1/3 remain).
+    const initialSize = warband.initialSize ?? warband.soldiers.length;
+    if (warband.soldiers.length > 0 && warband.soldiers.length * 3 < initialSize && warband.state !== "retreating") {
+      warband.state = "retreating";
     }
 
     // Execute state behavior
@@ -326,8 +364,13 @@ export class WarfareSystem {
 
     attacker.combat.attackCooldown = attacker.combat.attackSpeed;
 
+    // Step 3: fighting trains soldiers — combat skill rises with experience
+    // (capped), and veteran veterans hit harder via the live-skill bonus.
+    if (attacker.gainSkill) attacker.gainSkill("combat", 0.02, 5, 1, this.sim.clock?.tick ?? 0);
+    const veteranBonus = 1 + Math.min(0.3, ((attacker.skills?.combat ?? 1.0) - 1.0) * 0.1);
+
     // Damage formula
-    const rawDmg = attacker.combat.damage + (this.sim.world.rng.next() * 4 - 2);
+    const rawDmg = attacker.combat.damage * veteranBonus + (this.sim.world.rng.next() * 4 - 2);
     const def = defender.combat.defense || 0;
     const finalDmg = Math.max(2, Math.round(rawDmg * (1 - def)));
 
@@ -345,6 +388,21 @@ export class WarfareSystem {
     if (defender.needs.health <= 0) {
       defender.alive = false;
       this.sim.deathsThisSession++;
+
+      // Step 3: war casualties leave scavengable gear behind — spears, tools
+      // and half of carried goods drop as a ground loot pile via the same
+      // deterministic system used for all deaths.
+      if (defender.inventory) {
+        defender.inventory.weapon_spear = undefined;
+        delete defender.inventory.weapon_spear;
+      }
+      this.sim.dropInventoryOnGround(defender);
+
+      // Morale swing: losing a man hurts your band, emboldens the enemy's.
+      const killerBand = this.warbands.get(attacker.warbandId);
+      const victimBand = this.warbands.get(defender.warbandId);
+      if (killerBand) killerBand.morale = Math.min(100, killerBand.morale + 4);
+      if (victimBand) victimBand.morale = Math.max(0, victimBand.morale - 6);
       
       // Record war casualty
       if (this.sim.diplomacySystem) {

@@ -4,7 +4,6 @@
  */
 
 import { ENTITY_TYPES, BUILDING_TYPES } from '../core/constants.js';
-import { distance } from '../utils/math.js';
 
 export class UIManager {
     constructor(worldState, canvas, renderer) {
