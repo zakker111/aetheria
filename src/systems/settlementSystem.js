@@ -165,7 +165,7 @@ export class SettlementSystem {
       // Look for existing settlement nearby
       let matchedSettlement = null;
       let minDistance = 24; // Generous settlement radius
-      for (const [id, s] of this.settlements) {
+      for (const s of this.settlements.values()) {
         const d = Math.hypot(s.center.x - centerX, s.center.y - centerY);
         if (d < minDistance) {
           minDistance = d;

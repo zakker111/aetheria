@@ -2,38 +2,6 @@
 import { WorldState } from "../core/worldState.js";
 import { RNG } from "../core/rng.js";
 
-// Deterministic deep-clone for save data. Replaces JSON.parse(JSON.stringify())
-// round-trips, which are fragile here: live objects nested inside serialized
-// state (e.g. a building reference captured in an agent's currentAction) can
-// carry circular back-references to the Simulation and throw mid-save —
-// silently corrupting future saves. This clone drops functions and breaks
-// cycles instead of crashing; everything else (numbers, strings, arrays,
-// plain objects, Maps/Sets via their own serialize() output) is preserved
-// bit-for-bit, so save/load determinism is unchanged.
-function cloneSaveValue(value, seen = new WeakSet()) {
-  if (value === null || typeof value !== "object") {
-    return typeof value === "function" ? undefined : value;
-  }
-  if (typeof value === "function") return undefined;
-  if (seen.has(value)) return "[Circular]";
-  seen.add(value);
-  let out;
-  if (Array.isArray(value)) {
-    out = [];
-    for (const item of value) {
-      const c = cloneSaveValue(item, seen);
-      if (c !== undefined) out.push(c);
-    }
-  } else {
-    out = {};
-    for (const k of Object.keys(value)) {
-      const c = cloneSaveValue(value[k], seen);
-      if (c !== undefined) out[k] = c;
-    }
-  }
-  seen.delete(value);
-  return out;
-}
 import { SimulationClock } from "./clock.js";
 import { EntityStore } from "./entityStore.js";
 import { EventBus } from "../core/eventBus.js";
@@ -883,7 +851,7 @@ export class Simulation {
     // Update market prices periodically
     if (this.clock.tick % 50 === 0) {
       const settlementResources = new Map();
-      for (const [id, settlement] of this.settlementSystem.settlements) {
+      for (const id of this.settlementSystem.settlements.keys()) {
         const stats = this.settlementSystem.getSettlementStats(id);
         if (stats) {
           settlementResources.set(id, {
@@ -1034,14 +1002,8 @@ export class Simulation {
   updateFactions() {
     // Check for new faction formation every 100 ticks
     if (this.clock.tick % 100 === 0 && this.agents.length > 10) {
-      const newFactions = this.factionSystem.checkForNewFactions(
-        this.agents,
-        this.relationshipSystem
-      );
-      
-      for (const faction of newFactions) {
-        // Faction founding is observable via the event bus; no console spam.
-      }
+      // New faction formation is observable via the event bus (factionSystem emits).
+      this.factionSystem.checkForNewFactions(this.agents, this.relationshipSystem);
     }
     
     // Recruit members every 30 ticks
@@ -1650,7 +1612,7 @@ export class Simulation {
       sim.settlementSystem = SettlementSystem.deserialize(data.settlements, sim);
     }
     if (data.economy) {
-      sim.economySystem = EconomySystem.deserialize(data.economy);
+      sim.economySystem = EconomySystem.deserialize(data.economy, sim);
     }
     if (data.crafting) {
       sim.craftingSystem = CraftingSystem.deserialize(data.crafting, sim);
@@ -1698,6 +1660,24 @@ export class Simulation {
     }
     if (data.chronicle) {
       sim.chronicleSystem = ChronicleSystem.deserialize(data.chronicle, sim);
+    }
+
+    // settlement.buildings is a SECOND copy of building state: simulation.js
+    // pushes live Building objects into it when placing blueprints, but
+    // SettlementSystem.serialize() spreads them into plain snapshots. On load
+    // they come back as detached plain objects, so construction progress
+    // applied to the live Building never reaches the settlement copy — and any
+    // code reading settlement.buildings (ruin decay, home lookup) sees stale
+    // data on a resumed world that an uninterrupted run never has (this was
+    // the last gossip save/load divergence). Re-point every entry whose id
+    // matches a restored live Building so both views share one object again.
+    if (sim.settlementSystem && sim.buildings) {
+      const byId = new Map();
+      for (const b of sim.buildings) if (b && b.id != null) byId.set(b.id, b);
+      for (const s of sim.settlementSystem.settlements.values()) {
+        if (!Array.isArray(s.buildings)) continue;
+        s.buildings = s.buildings.map(e => (e && e.id != null && byId.has(e.id)) ? byId.get(e.id) : e);
+      }
     }
 
     // Restore warbands. Warband fields are all plain JSON-safe values (numbers,

@@ -405,7 +405,7 @@ export class DiplomacySystem {
 
   getAllies(settlementId) {
     const allies = [];
-    for (const [key, rel] of this.relations) {
+    for (const rel of this.relations.values()) {
       if (rel.status === DIPLOMATIC_STATUS.ALLIANCE) {
         if (rel.settlementA === settlementId) allies.push(rel.settlementB);
         else if (rel.settlementB === settlementId) allies.push(rel.settlementA);
@@ -416,7 +416,7 @@ export class DiplomacySystem {
 
   getEnemies(settlementId) {
     const enemies = [];
-    for (const [key, rel] of this.relations) {
+    for (const rel of this.relations.values()) {
       if (rel.status === DIPLOMATIC_STATUS.WAR) {
         if (rel.settlementA === settlementId) enemies.push(rel.settlementB);
         else if (rel.settlementB === settlementId) enemies.push(rel.settlementA);

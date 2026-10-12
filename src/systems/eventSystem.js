@@ -476,7 +476,7 @@ export class EventSystem {
   
   applyMigrationEffect(event, simulation) {
     // Spawn new agents at edge of map
-    const { agents, world, idGen } = simulation;
+    const { world } = simulation;
     
     const migrantCount = event.effects.populationIncrease;
     
@@ -634,8 +634,9 @@ export class EventSystem {
     };
   }
   
-  static deserialize(data) {
-    const system = new EventSystem();
+  static deserialize(data, sim = null) {
+    // Determinism: event timestamps read this.sim?.clock — restore the back-reference.
+    const system = new EventSystem(sim);
     
     system.activeEvents = data.activeEvents.map(e => ({
       ...e,

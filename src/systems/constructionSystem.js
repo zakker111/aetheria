@@ -31,7 +31,6 @@ export class ConstructionSystem {
      * Returns: { valid: boolean, reason?: string }
      */
     validatePlacement(type, x, y, rotation = 0) {
-        const tileSize = 1;
         const footprint = this.getBuildingFootprint(type, rotation);
         
         // Check map bounds

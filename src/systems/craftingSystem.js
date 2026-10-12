@@ -90,6 +90,23 @@ class CraftingSystem {
             // Smeltery-style recipes still demand a specialized subtype.
         });
 
+        // Military gear: bronze spears are the standard warband weapon.
+        // Weapon quality feeds directly into battle damage (Step 3), so a
+        // settlement that invests in smithing fights visibly better — and
+        // dead soldiers drop their gear as scavengable loot.
+        this.addRecipe('ingot_plus_handle_to_spear', {
+            id: 'ingot_plus_handle_to_spear',
+            name: 'Forge Spear',
+            input: [
+                { type: 'iron_ingot', amount: 1 },
+                { type: 'tool_handle', amount: 1 }
+            ],
+            output: { type: 'weapon_spear', amount: 1 },
+            time: 70,
+            skill: 'smithing',
+            tool: 'anvil'
+        });
+
         // Rare-goods lapidary: cut raw gems into polished jewels. Gems only
         // come from scarce crystal veins (miners), and finished jewels are a
         // luxury trade good + civic prestige item for grand buildings.
@@ -238,7 +255,6 @@ class CraftingSystem {
     syncFromBuildings(sim) {
         if (!sim || !Array.isArray(sim.buildings)) return;
         const seen = new Set();
-        let opened = false;
         for (const b of sim.buildings) {
             if (b.buildingType !== 'workshop' || !b.complete) continue;
             const key = CraftingSystem.buildingKey(b);
@@ -261,15 +277,12 @@ class CraftingSystem {
             };
             this.workshops.set(key, ws);
             sim.eventBus?.emit('WORKSHOP_OPENED', { id: key, x: b.x, y: b.y });
-            opened = true;
         }
         // Buildings burned/removed -> drop their orphaned workshops.
-        let orphaned = false;
         for (const [id, ws] of this.workshops) {
             if (ws.buildingId != null && !seen.has(id)) {
                 for (const aid of [...ws.assignedWorkers]) this.removeWorker(id, aid);
                 this.workshops.delete(id);
-                orphaned = true;
             }
         }
         // Phase 2 job unification: whenever the workshop roster changes,

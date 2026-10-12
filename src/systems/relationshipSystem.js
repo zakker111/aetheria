@@ -383,7 +383,7 @@ export class RelationshipSystem {
     for (const id of Array.from(this.relationships.keys())) {
       if (!aliveIds.has(id)) this.relationships.delete(id);
     }
-    for (const [id, relMap] of this.relationships) {
+    for (const relMap of this.relationships.values()) {
       for (const other of Array.from(relMap.keys())) {
         if (!aliveIds.has(other)) relMap.delete(other);
       }
@@ -413,8 +413,8 @@ export class RelationshipSystem {
   // Decay relationships over time (neglect)
   decayRelationships(deltaTime) {
     const nowTick = this.sim?.clock?.tick ?? null;
-    for (const [agentId1, relMap] of this.relationships) {
-      for (const [agentId2, rel] of relMap) {
+    for (const relMap of this.relationships.values()) {
+      for (const rel of relMap.values()) {
         // Neglect threshold expressed in sim ticks (100 ticks ~ 1 sim year);
         // falls back to wall-clock only when no simulation context exists.
         const stale = nowTick !== null
