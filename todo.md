@@ -31,6 +31,23 @@ Bite-sized steps (one "continue" per step):
 - [ ] **Step 8 — UI/renderer**: war overlay (battle markers exist), settlement banners showing at-war/allied, event feed entries for declarations/battles/peace; inspector shows military status.
 - [ ] **Step 9 — Tests + determinism**: new `tests/war.mjs` (casus belli fires, annexation round-trips through save/load); full suite green; lint clean.
 
+## Phase 3c — Stabilize, Verify, Ship (ACTIVE PLAN)
+
+Context: a deep audit found that several previously "claimed complete" items were NOT actually in the codebase (wars panel, battle FX, starter scenario, war/colonization tests missing). No git remote is configured, so nothing has been pushed. This phase fixes the real foundation first, then rebuilds the visible-war features honestly, one bite-sized step per "continue". Every step ends with actual test/lint output as proof — no claims without verification.
+
+- [ ] **Step A — Fix gossip save/load determinism** (`tests/gossip.mjs` currently FAILS): root-cause pass on fresh-vs-resumed divergence using field-by-field state diffing at the first divergent tick; apply a real fix (candidates: Map insertion-order float accumulation, currentAction target snapshot asymmetry, agent ordering); re-run until green. *Highest priority: silent world divergence on reload corrupts everything else.*
+- [ ] **Step B — Fix supplychain test timeout** (`tests/supplychain.mjs` times out >90s): profile the slow path (tick time vs test loop count), confirm scan-cache perf fix is really wired, reduce test tick budget or speed hot loops; must finish <60s and pass. *Blocks CI/GitHub Actions, which blocks Pages.*
+- [ ] **Step C — Reconcile todo.md/docs with reality**: mark only genuinely implemented items as done (audit each checkbox against code before flipping); document verified state of war system (casus belli ✅, warfareSystem warbands/siege/plunder ✅, soldier profession status TBD by audit). Remove stale claims from README/ROADMAP.
+- [ ] **Step D — War visibility Step 1: tuning** — lower pop thresholds (~80→35), grievance decay instead of hard expiry, faster diplomacy tick cadence so wars start within a watchable session; add `tests/warvisible.mjs` asserting ≥1 war declared by tick 3000. Determinism-safe (no wall-clock/RNG-order changes).
+- [ ] **Step E — War visibility Step 2: event feed** — war-start/end entries with ⚔️/🕊️ icons + click-to-jump camera to the front line (Rule 16 discoverability). Wire into existing chronicle/event system; verify existing tests still pass.
+- [ ] **Step F — War visibility Step 3: Wars panel UI** — new tab listing active wars (casus belli, sides, strength, exhaustion, battles fought), peace-treaty history, click → jump camera. Inspector shows settlement/faction military status (Rule 4 inspection-as-gameplay).
+- [ ] **Step G — War visibility Step 4: battle visuals** — clashing army band markers, casualty pips, routing tint, smoke particles on canvas renderer (Rule 18 visual activity). Pure render-layer, zero sim-state impact.
+- [ ] **Step H — War visibility Step 5: "Warring Kingdoms" starter scenario** — pre-seeded rival factions with grievances so conflict starts ~tick 200; scenario loader hook in main.js. Optional playstyle entry point (Rules 13/20: interesting, not win-state).
+- [ ] **Step I — Full validation + docs**: run entire suite (determinism, gossip, soak, supplychain, warvisible) + lint 0/0; update README/ROADMAP/todo with evidence; commit clean tree.
+- [ ] **Step J — GitHub push + Pages**: requires user-provided remote URL (`git remote add origin …`). Then push, enable Pages via workflow (Settings → Source: GitHub Actions), verify live site serves index.html with relative imports. *Blocked until user supplies remote.*
+
+Recommended order: A → B → C → D → E → F → G → H → I → J. Steps A–C are bug-fixes/foundation; D–H deliver the "I don't see any wars" fix; I–J ship it.
+
 ## Phase 4 — Polish & Performance
 - [ ] Path caching / A* reuse to kill ~83ms tick spikes during heavy events
 - [x] Clean remaining ESLint unused-variable warnings (cosmetic) — done, 0 errors/0 warnings

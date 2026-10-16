@@ -350,7 +350,7 @@ export class Agent {
     // and a save/load resume (entities are re-registered in deserialize order).
     // When the scan is larger than the MAX_NEARBY_* caps, which entities get
     // truncated depends on iteration order — so iterate in canonical ID order.
-    nearby = [...nearby].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    // (Sorting happens once per shared scan inside world._getScan.)
 
     for (const entity of nearby) {
       if (entity.id === this.id) continue;
