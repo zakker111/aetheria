@@ -706,14 +706,23 @@ export class WorldState {
   // per entity. `entity._sx/_sy` track where the entity is currently
   // registered (stamped by addToSpatialIndex, cleared on removal).
   updateMovedAgents(moved) {
-    for (const e of moved) {
-      const nx = Math.floor(e.x);
-      const ny = Math.floor(e.y);
-      if (e._sx === nx && e._sy === ny) continue;
-      if (e._sx !== undefined) {
-        this.removeFromSpatialIndex(e._sx, e._sy, e);
+    // Batch mutation: suppress per-entity cache invalidation (a moving
+    // cluster would otherwise clear the shared scan cache hundreds of times
+    // per tick, negating it entirely), then flush once after all updates.
+    this._suppressInvalidate = true;
+    try {
+      for (const e of moved) {
+        const nx = Math.floor(e.x);
+        const ny = Math.floor(e.y);
+        if (e._sx === nx && e._sy === ny) continue;
+        if (e._sx !== undefined) {
+          this.removeFromSpatialIndex(e._sx, e._sy, e);
+        }
+        this.addToSpatialIndex(nx, ny, e);
       }
-      this.addToSpatialIndex(nx, ny, e);
+    } finally {
+      this._suppressInvalidate = false;
+      this.invalidateScanCache();
     }
   }
 
@@ -779,15 +788,22 @@ export class WorldState {
   //  * Results are bit-identical to a fresh getEntitiesNear() call: same
   //    cells, same insertion order, no RNG involved. Determinism preserved.
   _getScan(x, y, r) {
-    const key = `${x},${y},${r}`;
-    let list = this._scanCache.get(key);
-    if (list !== undefined) return list;
-    list = this.getEntitiesNear(x, y, r);
-    this._scanCache.set(key, list);
-    return list;
+    const key = x + ',' + y + ',' + r;
+    let pair = this._scanCache.get(key);
+    if (pair !== undefined) return pair;
+    const list = this.getEntitiesNear(x, y, r);
+    // Canonical ID order. Spatial-index insertion order differs between a
+    // fresh run and a save/load resume; perceive() truncates to caps, so the
+    // survivor set must not depend on iteration order. Sorting here (once
+    // per tile/radius per tick, shared by every observing agent) replaces
+    // the old per-agent copy+sort that dominated the tick loop.
+    pair = list.length > 1 ? list.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) : list;
+    this._scanCache.set(key, pair);
+    return pair;
   }
 
   invalidateScanCache() {
+    if (this._suppressInvalidate) return;
     if (this._scanCache.size > 0) this._scanCache.clear();
   }
 
