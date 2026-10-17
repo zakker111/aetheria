@@ -1,8 +1,4 @@
 node_modules/
-*.log
-*.out
-probe*.mjs
-dbg*
-prof*
-sc*.mjs
-tickspeed_tmp.mjs
+dist/
+build/
+*.tmp

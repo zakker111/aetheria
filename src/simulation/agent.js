@@ -569,15 +569,33 @@ export class Agent {
           this.workplace = null; // orphaned (burned down?) — re-find next tick
         } else {
           const haul = simulation.craftingSystem.haulUnits(this.inventory);
+          const breadStock = ws.storage.get('bread') || 0;
+          const plankStock = ws.storage.get('plank') || 0;
           if (haul >= 2) {
             // Deliver raw materials to the shop before anything else.
             this.goals.push({ type: "haul_to_workshop", priority: 86 });
-          } else if ((ws.storage.get('bread') || 0) > 0 && this.needs.food < 80) {
+          } else if ((breadStock >= 3 || plankStock >= 3) &&
+                     !this._workshopHasDemand(ws, simulation.craftingSystem)) {
+            // Shop holds surplus finished goods and no pending work: export
+            // them to the town stockpile FIRST. This used to rank below
+            // collect_bread, so hungry craftsmen siphoned every loaf back to
+            // the same shop's storage each tick (takeFromWorkshop re-adds
+            // bread to inventory, which feeds the eat-on-arrival logic) and
+            // the production -> stockpile -> trade loop never closed.
+            this.goals.push({ type: "distribute_goods", priority: 88, workplaceId: ws.id });
+          } else if (breadStock > 0 && this.needs.food < 80) {
             // Bread distribution: finished goods feed the town.
             this.goals.push({ type: "collect_bread", priority: 88 });
           } else if (this._workshopHasDemand(ws, simulation.craftingSystem)) {
             // Workshop has queued/pending work and inputs on hand — go tend it.
             this.goals.push({ type: "go_to_work", priority: 80 });
+          } else if (breadStock >= 3 || plankStock >= 3) {
+            // Nothing to craft right now, but the shop holds finished goods —
+            // tend the benches anyway so progress accumulates toward the
+            // distribution threshold (see distribute_goods below). Without
+            // this, craftsmen wandered off whenever the queue was momentarily
+            // empty and the pipeline starved itself in a feedback loop.
+            this.goals.push({ type: "go_to_work", priority: 76 });
           } else {
             // Idle at home base otherwise: scavenge/gather will take over via
             // other goals. No RNG draws here (determinism-safe).
@@ -642,7 +660,7 @@ export class Agent {
             // bread runs need (threshold lowered from 6 so distribution
             // actually triggers in typical throughput).
             if ((breadStock >= 3 || plankStock >= 3) && this.distanceTo(settlement.center) < 24) {
-              this.goals.push({ type: "distribute_goods", priority: 78, workplaceId: ws.id });
+              this.goals.push({ type: "distribute_goods", priority: 87, workplaceId: ws.id });
             }
           }
         }
@@ -2198,7 +2216,14 @@ export class Agent {
           this.needs.social = Math.min(100, this.needs.social + 10);
           this.needs.rest = Math.min(100, this.needs.rest + 4);
           const hearthTick = tickOf(simulation);
-          for (const other of world.getEntitiesNear(Math.floor(this.x), Math.floor(this.y), 4)) {
+          // Determinism: use the ID-canonical shared scan (world._getScan) —
+          // raw getEntitiesNear iterates spatial-index insertion order, which
+          // differs between a fresh run and a save/load resume, so gossip /
+          // modifyRelationship fired in a different order on resumed worlds.
+          const hearthNear = typeof world._getScan === "function"
+            ? world._getScan(Math.floor(this.x), Math.floor(this.y), 4)
+            : world.getEntitiesNear(Math.floor(this.x), Math.floor(this.y), 4);
+          for (const other of hearthNear) {
             if (other.type === "agent" && other.id !== this.id && other.alive) {
               other.needs.social = Math.min(100, other.needs.social + 4);
               if (simulation && simulation.relationshipSystem) {
@@ -2304,7 +2329,11 @@ export class Agent {
           // Bustling in the square: bump into neighbors, catch up on gossip
           this.needs.social = Math.min(100, this.needs.social + 8);
           const marketTick = tickOf(simulation);
-          for (const other of world.getEntitiesNear(Math.floor(this.x), Math.floor(this.y), 3)) {
+          // Determinism: ID-canonical shared scan (see gather_at_hearth above).
+          const marketNear = typeof world._getScan === "function"
+            ? world._getScan(Math.floor(this.x), Math.floor(this.y), 3)
+            : world.getEntitiesNear(Math.floor(this.x), Math.floor(this.y), 3);
+          for (const other of marketNear) {
             if (other.type === "agent" && other.id !== this.id && other.alive) {
               other.needs.social = Math.min(100, other.needs.social + 3);
               if (simulation && simulation.relationshipSystem) {

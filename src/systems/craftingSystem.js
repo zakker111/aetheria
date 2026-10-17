@@ -190,8 +190,10 @@ class CraftingSystem {
         if (!workshop.assignedWorkers.includes(agentId)) {
             workshop.assignedWorkers.push(agentId);
             
-            // Update agent state - agents is an array, not a Map
-            const agent = this.simulation.agents.find(a => a.id === agentId);
+            // Update agent state - perf: O(1) id lookup via shared index
+            const agent = typeof this.simulation._agentById === 'function'
+                ? this.simulation._agentById(agentId)
+                : this.simulation.agents.find(a => a.id === agentId);
             if (agent) {
                 agent.job = 'craftsman';
                 agent.workplace = workshopId;
@@ -210,7 +212,9 @@ class CraftingSystem {
 
         workshop.assignedWorkers = workshop.assignedWorkers.filter(id => id !== agentId);
         
-        const agent = this.simulation.agents.find(a => a.id === agentId);
+        const agent = typeof this.simulation._agentById === 'function'
+            ? this.simulation._agentById(agentId)
+            : this.simulation.agents.find(a => a.id === agentId);
         if (agent) {
             agent.job = 'unemployed';
             agent.workplace = null;
@@ -291,6 +295,12 @@ class CraftingSystem {
         // so assignedWorkers stayed empty forever and workshop progress was
         // permanently paused ("No workers, pause progress") — the whole
         // crafting → distribution → trade pipeline silently never ran.
+        // Perf/behavior fix: only adopt craftsmen that the economy actually
+        // employs (agentJobs record or agent.job). A bare `agent.workplace`
+        // used to qualify, which let the stale workplace of an agent who had
+        // since been reassigned as a farmer linger in the roster forever —
+        // workshops accumulated hundreds of ghost "workers" (observed: 717
+        // on one bakery), starving the supply chain and ballooning ticks.
         this.reconcileCraftsmen(sim);
     }
 
@@ -343,7 +353,9 @@ class CraftingSystem {
         for (const [wsId, ws] of this.workshops) {
             if (ws.assignedWorkers.length === 0) continue;
             for (const aid of ws.assignedWorkers) {
-                const a = sim.agents.find(x => x && x.id === aid);
+                const a = typeof sim._agentById === 'function'
+                    ? sim._agentById(aid)
+                    : sim.agents.find(x => x && x.id === aid);
                 if (!a || !a.alive || a.workplace !== wsId) {
                     removals.push([wsId, aid]);
                 }
@@ -418,7 +430,9 @@ class CraftingSystem {
                 // Calculate speed based on worker skills
                 let totalSkill = 0;
                 workshop.assignedWorkers.forEach(agentId => {
-                    const agent = this.simulation.agents.find(a => a.id === agentId);
+                    const agent = typeof this.simulation._agentById === 'function'
+                        ? this.simulation._agentById(agentId)
+                        : this.simulation.agents.find(a => a.id === agentId);
                     if (agent && agent.skills) {
                         totalSkill += (agent.skills[recipe.skill] || 0);
                     }
@@ -528,12 +542,13 @@ class CraftingSystem {
         // reached the required skill level. Deterministic scan of assigned
         // workers — no RNG draws.
         if (recipe.requiresSkill) {
-            const agents = this.simulation?.agents || [];
+            const sim = this.simulation;
+            const agents = sim?.agents || [];
             let best = null;
             for (const wid of workshop.assignedWorkers) {
-                const a = typeof agents.find === 'function'
-                    ? agents.find(ag => ag && ag.id === wid)
-                    : null;
+                const a = (sim && typeof sim._agentById === 'function')
+                    ? sim._agentById(wid)
+                    : (typeof agents.find === 'function' ? agents.find(ag => ag && ag.id === wid) : null);
                 if (!a || !a.skills) continue;
                 if (!best || a.id < best.id) best = a; // deterministic pick
             }

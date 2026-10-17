@@ -451,4 +451,38 @@ export class DiplomacySystem {
       });
     }
   }
+
+  // Determinism: diplomacy state drives war declarations and treaty expiry
+  // every 40 ticks. It was never persisted, so a resumed world re-initialized
+  // relations from scratch (extra RNG draws) and diverged from an
+  // uninterrupted run. All values are plain JSON-safe objects/arrays.
+  serialize() {
+    return {
+      relations: Array.from(this.relations.entries()),
+      treaties: this.treaties,
+      activeWars: this.activeWars,
+      warHistory: this.warHistory,
+      nextWarId: this.nextWarId,
+      nextTreatyId: this.nextTreatyId,
+      lastDiplomacyTick: this.lastDiplomacyTick
+    };
+  }
+
+  deserialize(data) {
+    // Relations/wars/treaties are plain JSON-safe records (no classed values),
+    // so a direct restore preserves field shapes exactly.
+    if (data.relations) this.relations = new Map(data.relations);
+    if (Array.isArray(data.treaties)) this.treaties = data.treaties;
+    if (Array.isArray(data.activeWars)) this.activeWars = data.activeWars;
+    if (Array.isArray(data.warHistory)) this.warHistory = data.warHistory;
+    if (Number.isFinite(data.nextWarId)) this.nextWarId = data.nextWarId;
+    if (Number.isFinite(data.nextTreatyId)) this.nextTreatyId = data.nextTreatyId;
+    if (Number.isFinite(data.lastDiplomacyTick)) this.lastDiplomacyTick = data.lastDiplomacyTick;
+  }
+
+  static deserialize(data, sim) {
+    const sys = new DiplomacySystem(sim);
+    sys.deserialize(data);
+    return sys;
+  }
 }

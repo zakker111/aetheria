@@ -42,8 +42,9 @@ export class WarfareSystem {
     // Find eligible adult citizens to recruit
     const eligible = [];
     for (const aId of settlement.agentIds) {
-      const a = this.sim.agents.find(ag => ag.id === aId && ag.alive);
-      if (a && a.age >= 18 && a.age <= 55 && (a.needs.health || 100) > 40) {
+      // Perf: O(1) id lookup instead of a linear roster scan per citizen.
+      const a = this.sim._agentById(aId);
+      if (a && a.alive && a.age >= 18 && a.age <= 55 && (a.needs.health || 100) > 40) {
         eligible.push(a);
       }
     }
@@ -149,8 +150,8 @@ export class WarfareSystem {
   }
 
   applyFormationPositions(warband) {
-    const commander = this.sim.agents.find(a => a.id === warband.commanderId && a.alive);
-    if (!commander) return;
+    const commander = this.sim._agentById(warband.commanderId);
+    if (!commander || !commander.alive) return;
 
     const offsets = warband.formation === "shield" ? 
       [[-1, 0], [1, 0], [-2, 0], [2, 0], [0, 1], [-1, 1], [1, 1]] :
@@ -158,8 +159,8 @@ export class WarfareSystem {
 
     let idx = 0;
     for (const soldierId of warband.soldiers) {
-      const soldier = this.sim.agents.find(a => a.id === soldierId && a.alive);
-      if (soldier && soldier.id !== commander.id) {
+      const soldier = this.sim._agentById(soldierId);
+      if (soldier && soldier.alive && soldier.id !== commander.id) {
         soldier.formationOffset = offsets[idx % offsets.length];
         idx++;
       }
@@ -173,7 +174,7 @@ export class WarfareSystem {
         wb.active = false;
         wb.state = "disbanded";
         for (const sId of wb.soldiers) {
-          const soldier = this.sim.agents.find(a => a.id === sId);
+          const soldier = this.sim._agentById(sId);
           if (soldier) {
             soldier.militaryDuty = false;
             soldier.warbandId = null;
@@ -195,6 +196,10 @@ export class WarfareSystem {
       }
     }
 
+    // Perf: invalidate the per-tick enemy snapshot cache so the first
+    // getAllNearbyEnemies() call of this tick rebuilds it.
+    this._enemySnapshot = null;
+
     // 2. Update active warbands
     for (const warband of this.warbands.values()) {
       if (!warband.active) continue;
@@ -202,24 +207,60 @@ export class WarfareSystem {
     }
   }
 
-  updateWarband(warband) {
-    // Filter alive soldiers
-    warband.soldiers = warband.soldiers.filter(id => {
-      const a = this.sim.agents.find(ag => ag.id === id);
-      return a && a.alive;
-    });
+  // Build (once per tick) a compact list of combat-capable agents bucketed by
+  // settlement. Previously every getAllNearbyEnemies() call scanned the entire
+  // roster; with many warbands clashing that was O(warbands x agents) per tick.
+  // Bucket order follows this.sim.agents order, so results stay deterministic.
+  _getEnemySnapshot() {
+    if (this._enemySnapshot && this._enemySnapshot.tick === this.sim.tick) {
+      return this._enemySnapshot;
+    }
+    const buckets = new Map(); // settlementId -> array of agents (roster order)
+    const agentMap = this.sim.settlementSystem?.agentSettlementMap;
+    for (const wb of this.warbands.values()) {
+      if (!wb.active || wb.state === "destroyed") continue;
+      let arr = buckets.get(wb.settlementId);
+      for (const sId of wb.soldiers) {
+        const a = this.sim._agentById(sId);
+        // Only bucket soldiers whose home settlement matches the warband's —
+        // exactly the agents the old full-roster filter could return for this
+        // sid (agents stamped with a different settlementId belong to another
+        // warband's bucket).
+        if (!a || !a.alive) continue;
+        const home = a.settlementId || (agentMap ? agentMap.get(a.id) : null);
+        if (home !== wb.settlementId) continue;
+        if (!arr) buckets.set(wb.settlementId, (arr = []));
+        if (!arr.includes(a)) arr.push(a);
+      }
+    }
+    this._enemySnapshot = { tick: this.sim.tick, buckets };
+    return this._enemySnapshot;
+  }
 
-    if (warband.soldiers.length === 0) {
+  updateWarband(warband) {
+    // Filter alive soldiers — perf: O(1) id lookup per soldier instead of a
+    // full roster scan (agents.find) for each one. Order preserved.
+    const soldiers = warband.soldiers;
+    let w = 0;
+    for (let i = 0; i < soldiers.length; i++) {
+      const a = this.sim._agentById(soldiers[i]);
+      if (a && a.alive) soldiers[w++] = soldiers[i];
+    }
+    if (w < soldiers.length) soldiers.length = w;
+
+    if (soldiers.length === 0) {
       warband.active = false;
       warband.state = "destroyed";
       return;
     }
 
     // Ensure commander is alive
-    let commander = this.sim.agents.find(a => a.id === warband.commanderId && a.alive);
-    if (!commander) {
-      const nextLead = this.sim.agents.find(a => warband.soldiers.includes(a.id) && a.alive);
-      if (nextLead) {
+    let commander = this.sim._agentById(warband.commanderId);
+    if (!commander || !commander.alive) {
+      // Perf: soldiers were just verified alive above, so the first entry is
+      // the new leader (same agent as the old roster-order scan would pick).
+      const nextLead = this.sim._agentById(soldiers[0]);
+      if (nextLead && nextLead.alive) {
         warband.commanderId = nextLead.id;
         commander = nextLead;
       } else {
@@ -328,7 +369,8 @@ export class WarfareSystem {
 
     // Each soldier engages nearest enemy
     for (const soldierId of warband.soldiers) {
-      const soldier = this.sim.agents.find(a => a.id === soldierId && a.alive);
+      const s = this.sim._agentById(soldierId);
+      const soldier = (s && s.alive) ? s : null;
       if (!soldier) continue;
 
       let nearest = null;
@@ -526,7 +568,8 @@ export class WarfareSystem {
   keepSquadInFormation(warband, commander) {
     for (const sId of warband.soldiers) {
       if (sId === commander.id) continue;
-      const soldier = this.sim.agents.find(a => a.id === sId && a.alive);
+      const s = this.sim._agentById(sId);
+      const soldier = (s && s.alive) ? s : null;
       if (!soldier) continue;
 
       const offset = soldier.formationOffset || [0, 1];
@@ -552,11 +595,29 @@ export class WarfareSystem {
     const hostileSettlementIds = this.sim.diplomacySystem.getEnemies(mySettlementId);
     if (hostileSettlementIds.length === 0) return [];
 
-    return this.sim.agents.filter(a => {
-      if (!a.alive || a.id === agent.id) return false;
-      const sid = a.settlementId || this.sim.settlementSystem.agentSettlementMap.get(a.id);
-      if (!sid || !hostileSettlementIds.includes(sid)) return false;
-      return Math.hypot(a.x - agent.x, a.y - agent.y) <= radius;
-    });
+    // Perf: scan only the agents currently in combat (bucketed by settlement
+    // once per tick) instead of filtering the entire roster on every call.
+    // Only in-combat agents can appear in a filter result anyway, and bucket
+    // order mirrors roster order, so output is identical to the old scan.
+    const r2 = radius * radius;
+    const snapshot = this._getEnemySnapshot();
+    const out = [];
+    for (const sid of hostileSettlementIds) {
+      const bucket = snapshot.buckets.get(sid);
+      if (!bucket) continue;
+      for (const a of bucket) {
+        if (a.id === agent.id) continue;
+        const dx = a.x - agent.x;
+        if (dx < -radius || dx > radius) continue;
+        const dy = a.y - agent.y;
+        if (dy < -radius || dy > radius) continue;
+        if (dx * dx + dy * dy <= r2) out.push(a);
+      }
+    }
+    if (out.length < 2) return out;
+    // Restore global roster ordering across buckets (deterministic tie-break).
+    const pos = this.sim._agentIdMap;
+    out.sort((p, q) => (pos.get(p.id) ?? 0) - (pos.get(q.id) ?? 0));
+    return out;
   }
 }

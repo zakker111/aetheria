@@ -521,10 +521,14 @@ export class EventSystem {
   // Update ongoing event effects each tick
   updateActiveEvents(tick, simulation) {
     const { agents, world } = simulation;
+    // Perf: O(1) id lookups via the simulation's id map when available.
+    const byId = (typeof simulation._agentById === 'function')
+      ? (id) => simulation._agentById(id)
+      : (id) => agents.find(a => a.id === id);
     
     // Process injuries
     for (const [agentId, injuryData] of this.injuredAgents) {
-      const agent = agents.find(a => a.id === agentId);
+      const agent = byId(agentId);
       if (!agent || !agent.alive) {
         this.injuredAgents.delete(agentId);
         continue;
@@ -544,7 +548,7 @@ export class EventSystem {
     
     // Process diseases
     for (const [agentId, diseaseData] of this.infectedAgents) {
-      const agent = agents.find(a => a.id === agentId);
+      const agent = byId(agentId);
       if (!agent || !agent.alive) {
         this.infectedAgents.delete(agentId);
         continue;
@@ -584,8 +588,11 @@ export class EventSystem {
   resolveEvent(event, simulation) {
     // Clean up temporary effects
     if (simulation && simulation.agents) {
+      const byId = (typeof simulation._agentById === 'function')
+        ? (id) => simulation._agentById(id)
+        : (id) => simulation.agents.find(a => a.id === id);
       for (const agentId of event.affectedAgents) {
-        const agent = simulation.agents.find(a => a.id === agentId);
+        const agent = byId(agentId);
         if (agent) {
           agent.productivityMultiplier = 1.0;
           agent.currentAction = null;
