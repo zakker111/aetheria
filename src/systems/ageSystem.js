@@ -97,9 +97,11 @@ export class AgeSystem {
         if (agent.relationships) {
             const family = agent.relationships.family || [];
             family.forEach(relId => {
-                const relative = (Array.isArray(this.sim.agents)
-                    ? this.sim.agents.find(a => a.id === relId)
-                    : this.sim.agents.get(relId));
+                const relative = (typeof this.sim._agentById === 'function')
+                    ? this.sim._agentById(relId)
+                    : (Array.isArray(this.sim.agents)
+                        ? this.sim.agents.find(a => a.id === relId)
+                        : this.sim.agents.get(relId));
                 if (relative) {
                     // Grief debuff
                     if (relative.needs) {
@@ -146,9 +148,11 @@ export class AgeSystem {
         const parentId = Array.isArray(agent.parents) ? agent.parents[0] : agent.parentId;
         if (!parentId) return;
 
-        const parent = (Array.isArray(this.sim.agents)
-            ? this.sim.agents.find(a => a.id === parentId)
-            : this.sim.agents.get(parentId));
+        const parent = (typeof this.sim._agentById === 'function')
+            ? this.sim._agentById(parentId)
+            : (Array.isArray(this.sim.agents)
+                ? this.sim.agents.find(a => a.id === parentId)
+                : this.sim.agents.get(parentId));
         if (parent && parent.alive !== false) {
             // Simple follow logic
             const dx = parent.x - agent.x;

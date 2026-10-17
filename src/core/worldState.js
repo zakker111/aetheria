@@ -687,8 +687,11 @@ export class WorldState {
     if (!cell) return;
     const idx = cell.indexOf(entity);
     if (idx >= 0) {
-      cell[idx] = cell[cell.length - 1];
-      cell.pop();
+      // splice (not swap-remove): preserves the canonical id order that
+      // getEntitiesAt() stamps with _sorted — swap-remove would silently
+      // scramble a sorted cell and break resume determinism.
+      cell.splice(idx, 1);
+      cell._sorted = false; // conservative: removal invalidates stamped order
     }
     if (cell.length === 0) this.spatialIndex.delete(key);
     if (entity) {
@@ -749,7 +752,18 @@ export class WorldState {
   }
 
   getEntitiesAt(x, y) {
-    return this.spatialIndex.get(this._cellKey(x, y)) || EMPTY_CELL;
+    const cell = this.spatialIndex.get(this._cellKey(x, y));
+    if (!cell) return EMPTY_CELL;
+    // Determinism: the index is maintained incrementally (swap-remove in
+    // removeFromSpatialIndex, batch relocation in updateMovedAgents), so cell
+    // insertion order can differ between a fresh run and a save/load resume.
+    // Consumers that pick "the first match" would then diverge. Return cells
+    // in canonical id order (ids are numeric — never string-compare).
+    if (cell.length > 1 && !cell._sorted) {
+      cell.sort((a, b) => a.id - b.id);
+      cell._sorted = true;
+    }
+    return cell;
   }
 
   getEntitiesNear(x, y, radius) {
@@ -766,8 +780,8 @@ export class WorldState {
       for (let cx = minX; cx <= maxX; cx++) {
         const dx = cx - x;
         if (dx * dx + dy * dy > rSq) continue;
-        const cell = this.spatialIndex.get(cy * this.width + cx);
-        if (cell) for (const e of cell) entities.push(e);
+        const cell = this.getEntitiesAt(cx, cy); // canonical id order per cell
+        if (cell !== EMPTY_CELL) for (const e of cell) entities.push(e);
       }
     }
     return entities;
@@ -797,7 +811,7 @@ export class WorldState {
     // survivor set must not depend on iteration order. Sorting here (once
     // per tile/radius per tick, shared by every observing agent) replaces
     // the old per-agent copy+sort that dominated the tick loop.
-    pair = list.length > 1 ? list.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) : list;
+    pair = list.length > 1 ? list.sort((a, b) => a.id - b.id) : list; // numeric ids
     this._scanCache.set(key, pair);
     return pair;
   }

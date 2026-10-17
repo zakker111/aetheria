@@ -663,7 +663,10 @@
             // Refresh inspector if entity is active AND card is open
             const inspCard = document.getElementById("inspectorCard");
             if (inspCard && !inspCard.classList.contains("hidden") && activeEntity && activeEntity.kind === "agent") {
-                const stillAlive = simulation.agents.find(a => a.id === activeEntity.entity.id);
+                // Perf: O(1) id lookup via the simulation's shared index.
+                const stillAlive = typeof simulation._agentById === 'function'
+                    ? simulation._agentById(activeEntity.entity.id)
+                    : simulation.agents.find(a => a.id === activeEntity.entity.id);
                 if (stillAlive) {
                     activeEntity.entity = stillAlive;
                     renderInspector(activeEntity);

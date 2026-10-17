@@ -25,6 +25,10 @@ export class TradeSystem {
     }
 
     getAgent(agentId) {
+        // Perf: O(1) id lookup via the simulation's shared index.
+        if (typeof this.sim._agentById === 'function') {
+            return this.sim._agentById(agentId);
+        }
         if (this.sim.agents) {
             return this.sim.agents.find(a => a.id === agentId);
         }
@@ -341,13 +345,18 @@ export class TradeSystem {
     serialize() {
         return {
             caravans: this.caravans,
-            tradeRoutes: this.tradeRoutes
+            tradeRoutes: this.tradeRoutes,
+            // Determinism: the 2000-tick scheduler phase must survive save/load.
+            // Reset to 0 made a resumed world fire analyzeMarket() on a tick an
+            // uninterrupted run skips — extra RNG draws -> divergence.
+            lastCheckTick: this.lastCheckTick
         };
     }
 
     deserialize(data) {
         if (data.caravans) this.caravans = data.caravans;
         if (data.tradeRoutes) this.tradeRoutes = data.tradeRoutes;
+        if (Number.isFinite(data.lastCheckTick)) this.lastCheckTick = data.lastCheckTick;
     }
 
     static deserialize(data, sim) {

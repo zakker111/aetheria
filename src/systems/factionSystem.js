@@ -312,9 +312,21 @@ export class FactionSystem {
   
   // Resolve a battle between two factions
   resolveBattle(faction1, faction2, agents) {
-    // Get members from both factions
-    const members1 = agents.filter(a => a.alive && faction1.members.has(a.id));
-    const members2 = agents.filter(a => a.alive && faction2.members.has(a.id));
+    // Get members from both factions — perf: iterate the member sets directly
+    // with O(1) id lookups instead of filtering the whole roster twice.
+    const byId = (id) => (typeof this.sim?._agentById === 'function')
+      ? this.sim._agentById(id)
+      : agents.find(a => a.id === id);
+    const members1 = [];
+    for (const id of faction1.members) {
+      const a = byId(id);
+      if (a && a.alive) members1.push(a);
+    }
+    const members2 = [];
+    for (const id of faction2.members) {
+      const a = byId(id);
+      if (a && a.alive) members2.push(a);
+    }
     
     if (members1.length === 0 || members2.length === 0) return;
     
@@ -336,7 +348,7 @@ export class FactionSystem {
     const memberArray = Array.from(loser.members);
     for (let i = 0; i < casualties && i < memberArray.length; i++) {
       const victimId = memberArray[Math.floor(this._rng().next() * memberArray.length)];
-      const victim = agents.find(a => a.id === victimId);
+      const victim = byId(victimId);
       if (victim) {
         victim.alive = false;
         loser.members.delete(victimId);

@@ -117,7 +117,6 @@ export class AnimalSystem {
     const world = sim?.world;
     if (!world) return;
     const rng = this._rng();
-    const agents = sim.agents || [];
 
     // --- Movement / behavior -------------------------------------------
     for (const a of [...this.animals]) {
@@ -133,17 +132,28 @@ export class AnimalSystem {
 
       const def = SPECIES[a.species];
 
-      // Danger check: nearby armed/hunting agents scare prey; wolves chase
+      // Danger check: nearby armed/hunting agents scare prey; wolves chase.
+      // O(1)-amortized: query the shared per-tick perception scan cache
+      // instead of scanning the full agent roster per animal (was
+      // animals x agents every tick). _getScan returns entities in
+      // canonical id order, so threat selection stays deterministic and
+      // identical across fresh runs, save/load resumes and same-seed twins.
       let threat = null;
       let nearestAgent = null;
       let nearestAgentD = Infinity;
-      for (const ag of agents) {
-        if (!ag.alive) continue;
-        const d = Math.abs(ag.x - a.x) + Math.abs(ag.y - a.y);
-        if (d < nearestAgentD) { nearestAgentD = d; nearestAgent = ag; }
+      // Snapshot the shared scan list: animal movement mutates the spatial
+      // index mid-loop, which invalidates (clears) the cache. Holding the
+      // old array reference keeps this iteration safe and read-only.
+      const nearby = [...world._getScan(Math.floor(a.x), Math.floor(a.y), 7)];
+      for (const ent of nearby) {
+        if (!ent || ent.type !== 'agent' || !ent.alive) continue;
+        const d2 = (ent.x - a.x) ** 2 + (ent.y - a.y) ** 2;
+        if (d2 > 49) continue; // exact radius test (scan is square-bounded)
+        const d = Math.abs(ent.x - a.x) + Math.abs(ent.y - a.y);
+        if (d < nearestAgentD) { nearestAgentD = d; nearestAgent = ent; }
         const scared = a.species !== 'wolf' && d < 6 &&
-          (ag.job === 'hunter' || ag.currentAction?.type === 'hunt');
-        if (scared) threat = ag;
+          (ent.job === 'hunter' || ent.currentAction?.type === 'hunt');
+        if (scared) threat = ent;
       }
       // Prey also flees other loud things: fires
       if (!threat && a.species !== 'wolf' && world.isBurning(Math.floor(a.x), Math.floor(a.y))) {

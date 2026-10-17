@@ -8,7 +8,7 @@ A browser-based god simulation game built with pure JavaScript and ES modules wh
 
 Aetheria is a 2D god simulation game featuring a robust entity-component-system architecture. Watch autonomous agents form settlements, develop relationships, and build societies while you shape their world as a deity.
 
-**Current Performance**: Handles 100+ agents and 250+ resources at 38+ ticks/second without freezing.
+**Current Performance**: Handles 200+ agents and 400+ resources at 80-250 ticks/second (headless soak: ~4-12 ms/tick depending on population phase) without freezing.
 
 ## ✅ Currently Implemented Features
 

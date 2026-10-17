@@ -26,6 +26,10 @@ export class FormationSystem {
     }
 
     getAgent(agentId) {
+        // Perf: O(1) id lookup via the simulation's shared index.
+        if (typeof this.sim._agentById === 'function') {
+            return this.sim._agentById(agentId);
+        }
         if (this.sim.agents) {
             return this.sim.agents.find(a => a.id === agentId);
         }

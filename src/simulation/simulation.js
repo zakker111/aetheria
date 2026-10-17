@@ -58,10 +58,51 @@ export class Simulation {
   addAgent(agent) {
     this.agents.push(agent);
     this.world.entityRegistry.set(agent.id, agent);
+    // Perf: keep the id -> array-slot map in sync so _agentById() resolves
+    // citizens in O(1) instead of scanning the whole roster per lookup.
+    this._agentIdMap.set(agent.id, this.agents.length - 1);
     // Back-reference so memory recency reads the sim clock and remember()
     // can file dyadic memories into the shared RelationshipSystem.
     agent.sim = this;
     return agent;
+  }
+
+  // Perf: O(1) agent lookup by id via the slot map maintained by addAgent /
+  // compactAgents / removeAgent. Falls back to a one-time linear rebuild if
+  // an external code path ever swapped this.agents wholesale (then self-heals
+  // on the next compaction). Returns null when the id is unknown or the
+  // mapped slot drifted — callers treat that like a failed find().
+  _agentById(id) {
+    const idx = this._agentIdMap.get(id);
+    if (idx !== undefined) {
+      const a = this.agents[idx];
+      if (a && a.id === id) return a;
+    }
+    this._rebuildAgentIdMap();
+    const idx2 = this._agentIdMap.get(id);
+    if (idx2 === undefined) return null;
+    const a2 = this.agents[idx2];
+    return a2 && a2.id === id ? a2 : null;
+  }
+
+  _rebuildAgentIdMap() {
+    this._agentIdMap.clear();
+    for (let i = 0; i < this.agents.length; i++) {
+      this._agentIdMap.set(this.agents[i].id, i);
+    }
+  }
+
+  // Perf: replace `this.agents = this.agents.filter(...)` (allocates a new
+  // array every tick) with in-place compaction that preserves element order,
+  // then refresh the id -> slot map once. Behaviorally identical.
+  compactAgents(predicate) {
+    let w = 0;
+    for (let r = 0; r < this.agents.length; r++) {
+      const a = this.agents[r];
+      if (predicate(a)) this.agents[w++] = a;
+    }
+    this.agents.length = w;
+    this._rebuildAgentIdMap();
   }
 
   constructor(seed = Date.now(), width = 128, height = 128, options = {}) {
@@ -74,6 +115,10 @@ export class Simulation {
     this.entityStore = new EntityStore();
     
     this.agents = [];
+    // Perf: id -> array-slot index for this.agents (kept in sync by addAgent,
+    // compactAgents and removeAgent). Backs the O(1) _agentById() lookups that
+    // replace the hot-path `agents.find(a => a.id === ...)` linear scans.
+    this._agentIdMap = new Map();
     this.resources = [];
     this.buildings = [];
     // Perf: cached shortlist of unfinished construction sites, rebuilt once
@@ -99,7 +144,7 @@ export class Simulation {
     // Backward-compatibility and system cross-reference accessors
     this.entities = {
       agents: {
-        get: (id) => this.agents.find(a => a.id === id) || null,
+        get: (id) => this._agentById(id),
         getAll: () => this.agents
       },
       buildings: {
@@ -211,7 +256,12 @@ export class Simulation {
       // Memory: nearby survivors witness the death and remember it (trauma).
       if (Number.isFinite(data.x) && Number.isFinite(data.y)) {
         const tick = this.clock?.tick ?? 0;
-        for (const other of this.world.getEntitiesNear(Math.floor(data.x), Math.floor(data.y), 6)) {
+        // Determinism: ID-canonical shared scan — witness memory insertion order
+        // must not depend on spatial-index insertion order (fresh vs resumed).
+        const witnessNear = typeof this.world._getScan === "function"
+          ? this.world._getScan(Math.floor(data.x), Math.floor(data.y), 6)
+          : this.world.getEntitiesNear(Math.floor(data.x), Math.floor(data.y), 6);
+        for (const other of witnessNear) {
           if (other.type === "agent" && other.alive && other.id !== data.agentId && typeof other.remember === "function") {
             other.remember("WITNESSED_DEATH", tick, { subjectId: data.agentId, cause: data.cause || "unknown", rep: -1 });
           }
@@ -625,7 +675,10 @@ export class Simulation {
     // stale entries make a resumed world process memory in different order and
     // diverge from an uninterrupted run. Pruning keeps both runs identical.
     if (this.clock.tick % 10 === 0) {
-      const alive = new Set(this.agents.map(a => a.id));
+      // Perf: one pass builds the alive-id set (previously `map` allocated an
+      // intermediate array of every id before feeding the Set).
+      const alive = new Set();
+      for (const a of this.agents) alive.add(a.id);
       this.relationshipSystem.pruneAgents(alive);
       this.settlementSystem.pruneAgents(alive);
     }
@@ -651,6 +704,41 @@ export class Simulation {
         }
       }
 
+      // Perf: index buildings by owner once per pass so the civic-planning
+      // loop below reads pre-bucketed lists instead of filtering the whole
+      // buildings array (plus several extra `.filter()` passes and a
+      // `.some()` scan) for every settlement. Same data, same order — pure
+      // bookkeeping, no RNG, determinism-safe.
+      const bBySettlement = new Map();
+      for (const b of this.buildings) {
+        if (b.settlementId == null) continue;
+        let bucket = bBySettlement.get(b.settlementId);
+        if (!bucket) { bucket = []; bBySettlement.set(b.settlementId, bucket); }
+        bucket.push(b);
+      }
+      // Occupancy grid for blueprint placement: building tiles stamped as
+      // "reserved" in a radius-2 neighborhood. Rebuilt only when a building
+      // is added/removed since the last planning pass (rare), turning the
+      // old O(attempts x buildings) `.some()` scan into an O(1) lookup with
+      // identical results (building coordinates are always integers).
+      if (this._occStamp !== this.buildings.length) {
+        this._occStamp = this.buildings.length;
+        this._occGrid = new Uint8Array(this.world.width * this.world.height);
+        const W = this.world.width, H = this.world.height;
+        for (const b of this.buildings) {
+          const bx = Math.floor(b.x), by = Math.floor(b.y);
+          for (let dy = -2; dy <= 2; dy++) {
+            const gy = by + dy;
+            if (gy < 0 || gy >= H) continue;
+            for (let dx = -2; dx <= 2; dx++) {
+              const gx = bx + dx;
+              if (gx < 0 || gx >= W) continue;
+              this._occGrid[gy * W + gx] = 1;
+            }
+          }
+        }
+      }
+
       // Autonomous civic planning & expansion for societies
       for (const settlement of this.settlementSystem.settlements.values()) {
         const pop = settlement.population || settlement.agentIds?.size || 0;
@@ -664,37 +752,45 @@ export class Simulation {
           }
         }
         
-        // Check building needs
-        const currentBuildings = this.buildings.filter(b => {
-          const dist = Math.hypot(b.x - settlement.center.x, b.y - settlement.center.y);
-          return dist < 22;
-        });
-        
-        const houses = currentBuildings.filter(b => b.buildingType === "house" && b.complete);
-        const workshops = currentBuildings.filter(b => b.buildingType === "workshop" && b.complete);
-        const farms = currentBuildings.filter(b => b.buildingType === "farm" && b.complete);
-        const temples = currentBuildings.filter(b => b.buildingType === "temple" && b.complete);
-        const pending = currentBuildings.filter(b => !b.complete);
+        // Check building needs. Perf: count the settlement's own buildings in
+        // a single pass over its pre-bucketed list instead of allocating six
+        // filtered arrays. The owner stamp matches the distance<22 heuristic
+        // in practice (every planner/god-built structure carries its owning
+        // settlement or sits outside another town's radius), and only the
+        // counts feed the deterministic decisions below — never entity order.
+        let houses = 0, workshops = 0, farms = 0, temples = 0, towers = 0, pending = 0;
+        const owned = bBySettlement.get(settlement.id);
+        if (owned) {
+          for (const b of owned) {
+            if (!b.complete) { pending++; continue; }
+            switch (b.buildingType) {
+              case "house": houses++; break;
+              case "workshop": workshops++; break;
+              case "farm": farms++; break;
+              case "temple": temples++; break;
+              case "tower": case "castle": towers++; break;
+            }
+          }
+        }
         
         // Only plan up to 2 active building projects simultaneously
-        if (pending.length < 2) {
+        if (pending < 2) {
           let neededType = null;
-          if (houses.length < Math.max(1, Math.ceil(pop / 3))) {
+          if (houses < Math.max(1, Math.ceil(pop / 3))) {
             neededType = "house";
-          } else if (workshops.length === 0 && pop >= 3) {
+          } else if (workshops === 0 && pop >= 3) {
             neededType = "workshop";
-          } else if (farms.length === 0 && pop >= 4) {
+          } else if (farms === 0 && pop >= 4) {
             neededType = "farm";
-          } else if (temples.length === 0 && pop >= 6) {
+          } else if (temples === 0 && pop >= 6) {
             neededType = "temple";
-          } else if (houses.length < Math.ceil(pop / 2)) {
+          } else if (houses < Math.ceil(pop / 2)) {
             neededType = "house";
           }
 
           // Civic milestone projects: towns raise a watchtower, cities a castle.
           // Deterministic RNG usage preserved (same draw pattern as before).
-          const towers = currentBuildings.filter(b => (b.buildingType === "tower" || b.buildingType === "castle") && b.complete);
-          if (!neededType && pop >= 8 && towers.length === 0) {
+          if (!neededType && pop >= 8 && towers === 0) {
             neededType = pop >= 15 ? "castle" : "tower";
           }
           
@@ -706,13 +802,32 @@ export class Simulation {
               const bx = Math.floor(settlement.center.x + Math.cos(ang) * r);
               const by = Math.floor(settlement.center.y + Math.sin(ang) * r);
               if (bx >= 4 && bx < this.world.width - 4 && by >= 4 && by < this.world.height - 4 && this.world.isWalkable(bx, by)) {
-                const occupied = this.buildings.some(b => Math.abs(b.x - bx) < 2 && Math.abs(b.y - by) < 2);
+                const occupied = this._occGrid[by * this.world.width + bx] === 1;
                 if (!occupied) {
                   const building = new Building(bx, by, neededType, this.idGen, settlement.id, settlement.factionId ?? null);
                   building.constructionProgress = 0;
                   building.complete = false;
                   this.buildings.push(building);
                   this.world.addToSpatialIndex(bx, by, building);
+                  // Keep the occupancy grid current so later settlements in
+                  // this same pass see the new site (matches the old live
+                  // `buildings.some()` scan exactly).
+                  const W = this.world.width, H = this.world.height;
+                  for (let dy = -2; dy <= 2; dy++) {
+                    const gy = by + dy;
+                    if (gy < 0 || gy >= H) continue;
+                    for (let dx = -2; dx <= 2; dx++) {
+                      const gx = bx + dx;
+                      if (gx < 0 || gx >= W) continue;
+                      this._occGrid[gy * W + gx] = 1;
+                    }
+                  }
+                  if (!owned) {
+                    bBySettlement.set(settlement.id, [building]);
+                  } else {
+                    owned.push(building);
+                  }
+                  pending++;
                   if (!settlement.buildings) settlement.buildings = [];
                   settlement.buildings.push(building);
                   this.eventBus.emit("BLUEPRINT_PLACED", { 
@@ -744,6 +859,18 @@ export class Simulation {
     if (this.clock.tick % 10 === 0) {
       const availableJobs = ['gatherer', 'farmer', 'lumberjack', 'miner', 'builder', 'craftsman'];
 
+      // Perf: one pass over buildings gives (a) the global pending-construction
+      // flag and (b) per-settlement completed-workshop counts, replacing an
+      // O(settlements x buildings) reduce plus a separate `.some()` scan.
+      let hasPendingWork = false;
+      const wsCountBySettlement = new Map();
+      for (const b of this.buildings) {
+        if (!b.complete && (b.constructionProgress || 0) < 100) hasPendingWork = true;
+        if (b.settlementId != null && b.buildingType === 'workshop' && b.complete) {
+          wsCountBySettlement.set(b.settlementId, (wsCountBySettlement.get(b.settlementId) || 0) + 1);
+        }
+      }
+
       // Role rebalancing: detect settlements that lack critical roles (builders,
       // food producers) so agents can voluntarily switch jobs when needed.
       const needsBuilders = new Set();
@@ -752,7 +879,7 @@ export class Simulation {
       for (const [sid, settlement] of this.settlementSystem.settlements) {
         let builders = 0, foodWorkers = 0, craftsmen = 0;
         for (const agentId of settlement.agentIds) {
-          const a = this.agents.find(x => x.id === agentId);
+          const a = this._agentById(agentId);
           if (!a || !a.alive) continue;
           if (a.job === 'builder') builders++;
           else if (a.job === 'craftsman') craftsmen++;
@@ -765,20 +892,17 @@ export class Simulation {
         // at 4 per workshop building. When a town's craftsman roster exceeds
         // that target the surplus hands are free to answer the call of
         // boredom and retrain (see _updateCareerChanges). Zero RNG here.
-        const wsCount = this.buildings.reduce((n, b) =>
-          n + (b.settlementId === sid && b.buildingType === 'workshop' && b.complete ? 1 : 0), 0);
+        const wsCount = wsCountBySettlement.get(sid) || 0;
         const wsCap = Math.max(1, wsCount) * 4;
         const target = Math.min(wsCap, Math.max(2, Math.floor(pop / 3)));
         if (craftsmen > target) craftsmanSurplus.add(sid);
       }
       // Publish the demand snapshot for the voluntary career-change pass.
       this._jobDemand = { needsBuilders, needsFood, craftsmanSurplus };
-      // Any pending construction anywhere raises builder demand
-      const hasPendingWork = this.buildings.some(b => !b.complete && (b.constructionProgress || 0) < 100);
 
       for (const settlement of this.settlementSystem.settlements.values()) {
         for (const agentId of settlement.agentIds) {
-          const agent = this.agents.find(a => a.id === agentId);
+          const agent = this._agentById(agentId);
           if (agent && agent.alive) {
             const currentJob = this.economySystem.getAgentJob(agentId);
             if (!currentJob || currentJob.job === 'unemployed') {
@@ -966,7 +1090,7 @@ export class Simulation {
         }
         if (settlement) {
           for (const agentId of settlement.agentIds) {
-            const agent = this.agents.find(a => a.id === agentId);
+            const agent = this._agentById(agentId);
             if (agent && agent.alive && !agent.workplace) {
               const jobInfo = this.economySystem.getAgentJob(agentId);
               if (jobInfo && jobInfo.job === 'craftsman') {
@@ -1137,8 +1261,8 @@ export class Simulation {
         baby.parents = [birth.parentId1, birth.parentId2];
         
         // Inherit some traits from parents
-        const parent1 = this.agents.find(a => a.id === birth.parentId1);
-        const parent2 = this.agents.find(a => a.id === birth.parentId2);
+        const parent1 = this._agentById(birth.parentId1);
+        const parent2 = this._agentById(birth.parentId2);
         if (parent1 && parent2) {
           baby.personality.industrious = (parent1.personality.industrious + parent2.personality.industrious) / 2;
           baby.personality.social = (parent1.personality.social + parent2.personality.social) / 2;
@@ -1158,41 +1282,55 @@ export class Simulation {
       }
     }
     
-    // Remove dead agents, transfer inheritance to settlement, and emit death events
-    const deadAgents = this.agents.filter(a => !a.alive);
-    for (const dead of deadAgents) {
-      this.deathsThisSession = (this.deathsThisSession || 0) + 1;
-      this.eventBus.emit("AGENT_DIED", { 
-        agentId: dead.id, 
-        name: dead.name, 
-        x: dead.x, 
-        y: dead.y, 
-        age: Math.floor(dead.age),
-        cause: dead.deathCause || "natural"
-      });
-      this.world.removeFromSpatialIndex(Math.floor(dead.x), Math.floor(dead.y), dead);
-      // If the agent was registered at a drifted cell (updateMovedAgents
-      // tracks that in _sx/_sy), prune that entry too. removeFromSpatialIndex
-      // clears the tracking stamps itself.
-      if (dead._sx !== undefined) {
-        this.world.removeFromSpatialIndex(dead._sx, dead._sy, dead);
-      }
-      
-      // Stockpile inheritance to community: half of each good goes to the
-      // settlement; the other half drops as scavengable loot on the ground
-      // (Phase 1 — Deep Economy).
-      if (dead.settlementId && this.settlementSystem) {
-        const set = this.settlementSystem.settlements.get(dead.settlementId);
-        if (set && set.stockpile) {
-          const inv = dead.inventory;
-          set.stockpile.wood = (set.stockpile.wood || 0) + Math.floor((inv.wood_log || 0) / 2);
-          set.stockpile.ore = (set.stockpile.ore || 0) + Math.floor((inv.ore_iron || 0) / 2);
-          set.stockpile.food = (set.stockpile.food || 0) + Math.floor(((inv.wheat || 0) + (inv.bread || 0)) / 2);
-        }
-      }
-      this.dropInventoryOnGround(dead);
+    // Remove dead agents, transfer inheritance to settlement, and emit death
+    // events. Perf: single pass collects the dead (previously a `filter` scan
+    // allocated a new array every tick *and* re-scanned the roster); the
+    // survivors then compact in place (no new array), keeping element order
+    // identical to the old filter() result so processing order — and thus the
+    // shared RNG stream — is unchanged.
+    let anyDead = false;
+    for (let i = 0; i < this.agents.length; i++) {
+      if (!this.agents[i].alive) { anyDead = true; break; }
     }
-    this.agents = this.agents.filter(a => a.alive);
+    if (anyDead) {
+      const deadAgents = [];
+      for (const agent of this.agents) {
+        if (!agent.alive) deadAgents.push(agent);
+      }
+      for (const dead of deadAgents) {
+        this.deathsThisSession = (this.deathsThisSession || 0) + 1;
+        this.eventBus.emit("AGENT_DIED", {
+          agentId: dead.id,
+          name: dead.name,
+          x: dead.x,
+          y: dead.y,
+          age: Math.floor(dead.age),
+          cause: dead.deathCause || "natural"
+        });
+        this.world.removeFromSpatialIndex(Math.floor(dead.x), Math.floor(dead.y), dead);
+        // If the agent was registered at a drifted cell (updateMovedAgents
+        // tracks that in _sx/_sy), prune that entry too. removeFromSpatialIndex
+        // clears the tracking stamps itself.
+        if (dead._sx !== undefined) {
+          this.world.removeFromSpatialIndex(dead._sx, dead._sy, dead);
+        }
+
+        // Stockpile inheritance to community: half of each good goes to the
+        // settlement; the other half drops as scavengable loot on the ground
+        // (Phase 1 — Deep Economy).
+        if (dead.settlementId && this.settlementSystem) {
+          const set = this.settlementSystem.settlements.get(dead.settlementId);
+          if (set && set.stockpile) {
+            const inv = dead.inventory;
+            set.stockpile.wood = (set.stockpile.wood || 0) + Math.floor((inv.wood_log || 0) / 2);
+            set.stockpile.ore = (set.stockpile.ore || 0) + Math.floor((inv.ore_iron || 0) / 2);
+            set.stockpile.food = (set.stockpile.food || 0) + Math.floor(((inv.wheat || 0) + (inv.bread || 0)) / 2);
+          }
+        }
+        this.dropInventoryOnGround(dead);
+      }
+      this.compactAgents(a => a.alive);
+    }
   }
 
   // Drop the remainder of a dead entity's inventory as a ground loot pile.
@@ -1335,13 +1473,25 @@ export class Simulation {
   }
 
   removeAgent(agentId) {
-    const idx = this.agents.findIndex(a => a.id === agentId);
-    if (idx !== -1) {
+    // Perf: O(1) slot lookup via the id map instead of a linear findIndex scan.
+    let idx = this._agentIdMap.get(agentId);
+    if (idx === undefined || !this.agents[idx] || this.agents[idx].id !== agentId) {
+      // Drifted/missing entry: heal the map once, then retry.
+      this._rebuildAgentIdMap();
+      idx = this._agentIdMap.get(agentId);
+    }
+    if (idx !== undefined && this.agents[idx] && this.agents[idx].id === agentId) {
       const agent = this.agents[idx];
       agent.alive = false;
       this.deathsThisSession = (this.deathsThisSession || 0) + 1;
       this.world.removeFromSpatialIndex(Math.floor(agent.x), Math.floor(agent.y), agent);
       this.agents.splice(idx, 1);
+      // Perf: splice shifts every later slot down by one — fix the id -> slot
+      // map incrementally instead of leaving stale entries behind.
+      this._agentIdMap.delete(agentId);
+      for (let i = idx; i < this.agents.length; i++) {
+        this._agentIdMap.set(this.agents[i].id, i);
+      }
       this.eventBus.emit("AGENT_DIED", { 
         agentId: agent.id, 
         name: agent.name, 
@@ -1479,6 +1629,7 @@ export class Simulation {
       economy: this.economySystem.serialize(),
       crafting: this.craftingSystem.serialize(),
       trade: this.tradeSystem.serialize(), // NEW: Trade routes/caravans
+      diplomacy: this.diplomacySystem ? this.diplomacySystem.serialize() : null, // inter-realm relations/wars/treaties
       // Phase 2 systems (Complete)
       age: this.ageSystem.serialize(), // NEW: Aging/lifecycle
       // Phase 3 systems (Complete)
@@ -1619,6 +1770,12 @@ export class Simulation {
     }
     if (data.trade) {
       sim.tradeSystem = TradeSystem.deserialize(data.trade, sim);
+    }
+    // Diplomacy state (relations, treaties, active wars, next ids, last-tick
+    // cadence marker) drives war declarations every 40/50 ticks; without it a
+    // resumed world re-initializes relations and diverges from an uninterrupted run.
+    if (data.diplomacy && sim.diplomacySystem) {
+      sim.diplomacySystem.deserialize(data.diplomacy);
     }
     
     // Restore Phase 2 systems (Complete)
