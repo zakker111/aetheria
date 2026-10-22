@@ -206,11 +206,12 @@ class CraftingSystem {
     /**
      * Remove worker from workshop
      */
-    removeWorker(workshopId, agentId) {
+    removeWorker(workshopId, agentId, releaseOnly = false) {
         const workshop = this.workshops.get(workshopId);
         if (!workshop) return false;
 
         workshop.assignedWorkers = workshop.assignedWorkers.filter(id => id !== agentId);
+        if (releaseOnly) return true; // roster bookkeeping only, no demotion
         
         const agent = typeof this.simulation._agentById === 'function'
             ? this.simulation._agentById(agentId)
@@ -356,12 +357,29 @@ class CraftingSystem {
                 const a = typeof sim._agentById === 'function'
                     ? sim._agentById(aid)
                     : sim.agents.find(x => x && x.id === aid);
-                if (!a || !a.alive || a.workplace !== wsId) {
-                    removals.push([wsId, aid]);
+                const rec = sim.economySystem?.getAgentJob?.(aid);
+                const stillCraftsman = rec && rec.job === 'craftsman';
+                if (!a || !a.alive) {
+                    removals.push([wsId, aid, true]);      // dead → full release
+                } else if (stillCraftsman && a.workplace !== wsId) {
+                    removals.push([wsId, aid, false]);     // transient desync → keep career
+                } else if (a.workplace !== wsId) {
+                    removals.push([wsId, aid, true]);      // relocated → full release
                 }
             }
         }
-        for (const [wsId, aid] of removals) this.removeWorker(wsId, aid);
+        for (const [wsId, aid, fullRelease] of removals) {
+            const a = typeof sim._agentById === 'function' ? sim._agentById(aid) : sim.agents.find(x => x && x.id === aid);
+            const rec = sim.economySystem?.getAgentJob?.(aid);
+            this.removeWorker(wsId, aid, !fullRelease);
+            // An alive craftsman kept their career (releaseOnly): restore the
+            // workplace pointer so they walk back to the bench next shift.
+            if (!fullRelease && a && a.alive && rec && rec.job === 'craftsman') {
+                a.workplace = wsId;
+                sim._jobChangeCount?.delete?.(aid);
+                if (a._lastJobAssignedTick === Infinity) a._lastJobAssignedTick = sim.clock?.tick ?? 0;
+            }
+        }
     }
 
     // Workshop within `radius` tiles of (x,y), or null. Deterministic scan.
@@ -507,8 +525,17 @@ class CraftingSystem {
         if (!workshop || !agent || !agent.inventory) return 0;
         const avail = workshop.storage.get(type) || 0;
         if (avail <= 0) return 0;
-        const used = Object.values(agent.inventory)
-            .reduce((a, b) => a + (typeof b === 'number' && b > 0 ? b : 0), 0);
+        // Phase 3c Step B fix: exclude the non-item `capacity` bookkeeping key
+        // from the used-space sum. Previously capacity:15 was counted as an
+        // item, making `free` always 0 so takeFromWorkshop never returned any
+        // goods — craftsmen could not distribute, stockpiles stayed empty,
+        // and trade routes/caravans never formed.
+        let used = 0;
+        for (const key of Object.keys(agent.inventory)) {
+            if (key === 'capacity') continue;
+            const v = agent.inventory[key];
+            if (typeof v === 'number' && v > 0) used += v;
+        }
         const free = Math.max(0, (agent.inventory.capacity || 15) - used);
         const take = Math.min(avail, amount, free);
         if (take <= 0) return 0;

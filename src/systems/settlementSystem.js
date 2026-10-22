@@ -503,8 +503,10 @@ export class SettlementSystem {
     const settlement = this.settlements.get(settlementId);
     if (!settlement) return null;
     
-    // Calculate total stored resources (stockpile + homes)
-    let totalFood = settlement.stockpile?.food || 0;
+    // Calculate total stored resources (stockpile + homes). Bread counts as
+    // food for sustenance purposes (separate commodity line in the stockpile,
+    // same nutrition at the town level).
+    let totalFood = (settlement.stockpile?.food || 0) + (settlement.stockpile?.bread || 0);
     let totalWood = settlement.stockpile?.wood || 0;
     let totalOre = settlement.stockpile?.ore || 0;
     

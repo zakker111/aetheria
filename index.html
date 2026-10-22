@@ -561,7 +561,15 @@
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
 
-        const simulation = new Simulation();
+        // Phase 3c Step H: starter scenarios via URL, e.g. ?scenario=warring
+        // ("Warring Kingdoms": founding towns start as hereditary rivals —
+        // first war ~tick 200 instead of ~tick 2900). Default world unchanged.
+        const _params = new URLSearchParams(window.location.search);
+        const _scenario = _params.get('scenario') || null;
+        const simulation = new Simulation(Date.now(), 128, 128, _scenario ? { scenario: _scenario } : {});
+        if (_scenario === 'warring') {
+            setTimeout(() => showNotification('\u2694\ufe0f Warring Kingdoms: your founding towns are hereditary rivals'), 500);
+        }
         const renderer = new CanvasRenderer(canvas, simulation.world, simulation);
         const interaction = new Interaction(simulation, renderer);
 
@@ -1313,6 +1321,10 @@
             if (e.code === "Space") {
                 e.preventDefault();
                 document.getElementById("pauseBtn").click();
+            }
+            // Step F: W toggles the Wars panel (when not typing in a field).
+            if ((e.key === "w" || e.key === "W") && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "")) {
+                renderer._warsPanel = !renderer._warsPanel;
             }
         });
 

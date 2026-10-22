@@ -64,6 +64,13 @@ export class EconomySystem {
         requiredSkills: { build: 1.0, gather: 1.0 },
         productivity: 1.2,
         wage: 4
+      },
+      soldier: {
+        name: 'Soldier',
+        description: 'Drills at the barracks; musters first in wartime',
+        requiredSkills: { combat: 1.0 },
+        productivity: 1.0,
+        wage: 3
       }
     };
     
@@ -133,7 +140,15 @@ export class EconomySystem {
         // plentiful. Skill floors stay low (baseline skills start at 1.0):
         // without a craftsman pipeline the whole Phase-1 supply chain
         // (workshops -> distribution -> trade) starves.
-        if (jobId === 'craftsman') score += 2.0;
+        // Soldier demand is gated by the caller: the sim only leaves
+        // 'soldier' in the pool for brave young adults when the town's
+        // under-arms quota has room (see _updateJobAssignments). Those
+        // enlistees must actually win the scoring contest, so the barracks
+        // bonus sits above the craftsman standing bonus — but it applies
+        // only to that narrow pre-vetted slice of the population, keeping
+        // the recruit rate near zero for everyone else.
+        if (jobId === 'soldier') score += 2.5; // enlistment incentive (gated pool)
+        else if (jobId === 'craftsman') score += 2.0;
         else if (jobId === 'trader') score += 1.5;
         if (score > bestScore) {
           bestScore = score;

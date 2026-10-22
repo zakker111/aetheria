@@ -1,4 +1,6 @@
+*.out
+
 node_modules/
-dist/
-build/
-*.tmp
+diag*.mjs
+diag*.out
+*.bundle

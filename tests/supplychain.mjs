@@ -22,11 +22,20 @@ let sawBreadInStockpile = false;
 let sawPlankInStockpile = false;
 let sawCraftingComplete = 0;
 let sawGoodsDistributed = 0;
-sim.eventBus.on('crafting_complete', () => sawCraftingComplete++);
+let sawFinishedGoodsInWorkshop = false; // peak-ever, not final state
+sim.eventBus.on('crafting_complete', () => {
+  sawCraftingComplete++;
+  for (const ws of sim.craftingSystem.workshops.values()) {
+    if ((ws.storage.get('bread') || 0) + (ws.storage.get('plank') || 0) > 0) {
+      sawFinishedGoodsInWorkshop = true;
+      break;
+    }
+  }
+});
 sim.eventBus.on('GOODS_DISTRIBUTED', () => sawGoodsDistributed++);
-// Crafted goods land in the town stockpile under their raw category keys
-// (bread -> food, plank -> wood), so presence-by-key can't prove the
-// distribution happened. Track explicit deposit events instead.
+// Crafted goods now land in the town stockpile under their OWN commodity
+// keys (bread/plank) so the trade system sees them as separate surplus
+// lines. Track explicit deposit events for pipeline evidence.
 sim.eventBus.on('STOCKPILE_DEPOSITED', (e) => {
   if (e && e.resource === 'bread') sawBreadInStockpile = true;
   if (e && e.resource === 'plank') sawPlankInStockpile = true;
@@ -63,8 +72,10 @@ for (let i = 0; i < TICKS; i++) {
 // --- Core pipeline evidence ---
 check('workshops exist (synced from buildings or seeded)', sim.craftingSystem.workshops.size >= 1);
 check('crafting completed at least once', sawCraftingComplete >= 1);
-check('finished goods present in workshop storage', [...sim.craftingSystem.workshops.values()]
-  .some(ws => (ws.storage.get('bread') || 0) + (ws.storage.get('plank') || 0) > 0));
+// Healthy distribution empties workshop storage by end of run, so assert on
+// peak-ever presence (observed right after crafting completes) rather than
+// the final state.
+check('finished goods present in workshop storage', sawFinishedGoodsInWorkshop);
 check('craftsmen distributed goods into a town stockpile (bread or plank seen)',
   sawBreadInStockpile || sawPlankInStockpile);
 check('GOODS_DISTRIBUTED event fired', sawGoodsDistributed >= 1);

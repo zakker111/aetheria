@@ -37,7 +37,18 @@ export class WorldState {
     this.spatialIndex = new Map();
     // Shared per-tick perception scan cache (see _getScan). Never serialized;
     // always empty at tick boundaries because updateAgents() clears it.
+    // Perf: epoch-stamped instead of clear-on-mutate. Mutating the spatial
+    // index only bumps `_scanEpoch` (O(1)); entries carry the epoch they were
+    // built under and are treated as misses when it doesn't match. The old
+    // design cleared the whole Map on EVERY add/remove — with agents crossing
+    // tiles constantly that thrashed the cache back to near-zero hit rate and
+    // burned CPU rebuilding identical scans plus churned Map memory (GC).
     this._scanCache = new Map();
+    this._scanEpoch = 0;
+    // Sim clock is wired by Simulation after construction; used only to bound
+    // cache growth across ticks (stale-by-epoch entries are pruned, never read).
+    this.clock = null;
+    this._scanCacheTick = -1;
 
     // Entity registry: id -> entity (O(1) lookups; kept in sync by add/removeFromSpatialIndex)
     this.entityRegistry = new Map();

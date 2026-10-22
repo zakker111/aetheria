@@ -107,6 +107,9 @@ export class Simulation {
 
   constructor(seed = Date.now(), width = 128, height = 128, options = {}) {
     this.seed = seed;
+    // Step H: optional starter scenario ('warring' = Warring Kingdoms).
+    // Purely additive bookkeeping — default worlds are unaffected.
+    this._scenario = options.scenario || null;
     this.idGen = new IDGenerator();
     // Isolated per-simulation bus: no shared listeners/history across sims (determinism fix)
     this.eventBus = new EventBus({ isolated: true });
@@ -341,6 +344,13 @@ export class Simulation {
           this.cultureSystem.initSettlementCulture(s);
         }
       }
+    }
+
+    // Step H: "warring kingdoms" starter scenario — turn the founding towns
+    // into hereditary rivals. Pure bookkeeping (no RNG draws), so default
+    // worlds are byte-identical to before; only opted-in scenarios diverge.
+    if (this._scenario === 'warring') {
+      this.applyWarringScenario();
     }
 
     // Assign active initial jobs so agents immediately start working and moving
@@ -857,7 +867,30 @@ export class Simulation {
   updateEconomy() {
     // Assign jobs to unemployed agents in settlements and idle agents
     if (this.clock.tick % 10 === 0) {
-      const availableJobs = ['gatherer', 'farmer', 'lumberjack', 'miner', 'builder', 'craftsman'];
+      const availableJobs = ['gatherer', 'farmer', 'lumberjack', 'miner', 'builder', 'craftsman', 'soldier'];
+
+      // Soldier profession cap (Phase 3b Step 2): keep at most ~1 in 8
+      // *adults* under arms per settlement so barracks upkeep never starves
+      // the granary. Deterministic: pure counts, zero RNG. Keyed by the
+      // settlement roster (same id space as the job loop below). Counting
+      // adults (not total roster size) keeps the cap meaningful while
+      // populations boom with children.
+      const adultCountBySettlement = new Map();
+      const soldierCountBySettlement = new Map();
+      for (const [sid, st] of this.settlementSystem.settlements) {
+        let adults = 0, soldiers = 0;
+        for (const aId of st.agentIds) {
+          const a = this._agentById(aId);
+          if (a && a.alive && a.lifeStage === 'adult') {
+            adults++;
+            // Count enlisted professionals *and* mustered conscripts so the
+            // enlistment quota tracks everyone actually under arms.
+            if (a.job === 'soldier' || a.militaryDuty) soldiers++;
+          }
+        }
+        adultCountBySettlement.set(sid, adults);
+        soldierCountBySettlement.set(sid, soldiers);
+      }
 
       // Perf: one pass over buildings gives (a) the global pending-construction
       // flag and (b) per-settlement completed-workshop counts, replacing an
@@ -901,6 +934,7 @@ export class Simulation {
       this._jobDemand = { needsBuilders, needsFood, craftsmanSurplus };
 
       for (const settlement of this.settlementSystem.settlements.values()) {
+        const homeSid = settlement.id;
         for (const agentId of settlement.agentIds) {
           const agent = this._agentById(agentId);
           if (agent && agent.alive) {
@@ -916,18 +950,59 @@ export class Simulation {
               // several times keeps failing to hold a post (workshop roster
               // pressure, missing skills). Let them settle permanently rather
               // than ping-pong the whole town through the same cycle.
+              // Soldier cap: brave young adults may enlist when the town
+              // under-arms quota has room; otherwise pick from civilian jobs.
+              const canEnlist = agent.lifeStage === 'adult' &&
+                agent.age >= 18 && agent.age <= 40 && (agent.personality?.brave ?? 0.5) > 0.6;
+              const maxSoldiers = Math.floor((adultCountBySettlement.get(homeSid) || 0) / 8);
+              const curSoldiers = soldierCountBySettlement.get(homeSid) || 0;
+              const enlistOffered = canEnlist && curSoldiers < maxSoldiers;
+              // Churn guard: an agent bounced between "unemployed" and hired
+              // several times keeps failing to hold a post (workshop roster
+              // pressure, missing skills). Let them settle permanently rather
+              // than ping-pong the whole town through the same cycle. The
+              // lockout is *conditional*: a brave youth with barracks quota
+              // room still gets the recruit offer — otherwise the first three
+              // failed civilian hires would permanently close the soldier
+              // profession to every candidate (Phase 3b Step 2 audit).
               const attempts = (this._jobChangeCount.get(agent.id) || 0) + 1;
               this._jobChangeCount.set(agent.id, attempts);
-              if (attempts > 3) { agent._lastJobAssignedTick = Infinity; continue; }
-              this.economySystem.assignJob(agent, availableJobs);
-              agent._lastJobAssignedTick = this.clock.tick;
+              if (attempts > 3 && !enlistOffered) { agent._lastJobAssignedTick = Infinity; continue; }
+              let jobPool = availableJobs;
+              if (!enlistOffered) {
+                jobPool = availableJobs.filter(j => j !== 'soldier');
+              } else {
+                soldierCountBySettlement.set(homeSid, curSoldiers + 1);
+              }
+              // When enlistment is on the table, the barracks bonus must beat
+              // the craftsman standing bonus in the scoring contest — so we
+              // hand the recruit the single-job soldier pool instead of hoping
+              // it wins a multi-way comparison. The caller already vetted age/
+              // bravery/quota, which is exactly what the standing bonuses were
+              // compensating for economy-wide.
+              if (enlistOffered) jobPool = ['soldier'];
+              this.economySystem.assignJob(agent, jobPool);
+              // Only count an attempt when the agent actually landed a post.
+              // A failed pool (no qualified job) must not burn one of the 3
+              // churn attempts — otherwise a soldier-capped pool could lock
+              // brave youths out of every profession at once.
+              if (agent.job && agent.job !== 'unemployed') {
+                this._jobChangeCount.set(agent.id, Math.max(0, attempts - 1));
+                agent._lastJobAssignedTick = this.clock.tick;
+              } else {
+                // Failed offer: undo the quota reservation and let them retry
+                // after the normal 60-tick patience window without burning
+                // another attempt next pass.
+                if (enlistOffered) soldierCountBySettlement.set(homeSid, curSoldiers);
+                this._jobChangeCount.set(agent.id, Math.max(0, attempts - 1));
+                agent._lastJobAssignedTick = this.clock.tick - 60;
+              }
               agent._jobAssignedTick = this.clock.tick;
             } else if (agent.lifeStage === 'adult' && this.clock.tick % 40 === 0 &&
                        agent.personality.curious > 0.4) {
               // Career change: switch role if the community is short-staffed
               // where we live AND where we currently work (same site), so a
               // builder heading to another town's construction never poaches.
-              const homeSid = settlement.id;
               const jobSid = this._jobSettlementId(agent);
               const sameSite = jobSid == null || jobSid === homeSid;
               if (sameSite) {
@@ -989,6 +1064,27 @@ export class Simulation {
     }
   }
   
+  // Shared enlistment gate (Phase 3b Step 2): a brave young adult may take
+  // the king's shilling only while their settlement's under-arms quota
+  // (~1 in 8 adults, counting mustered conscripts too) has room. Pure
+  // counts + personality, zero RNG — safe for determinism and save/load.
+  _soldierEnlistOffer(agent, homeSid) {
+    if (!agent || !agent.alive || agent.lifeStage !== 'adult') return false;
+    if (!(agent.age >= 18 && agent.age <= 40)) return false;
+    if ((agent.personality?.brave ?? 0.5) <= 0.6) return false;
+    const st = this.settlementSystem.settlements.get(homeSid);
+    if (!st) return false;
+    let adults = 0, underArms = 0;
+    for (const id of st.agentIds) {
+      const a = this._agentById(id);
+      if (a && a.alive && a.lifeStage === 'adult') {
+        adults++;
+        if (a.job === 'soldier' || a.militaryDuty) underArms++;
+      }
+    }
+    return underArms < Math.floor(adults / 8);
+  }
+
   // Voluntary career changes ("I feel bored / I want something else").
   // Every few days of village time, settled adults who have been stuck in the
   // same trade for a long while may quit and retrain. Motivation is a mix of
@@ -1017,6 +1113,13 @@ export class Simulation {
         typeof rec.assignedAt === 'number' ? rec.assignedAt : -1);
       if (assignedAt < 0 || this.clock.tick - assignedAt < 600) continue; // still fresh on the job
 
+      // Soldiers under arms never job-hunt mid-muster; veterans who kept
+      // their profession are content on the barracks roster (Phase 3b Step 2).
+      // Check the agent's own job too: mustering sets soldier.job='soldier'
+      // without touching the economy record, so a conscripted farmer must be
+      // skipped by this guard or they'd quit mid-campaign.
+      if (rec.job === 'soldier' || agent.job === 'soldier') continue;
+
       const p26 = agent.personality;
       // Restlessness: curious + low diligence + a dash of social wanderlust.
       const restlessness = (p26.curious ?? 0.5) * 0.5
@@ -1037,10 +1140,31 @@ export class Simulation {
       if (rec.job === 'craftsman') {
         if (!demand.craftsmanSurplus.has(homeSid)) continue; // benches need us
         if (demand.needsFood.has(homeSid)) pool = ['farmer', 'gatherer', 'lumberjack'];
+        // Wartime recruiting drive (Phase 3b Step 2): a bored young brave
+        // craftsman may answer the drumbeat instead of retraining civilian —
+        // but only while their settlement's under-arms quota has room.
+        const enlistOffer = this._soldierEnlistOffer(agent, homeSid);
+        if (enlistOffer) pool = ['soldier'];
       } else if (rec.job === 'builder') {
         if (demand.needsBuilders.has(homeSid)) continue; // the town needs walls
       } else if (rec.job === 'farmer' || rec.job === 'gatherer' || rec.job === 'lumberjack') {
         if (demand.needsFood.has(homeSid)) continue; // the granaries need us
+      } else if (rec.job === 'soldier') {
+        // Soldiers only leave the colours when the town's under-arms quota
+        // has already been cut (settlement shrank) — otherwise barracks
+        // drills are a lifelong trade here (Phase 3b Step 2).
+        const adultsHere = this.settlementSystem.getAgentSettlement(agent.id)
+          ? [...this.settlementSystem.getAgentSettlement(agent.id).agentIds]
+              .filter(id => { const x = this._agentById(id); return x && x.alive && x.lifeStage === 'adult'; }).length
+          : 0;
+        const quotaHere = Math.floor(adultsHere / 8);
+        let underArmsHere = 0;
+        const stt = this.settlementSystem.getAgentSettlement(agent.id);
+        if (stt) for (const id of stt.agentIds) {
+          const x = this._agentById(id);
+          if (x && x.alive && x.lifeStage === 'adult' && (x.job === 'soldier' || x.militaryDuty)) underArmsHere++;
+        }
+        if (underArmsHere <= quotaHere) continue; // quota still full — stay enlisted
       }
       if (pool.length === 0) continue;
 
@@ -1299,6 +1423,10 @@ export class Simulation {
       }
       for (const dead of deadAgents) {
         this.deathsThisSession = (this.deathsThisSession || 0) + 1;
+        // Bookkeeping: drop the economy job record so agentJobs never
+        // accumulates ghost rows of the dead. Without this, stale ids get
+        // re-issued to newborns and inherit a stranger's profession.
+        this.economySystem?.agentJobs?.delete(dead.id);
         this.eventBus.emit("AGENT_DIED", {
           agentId: dead.id,
           name: dead.name,
@@ -1489,6 +1617,9 @@ export class Simulation {
       // Perf: splice shifts every later slot down by one — fix the id -> slot
       // map incrementally instead of leaving stale entries behind.
       this._agentIdMap.delete(agentId);
+      // Bookkeeping: drop the economy job record so agentJobs never accumulates
+      // ghosts of the dead (Phase 3b Step 2 audit found leaked 'soldier' rows).
+      this.economySystem?.agentJobs?.delete(agentId);
       for (let i = idx; i < this.agents.length; i++) {
         this._agentIdMap.set(this.agents[i].id, i);
       }
@@ -1610,10 +1741,38 @@ export class Simulation {
     }
   }
 
+  // Step H: "Warring Kingdoms" starter scenario. Takes the towns founded at
+  // world init and makes them hereditary rivals: warlike cultures (raised
+  // belligerence, lowered cooperation) plus pre-seeded grievance feuds that
+  // resolve through the normal casus-belli pipeline within ~150 ticks —
+  // instantly watchable conflict without touching default-world behavior.
+  // Deterministic: no RNG draws; settlement ids are assigned in loop order.
+  applyWarringScenario() {
+    const settlements = [...this.settlementSystem.settlements.values()]
+      .sort((a, b) => a.id - b.id);
+    for (const s of settlements) {
+      const v = s.culture?.values;
+      if (v) {
+        v.belligerence = Math.min(0.9, (v.belligerence ?? 0.3) + 0.45);
+        v.cooperation = Math.max(0.2, (v.cooperation ?? 0.8) - 0.4);
+        s.culture.ethos = 'Warring Kingdom';
+      }
+    }
+    // Chain rivalries: town 1 vs 2, 2 vs 3, ... plus 1 vs last when possible.
+    for (let i = 0; i + 1 < settlements.length; i++) {
+      this.diplomacySystem.seedFeud(settlements[i].id, settlements[i + 1].id, 100);
+    }
+    if (settlements.length >= 3) {
+      this.diplomacySystem.seedFeud(
+        settlements[0].id, settlements[settlements.length - 1].id, 150);
+    }
+  }
+
   // Serialization (doc 02: persistence service)
   serialize() {
     return {
       seed: this.seed ?? this.world.seed,
+      scenario: this._scenario || null,
       worldSeed: this.world.seed,
       rngState: this.world.rng.getState(), // determinism: restore RNG stream on load
       world: this.world.serialize(), // terrain arrays (skipTerrain load path)
@@ -1672,6 +1831,9 @@ export class Simulation {
     // consuming RNG draws and creating default entities that then get cleared —
     // both a determinism hazard and wasted work. We restore everything from data.
     const sim = new Simulation(data.seed, 128, 128, { skipInit: true });
+    // Step H: remember which scenario this save came from (informational;
+    // all scenario state — feuds, cultures — is restored from the data).
+    if (data.scenario) sim._scenario = data.scenario;
     // Determinism fix: WorldState.deserialize() replaces `world.rng` with a
     // fresh object restored from the terrain save's stream position. Agents
     // hold live references to the ORIGINAL world.rng (their behavior draws

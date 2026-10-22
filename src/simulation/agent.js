@@ -262,7 +262,15 @@ export class Agent {
       }
     } else {
       this.starvationTicks = 0;
-      if (this.health < this.maxHealth) {
+      // Phase 3b Step 3 (combat depth): soldiers actively fighting in a
+      // warband do NOT regenerate health mid-battle — without this gate the
+      // 0.5/tick regen outpaces melee damage (~12 per 45-tick swing), so
+      // battles become endless stalemates and nobody ever dies (no
+      // casualties/battles ever recorded). Wounded men resting at home DO
+      // heal (they left their warbandId when they broke off the line).
+      const inBattle = this.militaryDuty && this.warbandId != null &&
+        this.sim?.warfareSystem?.warbands?.get(this.warbandId)?.state === 'engaging';
+      if (!inBattle && this.health < this.maxHealth) {
         this.health = Math.min(this.maxHealth, this.health + 0.5);
       }
     }
@@ -649,7 +657,39 @@ export class Agent {
         if (!isCraftsman) {
           const surplus = (this.inventory.wood_log || 0) + (this.inventory.ore_iron || 0) + (this.inventory.wheat || 0);
           if (surplus >= 2) {
-            this.goals.push({ type: "deposit_to_stockpile", priority: 84, target: settlement.center });
+            // Workshop feeder route: raw gatherers (lumberjacks/miners/
+            // farmers) used to dump EVERYTHING into the town stockpile, so
+            // workshop storage starved — log_to_plank/wheat_to_flour queues
+            // sat idle and finished-goods surplus for trade never formed.
+            // When a nearby workshop has benches free of their own haul duty,
+            // send half the load there first (deterministic, no RNG).
+            let fedWorkshop = false;
+            // Wellbeing gate: hauling to a workshop instead of the town
+            // stockpile adds a leg to the journey; dehydration-prone or
+            // starving gatherers must go straight home (the feeder loop
+            // without this gate caused mass deaths around tick ~1000).
+            const canFeed = this.needs.water > 50 && this.needs.food > 40;
+            if (simulation.craftingSystem && canFeed) {
+              const ws = simulation.craftingSystem.findNearestWorkshop(this.x, this.y, 24);
+              if (ws) {
+                const distToCenter = Math.hypot(ws.x - settlement.center.x, ws.y - settlement.center.y);
+                const breadStock = ws.storage.get('bread') || 0;
+                const plankStock = ws.storage.get('plank') || 0;
+                // Only feed shops that belong to our town and aren't already
+                // drowning in finished goods. Surplus >= 4 (not 2): feeding
+                // at exactly-2 raw units ping-ponged stock<->workshop forever.
+                if (distToCenter <= 32 && breadStock < 6 && plankStock < 6) {
+                  const rawAtWs = (ws.storage.get('wood_log') || 0) + (ws.storage.get('wheat') || 0) + (ws.storage.get('ore_iron') || 0);
+                  if (rawAtWs < 6 && surplus >= 4) {
+                    this.goals.push({ type: "haul_to_workshop_feed", priority: 85, workplaceId: ws.id });
+                    fedWorkshop = true;
+                  }
+                }
+              }
+            }
+            if (!fedWorkshop) {
+              this.goals.push({ type: "deposit_to_stockpile", priority: 84, target: settlement.center });
+            }
           }
         } else if (this.workplace && simulation.craftingSystem) {
           const ws = simulation.craftingSystem.workshops.get(this.workplace);
@@ -665,7 +705,7 @@ export class Agent {
           }
         }
         if (this.needs.food < 45 && (!this.inventory.wheat && !this.inventory.bread)) {
-          if (settlement.stockpile && settlement.stockpile.food > 0) {
+          if (settlement.stockpile && ((settlement.stockpile.food || 0) + (settlement.stockpile.bread || 0)) > 0) {
             this.goals.push({ type: "eat_from_stockpile", priority: 95, target: settlement.center });
           } else if (simulation.craftingSystem) {
             // Bread distribution: finished goods from workshops feed the town.
@@ -939,6 +979,27 @@ export class Agent {
               workplaceId: this.workplace,
               score: goal.priority
             });
+          }
+          break;
+
+        case "haul_to_workshop_feed":
+          if (goal.workplaceId) {
+            actions.push({
+              type: "haul_to_workshop_feed",
+              workplaceId: goal.workplaceId,
+              score: goal.priority
+            });
+            // Keep the town deposit as a fallback action: after feeding the
+            // workshop, the remainder of the haul still belongs in the
+            // communal stockpile.
+            const home = simulation?.settlementSystem?.getAgentSettlement?.(this.id);
+            if (home && home.center) {
+              actions.push({
+                type: "deposit_to_stockpile",
+                target: home.center,
+                score: goal.priority - 1
+              });
+            }
           }
           break;
 
@@ -1933,6 +1994,31 @@ export class Agent {
         break;
       }
 
+      // Workshop feeder: a raw gatherer brings part of its town-bound haul
+      // to the nearest workshop so crafting queues have inputs. Deposits at
+      // most half the load (rest still goes to the stockpile afterwards).
+      case "haul_to_workshop_feed": {
+        const workshop = craftingSystem ? craftingSystem.workshops.get(action.workplaceId) : null;
+        if (!workshop) { this.currentAction = null; break; }
+        const site = { x: workshop.x + 1, y: workshop.y + 1 };
+        if (this.distanceTo(site) < 2) {
+          const logHalf = Math.floor((this.inventory.wood_log || 0) / 2);
+          const oreHalf = Math.floor((this.inventory.ore_iron || 0) / 2);
+          const wheatHalf = Math.max(0, Math.floor(((this.inventory.wheat || 0) - 1) / 2));
+          let delivered = 0;
+          if (logHalf > 0) { this.inventory.wood_log -= logHalf; craftingSystem.depositToWorkshop(workshop.id, 'wood_log', logHalf); delivered += logHalf; }
+          if (oreHalf > 0) { this.inventory.ore_iron -= oreHalf; craftingSystem.depositToWorkshop(workshop.id, 'ore_iron', oreHalf); delivered += oreHalf; }
+          if (wheatHalf > 0) { this.inventory.wheat -= wheatHalf; craftingSystem.depositToWorkshop(workshop.id, 'wheat', wheatHalf); delivered += wheatHalf; }
+          if (delivered > 0 && eventBus) {
+            eventBus.emit("HAUL_DELIVERED", { agentId: this.id, workshopId: workshop.id, units: delivered });
+          }
+          this.currentAction = null;
+        } else {
+          this.moveToward(site, world);
+        }
+        break;
+      }
+
       // Distribution: collect fresh bread from the bakery for personal use.
       case "collect_bread": {
         const workshop = craftingSystem ? craftingSystem.workshops.get(action.workplaceId) : null;
@@ -1972,14 +2058,20 @@ export class Agent {
             const settlement = simulation?.settlementSystem?.getAgentSettlement?.(this.id);
             let deposited = 0;
             if (settlement) {
+              // Finished goods land in their OWN commodity lines (bread/plank),
+              // not merged into raw food/wood. The trade system treats them as
+              // separate surplus lines; merging made bread invisible to trade
+              // profiles so routes/caravans could never form. Consumption
+              // paths that only read stockpile.food fall back to bread via
+              // getEffectiveFood (settlementSystem).
               if (this.inventory.bread > 0) {
-                simulation.settlementSystem.depositToStockpile(settlement.id, 'food', this.inventory.bread);
+                simulation.settlementSystem.depositToStockpile(settlement.id, 'bread', this.inventory.bread);
                 if (eventBus) eventBus.emit("STOCKPILE_DEPOSITED", { settlementId: settlement.id, resource: 'bread', units: this.inventory.bread });
                 deposited += this.inventory.bread;
                 this.inventory.bread = 0;
               }
               if (this.inventory.plank > 0) {
-                simulation.settlementSystem.depositToStockpile(settlement.id, 'wood', this.inventory.plank);
+                simulation.settlementSystem.depositToStockpile(settlement.id, 'plank', this.inventory.plank);
                 if (eventBus) eventBus.emit("STOCKPILE_DEPOSITED", { settlementId: settlement.id, resource: 'plank', units: this.inventory.plank });
                 deposited += this.inventory.plank;
                 this.inventory.plank = 0;
@@ -2458,7 +2550,10 @@ export class Agent {
           if (simulation && simulation.settlementSystem) {
             const sid = this.settlementId || simulation.settlementSystem.agentSettlementMap.get(this.id);
             if (sid) {
-              const taken = simulation.settlementSystem.withdrawFromStockpile(sid, "food", 1);
+              // Bread is a separate commodity line but counts as food for
+              // sustenance — draw from raw food first, then bread.
+              let taken = simulation.settlementSystem.withdrawFromStockpile(sid, "food", 1);
+              if (taken === 0) taken = simulation.settlementSystem.withdrawFromStockpile(sid, "bread", 1);
               if (taken > 0) {
                 this.needs.food = Math.min(100, this.needs.food + 45);
               }
@@ -2834,6 +2929,12 @@ export class Agent {
       hasWeapon: this.hasWeapon ?? false,
       hasShield: this.hasShield ?? false,
       formationOffset: Array.isArray(this.formationOffset) ? this.formationOffset.slice() : null,
+      // Phase 3b Step 3 (combat depth): wound state + convalescence counter
+      // and campaign veteran count drive battlefield behavior — they must
+      // round-trip through save/load or resumed battles desync.
+      wounded: this.wounded === true,
+      woundRecovery: this.woundRecovery ?? 0,
+      veteranCampaigns: this.veteranCampaigns ?? 0,
       // Combat component: mirrors canonical health each update, but cooldown/
       // target/attack-speed state must survive the round trip.
       combat: this.combat ? { ...this.combat } : null,
@@ -2982,6 +3083,10 @@ export class Agent {
     agent.hasWeapon = data.hasWeapon ?? false;
     agent.hasShield = data.hasShield ?? false;
     agent.formationOffset = Array.isArray(data.formationOffset) ? data.formationOffset.slice() : null;
+    // Phase 3b Step 3: wound/veteran state round-trip (see serialize()).
+    agent.wounded = data.wounded === true;
+    agent.woundRecovery = data.woundRecovery ?? 0;
+    agent.veteranCampaigns = data.veteranCampaigns ?? 0;
     // Combat component: cooldown/target/attack-speed state must round-trip.
     agent.combat = data.combat ? { ...data.combat } : null;
     // Religion component: faith decays incrementally per tick — without this,

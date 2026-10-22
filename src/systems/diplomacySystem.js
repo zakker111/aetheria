@@ -23,6 +23,95 @@ export class DiplomacySystem {
     this.nextWarId = 1;
     this.nextTreatyId = 1;
     this.lastDiplomacyTick = 0;
+    // Step D: grievance ledger keyed by relation -> Map(targetId -> {weight, reason}).
+    // Neighboring settlements accumulate friction toward their closest rival;
+    // weights decay over time (see update()) so tension breathes instead of
+    // hard-expiring. Purely deterministic bookkeeping — no RNG.
+    this.grievances = new Map();
+    // Step H: pre-seeded feuds from starter scenarios ("warring kingdoms").
+    // Each entry declares war once both settlements exist at tick >= startTick.
+    this.seededFeuds = [];
+  }
+
+  /**
+   * Step H: register a pre-seeded rivalry for scenario starts. Names may be
+   * settlement ids (numbers/numeric strings) or exact settlement names; id
+   * feuds resolve the moment both towns exist, name feuds also match later-
+   * founded towns. Deterministic: pure bookkeeping, no RNG. War declaration
+   * is deferred to update() because settlement ids are assigned lazily as
+   * towns are founded during world init.
+   */
+  seedFeud(nameA, nameB, startTick = 100) {
+    if (!nameA || !nameB || nameA === nameB) return;
+    if (this.seededFeuds.some(f => f.nameA === nameA && f.nameB === nameB)) return;
+    this.seededFeuds.push({ nameA, nameB, startTick });
+  }
+
+  /** Resolve one feud endpoint (settlement id or exact name) to a live town. */
+  _resolveFeudEndpoint(ref, settlements) {
+    const byId = settlements.get(Number(ref));
+    if (byId && !byId.ruined) return byId;
+    let best = null;
+    for (const s of settlements.values()) {
+      if (!s || s.ruined || s.name !== ref) continue;
+      // Deterministic tie-break: lowest id wins among same-named towns.
+      if (!best || s.id < best.id) best = s;
+    }
+    return best;
+  }
+
+  /**
+   * Step H: resolve seeded feuds once both sides exist — drag their relation
+   * into open TENSION and load both grudge ledgers so the normal casus-belli
+   * pipeline declares war within a few diplomacy cycles.
+   */
+  applySeededFeuds(tick) {
+    if (!this.seededFeuds.length) return;
+    const settlements = this.sim?.settlementSystem?.settlements;
+    if (!settlements) return;
+    const remaining = [];
+    for (const feud of this.seededFeuds) {
+      const a = this._resolveFeudEndpoint(feud.nameA, settlements);
+      const b = this._resolveFeudEndpoint(feud.nameB, settlements);
+      if (!a || !b || a.id === b.id || tick < feud.startTick) { remaining.push(feud); continue; }
+      const rel = this.getRelation(a.id, b.id);
+      if (rel.status !== DIPLOMATIC_STATUS.WAR) {
+        rel.score = Math.min(rel.score, 15);
+        rel.status = DIPLOMATIC_STATUS.TENSION;
+      }
+      this.addGrievance(a.id, b.id, "Old Border Feud", 24);
+      this.addGrievance(b.id, a.id, "Old Border Feud", 24);
+    }
+    this.seededFeuds = remaining;
+  }
+
+  /**
+   * Accumulate a weighted grievance from `fromId` against `targetId`.
+   * The weight grows with the two settlements' belligerence and is capped so
+   * no single grudge compounds forever.
+   */
+  addGrievance(fromId, targetId, reason, amount) {
+    if (fromId === targetId || !Number.isFinite(amount)) return;
+    if (!this.grievances.has(fromId)) this.grievances.set(fromId, new Map());
+    const perTarget = this.grievances.get(fromId);
+    const prev = perTarget.get(targetId);
+    const sFrom = this.sim?.settlementSystem?.settlements?.get(fromId);
+    const belligerence = sFrom?.culture?.values?.belligerence ?? 0.3;
+    const inc = Math.min(6, amount * (0.7 + belligerence));
+    const weight = Math.min(25, (prev?.weight ?? 0) + inc);
+    perTarget.set(targetId, { weight, reason });
+  }
+
+  /** Closest OTHER settlement to `settlement` (by squared center distance). */
+  nearestRival(settlement) {
+    let best = null, bestD = Infinity;
+    for (const other of this.sim.settlementSystem.settlements.values()) {
+      if (!other || other.id === settlement.id) continue;
+      const d = (other.center.x - settlement.center.x) ** 2 +
+        (other.center.y - settlement.center.y) ** 2;
+      if (d < bestD || (d === bestD && best && other.id < best.id)) { best = other; bestD = d; }
+    }
+    return best;
   }
 
   getRelationKey(id1, id2) {
@@ -83,17 +172,49 @@ export class DiplomacySystem {
   update(tick) {
     if (!this.sim || !this.sim.settlementSystem) return;
 
-    // Check relations every 40 ticks
-    if (tick - this.lastDiplomacyTick >= 40) {
+    // Check relations every 25 ticks (Step D: faster cadence so wars start
+    // within a watchable session)
+    if (tick - this.lastDiplomacyTick >= 25) {
       this.lastDiplomacyTick = tick;
+      // Step H: resolve any pre-seeded scenario feuds first.
+      this.applySeededFeuds(tick);
+      // Grievance decay: accumulated slights fade over time instead of
+      // persisting forever, letting tension breathe before it boils over.
+      for (const rel of this.relations.values()) {
+        if (rel.grievances?.length && rel.status !== DIPLOMATIC_STATUS.WAR) {
+          rel.grievances = rel.grievances
+            .map(g => ({ ...g, weight: g.weight * 0.995 }))
+            .filter(g => g.weight > 0.25);
+        }
+      }
       this.evaluateDiplomacy(tick);
       this.updateTreaties(tick);
+    } else if (this.seededFeuds.length) {
+      // Step H: scenario feuds can fire on any tick once both towns exist —
+      // don't wait up to 25 ticks for the first diplomacy pass.
+      this.applySeededFeuds(tick);
     }
   }
 
   evaluateDiplomacy(tick) {
     const settlements = Array.from(this.sim.settlementSystem.settlements.values());
     if (settlements.length < 2) return;
+
+    // Step D: neighboring friction feeds a grievance ledger. Each settlement
+    // accumulates weight against its CLOSEST rival (border pressure is
+    // directional and localized), scaled by how big/bellicose it is. This is
+    // what eventually tips deep peace into tension even when trade is good.
+    for (const s of settlements) {
+      const pop = s.population || s.agentIds?.size || 0;
+      if (pop < 35) continue; // too small to project power — no grudges yet
+      const rival = this.nearestRival(s);
+      if (!rival) continue;
+      const dist = Math.hypot(s.center.x - rival.center.x, s.center.y - rival.center.y);
+      if (dist > 60) continue; // only genuine neighbors chafe
+      const rivalPop = rival.population || rival.agentIds?.size || 0;
+      const scarcity = rivalPop > pop ? 1.4 : 1.0; // envied stronger neighbor
+      this.addGrievance(s.id, rival.id, "Border Friction", 0.8 * scarcity);
+    }
 
     for (let i = 0; i < settlements.length; i++) {
       for (let j = i + 1; j < settlements.length; j++) {
@@ -123,6 +244,13 @@ export class DiplomacySystem {
         if (dist < 28 && rel.status !== DIPLOMATIC_STATUS.ALLIANCE) {
           rel.score -= 0.15;
         }
+
+        // Grievance pressure: accumulated grudges pull the relation score
+        // down toward whichever side resents the other more.
+        const g12 = this.grievances.get(s1.id)?.get(s2.id)?.weight ?? 0;
+        const g21 = this.grievances.get(s2.id)?.get(s1.id)?.weight ?? 0;
+        const grudge = Math.max(g12, g21);
+        if (grudge > 0) rel.score -= grudge * 0.04;
 
         rel.score = Math.max(0, Math.min(100, rel.score));
 
@@ -268,6 +396,8 @@ export class DiplomacySystem {
 
     rel.status = DIPLOMATIC_STATUS.WAR;
     rel.score = Math.min(rel.score, 5);
+    // The grievance that justified this war is now spent.
+    if (this.grievances.has(attackerId)) this.grievances.get(attackerId).delete(defenderId);
 
     const sA = this.sim.settlementSystem.settlements.get(attackerId);
     const sD = this.sim.settlementSystem.settlements.get(defenderId);
@@ -447,6 +577,10 @@ export class DiplomacySystem {
         description,
         settlementA: s1.name,
         settlementB: s2.name,
+        // Step E: ids let the chronicle attach front-line coords for
+        // click-to-jump camera. Additive payload field — no sim-state impact.
+        settlementA_id: s1.id,
+        settlementB_id: s2.id,
         time: this.simulation?.clock?.tick ?? Date.now()
       });
     }
@@ -464,7 +598,14 @@ export class DiplomacySystem {
       warHistory: this.warHistory,
       nextWarId: this.nextWarId,
       nextTreatyId: this.nextTreatyId,
-      lastDiplomacyTick: this.lastDiplomacyTick
+      lastDiplomacyTick: this.lastDiplomacyTick,
+      // Grievance ledger (Step D): Map<fromId, Map<targetId, {weight, reason}>>
+      grievances: Array.from(this.grievances.entries()).map(
+        ([k, m]) => [k, Array.from(m.entries())]
+      ),
+      // Step H: unresolved scenario feuds must survive save/load or a
+      // resumed "warring kingdoms" game would silently lose its pending wars.
+      seededFeuds: this.seededFeuds
     };
   }
 
@@ -478,6 +619,10 @@ export class DiplomacySystem {
     if (Number.isFinite(data.nextWarId)) this.nextWarId = data.nextWarId;
     if (Number.isFinite(data.nextTreatyId)) this.nextTreatyId = data.nextTreatyId;
     if (Number.isFinite(data.lastDiplomacyTick)) this.lastDiplomacyTick = data.lastDiplomacyTick;
+    if (Array.isArray(data.grievances)) {
+      this.grievances = new Map(data.grievances.map(([k, entries]) => [k, new Map(entries)]));
+    }
+    if (Array.isArray(data.seededFeuds)) this.seededFeuds = data.seededFeuds;
   }
 
   static deserialize(data, sim) {

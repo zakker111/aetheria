@@ -27,9 +27,17 @@ Aetheria is a 2D god simulation game featuring a robust entity-component-system 
 
 ### Economy & Settlements
 - **Settlement Detection**: Automatic clustering of agents into named settlements
-- **Job Assignment**: Agents automatically assigned roles (Farmer, Lumberjack, Miner, Builder) based on settlement needs
+- **Job Assignment**: Agents automatically assigned roles (Farmer, Lumberjack, Miner, Builder, Craftsman) based on settlement needs
+- **Crafting & Supply Chains**: Workshops craft bread/planks/tools from raw materials; craftsmen haul goods into town stockpiles
+- **Trade Routes & Caravans**: Surplus/deficit pairing between settlements spawns automated caravans
 - **Market System**: Dynamic resource pricing based on supply and demand
 - **Resource Types**: Food, Water, Wood, Ore, Stone, and Gold
+
+### Wars & Diplomacy
+- **Casus Belli Engine**: Wars are declared for justified reasons — resource scarcity, diplomatic rifts, religious difference, militarist drift — driven by a decaying grievance ledger
+- **Warfare**: Warbands mobilize, march in formation, fight battles and sieges, and plunder stockpiles
+- **War Visibility**: ⚔️/🕊️ chronicle entries, clickable HUD front-line banner (jumps camera), [W]ars panel with casualties/battles/peace history, canvas battle markers with morale bars, smoke and routing effects
+- **"Warring Kingdoms" Starter Scenario**: Open `index.html?scenario=warring` (or use the in-game launcher overlay) for hereditary rival settlements where the first war breaks out around tick 225 instead of ~2925 — instantly watchable conflict
 
 ### Social & Political Systems
 - **Relationships**: Friendship, rivalry, and family bonds between agents
@@ -60,15 +68,20 @@ Aetheria is a 2D god simulation game featuring a robust entity-component-system 
   - `5`: Create Ore
   - `6`: Remove Resource
 - **Space**: Pause/resume simulation
+- **W**: Toggle the Wars panel (active wars, casualties, peace history; click a row to jump to the front line)
 
 ## 💾 Saving/Loading
 
 - **Save Button**: Save current world state to browser storage
 - **Load Button**: Load saved world state
 
+## ⚔️ Starter Scenarios
+
+- **Warring Kingdoms**: open `index.html?scenario=warring` — founding settlements are hereditary rivals with warlike cultures, so the first war breaks out around tick 225 (vs ~tick 2925 in a default world). Default worlds are byte-identical; the scenario only changes diplomacy bookkeeping.
+
 ## 🚀 Future Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for detailed future development plans including:
+See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed future development plans including:
 
 1. **Phase 1**: Deep Economy & Supply Chains (Priority #1)
 2. **Phase 2**: Advanced Agent AI & Psychology

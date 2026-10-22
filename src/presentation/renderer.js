@@ -199,6 +199,32 @@ export class CanvasRenderer {
       const rect = this.canvas.getBoundingClientRect();
       const screenX = e.clientX - rect.left;
       const screenY = e.clientY - rect.top;
+
+      // Step E: clicking the ⚔️ war banner jumps the camera to the front
+      // line instead of inspecting/god-powering the tile underneath.
+      const banner = this._warBannerRect;
+      if (banner && screenX >= banner.x && screenX <= banner.x + banner.w &&
+          screenY >= banner.y && screenY <= banner.y + banner.h && banner.frontLine) {
+        this.centerOn(banner.frontLine.x, banner.frontLine.y, Math.max(this.camera.zoom, 14));
+        return;
+      }
+
+      // Step F: clicking the [W]ars toggle row opens/closes the Wars panel…
+      const tog = this._warsToggleRect;
+      if (tog && screenX >= tog.x && screenX <= tog.x + tog.w &&
+          screenY >= tog.y && screenY <= tog.y + tog.h) {
+        this._warsPanel = !this._warsPanel;
+        return;
+      }
+      // …and clicking a war row in the open panel jumps to its front line.
+      for (const row of (this._warsPanelRows || [])) {
+        if (screenX >= row.x && screenX <= row.x + row.w &&
+            screenY >= row.y && screenY <= row.y + row.h && row.frontLine) {
+          this.centerOn(row.frontLine.x, row.frontLine.y, Math.max(this.camera.zoom, 14));
+          return;
+        }
+      }
+
       const worldPos = this.screenToWorld(screenX, screenY);
       
       // Dispatch custom event on window for god powers & tools
@@ -855,6 +881,7 @@ export class CanvasRenderer {
     }
 
     // Active Combat Clashes on top
+    this.renderWarbandMarkers();
     this.renderCombatEffects();
   }
 
@@ -1983,6 +2010,123 @@ export class CanvasRenderer {
     }
   }
 
+  /**
+   * Phase 3c Step G — battle visuals (pure render layer, zero sim-state impact).
+   * Draws clashing-army band markers over active warbands: a banner-colored
+   * oval with soldier-count pips, a morale bar, routing tint, ⚔️ clash sparks
+   * and rising smoke for bands currently engaged in combat.
+   */
+  renderWarbandMarkers() {
+    const wf = this.simulation?.warfareSystem;
+    if (!wf || !wf.warbands || wf.warbands.size === 0) return;
+    const ctx = this.ctx;
+    const zoom = this.camera.zoom;
+    const tick = this.simulation.clock?.tick ?? 0;
+
+    for (const wb of wf.warbands.values()) {
+      if (!wb.active || wb.state === "destroyed") continue;
+      const cx = wb.centroidX, cy = wb.centroidY;
+      if (cx === undefined || cy === undefined) continue;
+      // Cull to visible area (world coords)
+      if (cx < -4 || cy < -4 || cx > (this.world?.width || 1e9) + 4 || cy > (this.world?.height || 1e9) + 4) {
+        const sc0 = this.worldToScreen(cx, cy);
+        if (sc0.x < -80 || sc0.y < -80 || sc0.x > this.canvas.width + 80 || sc0.y > this.canvas.height + 80) continue;
+      }
+      const screen = this.worldToScreen(cx, cy);
+      const size = wb.markerSize || wb.soldiers.length || 1;
+      const rx = Math.max(10, Math.min(46, size * 2.4)) * (zoom / 20);
+      const ry = rx * 0.55;
+      const engaging = wb.state === "engaging" || wb.state === "sieging" || wb.state === "clashing";
+      const routing = wb.state === "retreating" || (wb.markerMorale !== undefined && wb.markerMorale <= 25);
+      const banner = wb.bannerColor || "#ef4444";
+
+      ctx.save();
+
+      // Army band oval (banner colored, semi-transparent)
+      ctx.beginPath();
+      ctx.ellipse(screen.x, screen.y, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fillStyle = routing ? "rgba(148, 163, 184, 0.28)" : this.hexToRgba(banner, 0.30);
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = routing ? "rgba(148, 163, 184, 0.75)" : banner;
+      if (routing) ctx.setLineDash([4, 4]); // dashed = routed band
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Casualty/soldier pips: one dot per soldier around the band rim
+      const pipCount = Math.min(size, 24);
+      for (let i = 0; i < pipCount; i++) {
+        const ang = (i / pipCount) * Math.PI * 2 + tick * 0.002;
+        const px = screen.x + Math.cos(ang) * (rx - 3);
+        const py = screen.y + Math.sin(ang) * (ry - 2);
+        ctx.beginPath();
+        ctx.arc(px, py, Math.max(1.2, zoom * 0.05), 0, Math.PI * 2);
+        ctx.fillStyle = routing ? "#94a3b8" : banner;
+        ctx.fill();
+      }
+
+      // Morale bar above the band
+      const barW = rx * 1.6;
+      const morale = Math.max(0, Math.min(100, wb.markerMorale ?? wb.morale ?? 100));
+      ctx.fillStyle = "rgba(15, 23, 42, 0.7)";
+      ctx.fillRect(screen.x - barW / 2, screen.y - ry - 12, barW, 4);
+      ctx.fillStyle = morale > 60 ? "#22c55e" : morale > 30 ? "#f59e0b" : "#ef4444";
+      ctx.fillRect(screen.x - barW / 2, screen.y - ry - 12, barW * (morale / 100), 4);
+
+      // Banner label: settlement name + size
+      ctx.font = `bold ${Math.max(9, zoom * 0.45)}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(248, 250, 252, 0.9)";
+      ctx.fillText(`${wb.settlementName || "Warband"} (${size})`, screen.x, screen.y - ry - 16);
+
+      // Clash FX for engaged bands: pulsing ⚔️ + rising smoke particles
+      if (engaging) {
+        const pulse = 1 + 0.15 * Math.sin(tick * 0.35);
+        ctx.font = `${Math.max(14, zoom * 0.8) * pulse}px sans-serif`;
+        ctx.fillText("⚔️", screen.x, screen.y + 4);
+
+        // Smoke: deterministic pseudo-random offsets from tick + warband id
+        for (let s = 0; s < 3; s++) {
+          const phase = ((tick * 0.05) + s * 0.33 + wb.id * 0.17) % 1;
+          const wobble = Math.sin((tick * 0.1) + s * 2.1 + wb.id) * 4;
+          const smX = screen.x + wobble + (s - 1) * rx * 0.4;
+          const smY = screen.y - ry - phase * 26;
+          ctx.beginPath();
+          ctx.arc(smX, smY, 3 + phase * 6, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(120, 120, 128, ${0.45 * (1 - phase)})`;
+          ctx.fill();
+        }
+
+        // Red combat glow ring
+        ctx.beginPath();
+        ctx.ellipse(screen.x, screen.y, rx + 3, ry + 2, 0, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(239, 68, 68, ${0.35 + 0.25 * Math.sin(tick * 0.3)})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      } else if (routing) {
+        // Routing tint: grey wash + 🏳 marker
+        ctx.beginPath();
+        ctx.ellipse(screen.x, screen.y, rx, ry, 0, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(100, 116, 139, 0.18)";
+        ctx.fill();
+        ctx.font = `${Math.max(12, zoom * 0.6)}px sans-serif`;
+        ctx.fillText("🏳️", screen.x, screen.y + 4);
+      }
+
+      ctx.restore();
+    }
+  }
+
+  hexToRgba(hex, alpha) {
+    if (typeof hex !== "string" || !hex.startsWith("#")) return `rgba(239, 68, 68, ${alpha})`;
+    let h = hex.slice(1);
+    if (h.length === 3) h = h.split("").map(c => c + c).join("");
+    const r = parseInt(h.slice(0, 2), 16) || 239;
+    const g = parseInt(h.slice(2, 4), 16) || 68;
+    const b = parseInt(h.slice(4, 6), 16) || 68;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
   renderCombatEffects() {
     if (!this.simulation?.warfareSystem?.combatEffects) return;
     const effects = this.simulation.warfareSystem.combatEffects;
@@ -2016,15 +2160,33 @@ export class CanvasRenderer {
       `Wars ${wars} · Mode: ${this.camera.is25D ? "2.5D Isometric 3D" : "2D Top-Down"}${fires > 0 ? ` · 🔥 Fires ${fires}` : ""}`
     ];
 
+    // Step E: active-war banner — ⚔️ belligerents and a clickable front-line
+    // marker. Clicking anywhere on the red line jumps the camera to where
+    // the fighting last happened (Rule 16 discoverability).
+    // Step F: W key toggles the Wars panel (active wars + peace history).
+    if (this._warsPanel == null) this._warsPanel = false;
+    this._warBannerRect = null;
+    const activeWar = sim.diplomacySystem?.activeWars?.find(w => w.active && w.frontLine);
+    if (activeWar) {
+      const fl = activeWar.frontLine;
+      lines.push(`⚔️ ${activeWar.attackerName} vs ${activeWar.defenderName} — Front @ (${Math.round(fl.x)},${Math.round(fl.y)}) ▸click`);
+    }
+    const totalWars = (sim.diplomacySystem?.activeWars?.length || 0) + (sim.diplomacySystem?.warHistory?.length || 0);
+    lines.push(`${this._warsPanel ? '▼' : '▶'} [W]ars — ${sim.diplomacySystem?.activeWars?.length || 0} active · ${totalWars} recorded`);
+
     if (sim.chronicleSystem?.entries?.length > 0) {
-      const last = sim.chronicleSystem.entries[sim.chronicleSystem.entries.length - 1];
-      let txt = `${last.date}: ${last.text}`;
-      if (txt.length > 44) txt = txt.slice(0, 43) + "…";
-      lines.push(`📜 ${txt}`);
+      const recent = sim.chronicleSystem.recent(8);
+      const notable = recent.find(e => e.icon === '⚔️' || e.icon === '🕊️') || recent[0];
+      if (notable) {
+        let txt = `${notable.date}: ${notable.text}`;
+        if (txt.length > 44) txt = txt.slice(0, 43) + "…";
+        lines.push(txt);
+      }
     }
 
     const boxW = 280;
-    const boxH = lines.length * 18 + 14;
+    const panelLines = this._warsPanel ? this._buildWarsPanel(sim) : [];
+    const boxH = (lines.length + panelLines.length) * 18 + 14;
     ctx.beginPath();
     ctx.roundRect(12, 12, boxW, boxH, 8);
     ctx.fill();
@@ -2032,12 +2194,74 @@ export class CanvasRenderer {
 
     ctx.font = "12px monospace";
     ctx.textAlign = "left";
+    const warsToggleIdx = activeWar ? 3 : 2; // index of the [W]ars line
+    let screenYCursor = 30;
     lines.forEach((line, i) => {
-      ctx.fillStyle = i === 1 && wars > 0 ? "#fca5a5" : "#e2e8f0";
-      ctx.fillText(line, 20, 30 + i * 18);
+      const isWarBanner = activeWar && i === 2;
+      ctx.fillStyle = isWarBanner ? "#fecaca" : (i === 1 && wars > 0 ? "#fca5a5" : "#e2e8f0");
+      ctx.fillText(line, 20, screenYCursor);
+      if (isWarBanner) {
+        // Record hit area for click-to-jump camera (world coords of front)
+        this._warBannerRect = { x: 12, y: screenYCursor - 18 + 6, w: boxW, h: 18, frontLine: activeWar.frontLine };
+      }
+      if (i === warsToggleIdx) {
+        // Clickable [W]ars toggle row
+        this._warsToggleRect = { x: 12, y: screenYCursor - 18 + 6, w: boxW, h: 18 };
+      }
+      screenYCursor += 18;
     });
 
+    // Step F: Wars panel body — one entry per war (active first, then history),
+    // each clickable to jump the camera to its front line / last battlefield.
+    this._warsPanelRows = [];
+    for (const pl of panelLines) {
+      ctx.fillStyle = pl.color || "#94a3b8";
+      ctx.fillText(pl.text, 20, screenYCursor);
+      if (pl.jump) {
+        this._warsPanelRows.push({ x: 12, y: screenYCursor - 18 + 6, w: boxW, h: 18, frontLine: pl.jump });
+      }
+      screenYCursor += 18;
+    }
+    void warsToggleIdx;
     ctx.restore();
+  }
+
+  /**
+   * Step F: build the Wars panel rows — active wars with casus belli, sides,
+   * casualties and battles fought, followed by recent peace treaties.
+   * Read-only over sim state (determinism-safe).
+   */
+  _buildWarsPanel(sim) {
+    const diplo = sim.diplomacySystem;
+    if (!diplo) return [];
+    const out = [];
+    const tick = sim.clock?.tick ?? 0;
+    const fmtAge = (startTick) => {
+      const days = Math.max(0, Math.floor((tick - startTick) / 12));
+      return `day ${days}`;
+    };
+    for (const w of diplo.activeWars) {
+      const cas = Object.values(w.casualties || {}).reduce((a, b) => a + (b || 0), 0);
+      out.push({ text: `⚔️ ${w.attackerName} vs ${w.defenderName}`, color: "#fecaca", jump: w.frontLine || null });
+      out.push({ text: `   ${w.casusBelli || "War"} · ${fmtAge(w.startTick)} · ${cas} lost · ${(w.battles || []).length} battles`, color: "#fca5a5" });
+    }
+    for (const w of (diplo.warHistory || []).slice(0, 4)) {
+      const winner = w.winnerId ? sim.settlementSystem?.settlements?.get(w.winnerId)?.name || w.winnerId : null;
+      const cas = Object.values(w.casualties || {}).reduce((a, b) => a + (b || 0), 0);
+      out.push({ text: `🕊️ ${w.attackerName}–${w.defenderName}: peace${winner ? `, ${winner} won` : ""} (${cas} lost)`, color: "#86efac", jump: w.frontLine || (w.battles || []).slice(-1)[0] || null });
+    }
+    if (!out.length) out.push({ text: "   No wars recorded. The realm is at peace.", color: "#64748b" });
+    return out;
+  }
+
+  /**
+   * Step E: jump the camera to a world position (front line, wonders…).
+   */
+  centerOn(x, y, zoom = null) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    this.camera.x = Math.max(-5, Math.min(this.world.width + 5, x));
+    this.camera.y = Math.max(-5, Math.min(this.world.height + 5, y));
+    if (zoom != null) this.camera.zoom = Math.max(3.5, Math.min(36, zoom));
   }
 
   renderUI() {

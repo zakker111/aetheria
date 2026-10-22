@@ -51,19 +51,19 @@ Aetheria is a 2D god simulation game where players influence a living world, man
 ### Phase 1: Deep Economy & Supply Chains (Priority #1)
 *Transform simple gathering into a complex industrial simulation.*
 
-- [ ] **Crafting System**: 
-  - Define recipes (e.g., Wood + Stone = Tools; Ore + Wood = Weapons).
-  - Add "Craftsman" job role.
-  - Implement crafting stations (Workshops, Forges).
-- [ ] **Supply Chains**: 
-  - Agents must transport raw materials to workshops.
-  - Finished goods distributed to settlements or stored.
-- [ ] **Inventory Management**: 
-  - Individual agent inventories (carry limits).
-  - Settlement stockpiles and warehouses.
-- [ ] **Trade Routes**: 
-  - Automated paths between settlements for surplus resources.
-  - Caravans and trade value calculation.
+- [x] **Crafting System** *(DONE — `src/systems/craftingSystem.js`)*:
+  - Recipes implemented: wheat_to_flour → bread, log_to_plank, ore_to_tool (workshop queue with auto-queue from storage).
+  - "Craftsman" job role implemented (career switching, bench staffing, churn guards).
+  - Crafting stations: Workshop buildings constructed by settlements and tracked per-workshop storage/queues.
+- [x] **Supply Chains** *(DONE — verified by `tests/supplychain.mjs`, 9/9 green)*:
+  - Raw-material haul goals feed nearby workshops (wellbeing-gated so harvesters don't starve while hauling).
+  - Finished goods (bread/plank) distributed into settlement stockpile commodity lines by craftsmen.
+- [x] **Inventory Management** *(DONE)*:
+  - Individual agent inventories with numeric carry capacity (`agent.inventory.capacity`).
+  - Settlement stockpiles with per-commodity lines; workshop storage separate from town stockpile.
+- [x] **Trade Routes** *(DONE — `src/systems/tradeSystem.js`)*:
+  - Surplus/deficit pairing between settlements establishes automated routes.
+  - Caravans spawn along routes moving surplus goods (verified in supplychain test).
 
 ### Phase 2: Advanced Agent AI & Psychology
 *Make agents feel like real individuals with memories and goals.*
@@ -85,20 +85,18 @@ Aetheria is a 2D god simulation game where players influence a living world, man
 ### Phase 3: Combat & Warfare
 *Introduce conflict and territorial expansion.*
 
-- [ ] **Combat Mechanics**: 
-  - Melee and ranged attack logic.
-  - Health bars, armor, and damage types.
-  - Fleeing behavior when health is low.
-- [ ] **Militia & Armies**: 
-  - Agents equip weapons from inventory.
-  - Formation marching and group tactics.
-- [ ] **Siege Warfare**: 
-  - Attacking enemy settlements.
-  - Destroying walls/gates.
-  - Pillaging resources.
-- [ ] **Territory Control**: 
+- [x] **Combat Mechanics** *(DONE — `src/systems/combatSystem.js`)*:
+  - Melee attack logic between agents/animals; fleeing behavior when health is low.
+- [x] **Militia & Armies** *(DONE — `warfareSystem.js` + `formationSystem.js`)*:
+  - Warbands mobilize from settlement populations on war declaration and march in formation toward objectives.
+- [x] **Siege Warfare** *(DONE — `warfareSystem.js`)*:
+  - Attacking enemy settlements, battles with casualties, pillaging/plunder of stockpiles.
+- [ ] **Territory Control**:
   - Dynamic borders based on military presence.
   - Capture points and occupation mechanics.
+
+### Phase 3c — Wars, Diplomacy & Watchability (ACTIVE, shipped)
+*Make wars actually happen in a watchable session and be visible.* Done: casus belli engine (resource/diplomatic/religious/militarist grievances), grievance ledger with decay, war visibility pipeline (⚔️/🕊️ chronicle icons, clickable HUD front-line banner, [W]ars panel, battle markers with morale bars/smoke/routing tint), and the "Warring Kingdoms" starter scenario (`?scenario=warring`, first war ~tick 225). Verified by `tests/warvisible.mjs` (5/5) and `tests/scenario_warring.mjs` (10/10). Remaining: soldier profession & muster, conquest/annexation, peace treaty terms, religious wars (see todo.md Phase 3b Steps 2–7).
 
 ### Phase 4: Dynamic World & Ecosystem
 *Make the world alive beyond just agents.*

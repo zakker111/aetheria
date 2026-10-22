@@ -39,24 +39,38 @@ export class WarfareSystem {
       }
     }
 
-    // Find eligible adult citizens to recruit
+    // Find eligible adult citizens to recruit. Professional soldiers are
+    // preferred over raw conscripts (Phase 3b Step 2): they drilled at the
+    // barracks and carry combat XP, so they fill the warband first.
+    const veterans = [];
     const eligible = [];
     for (const aId of settlement.agentIds) {
       // Perf: O(1) id lookup instead of a linear roster scan per citizen.
       const a = this.sim._agentById(aId);
-      if (a && a.alive && a.age >= 18 && a.age <= 55 && (a.needs.health || 100) > 40) {
-        eligible.push(a);
+      if (a && a.alive && a.age >= 18 && a.age <= 55 && (a.needs.health || 100) > 40 && !a.wounded) {
+        if (a.job === 'soldier' && !a.militaryDuty) veterans.push(a);
+        else eligible.push(a);
       }
     }
 
-    if (eligible.length === 0) return null;
+    if (veterans.length === 0 && eligible.length === 0) return null;
 
     // Determine squad size: 30% to 50% of eligible population, minimum 2, maximum 8
-    const squadSize = Math.max(2, Math.min(8, Math.floor(eligible.length * 0.4)));
-    const recruited = eligible.slice(0, squadSize);
+    const poolSize = veterans.length + eligible.length;
+    const squadSize = Math.max(2, Math.min(8, Math.floor(poolSize * 0.4)));
+    // Soldiers first (stable insertion order = deterministic), then civilians.
+    const recruited = veterans.concat(eligible).slice(0, squadSize);
 
-    // Pick commander (highest brave/industrious or elder)
-    recruited.sort((a, b) => (b.personality?.brave ?? 0.5) - (a.personality?.brave ?? 0.5));
+    // Pick commander: prefer the most experienced soldier, else highest brave.
+    // Deterministic tie-break by id so save/load resumes behave identically.
+    recruited.sort((a, b) => {
+      const aSoldier = a.job === 'soldier' ? 1 : 0;
+      const bSoldier = b.job === 'soldier' ? 1 : 0;
+      if (aSoldier !== bSoldier) return bSoldier - aSoldier;
+      const braveDiff = (b.personality?.brave ?? 0.5) - (a.personality?.brave ?? 0.5);
+      if (Math.abs(braveDiff) > 1e-9) return braveDiff;
+      return String(a.id).localeCompare(String(b.id));
+    });
     const commander = recruited[0];
 
     const warbandId = this.nextWarbandId++;
@@ -74,7 +88,23 @@ export class WarfareSystem {
     recruited.forEach((soldier, idx) => {
       soldier.militaryDuty = true;
       soldier.warbandId = warbandId;
+      // Conscripts take up arms but keep their civilian profession on the
+      // economy ledger (job field only reflects duty while mustered);
+      // professional soldiers already carry a 'soldier' record. This keeps
+      // records and agent state in sync after demobilization.
+      if (soldier.job !== 'soldier') {
+        this.sim.economySystem?.agentJobs?.set(soldier.id, {
+          job: soldier.job || 'unemployed',
+          skillLevel: 1,
+          experience: 0,
+          assignedAt: this.sim.clock.tick
+        });
+      }
       soldier.job = "soldier";
+      // Phase 3b Step 3: battle-hardened veterans get promoted — after
+      // surviving a campaign they march as elites (higher damage/defense
+      // via the combat-skill bonus applied below). Deterministic counter.
+      soldier.veteranCampaigns = (soldier.veteranCampaigns ?? 0) + 1;
       soldier.combatRole = idx === 0 ? "commander" : (role === "defense" ? "shieldbearer" : "vanguard");
 
       // Weaponry and defense
@@ -89,9 +119,12 @@ export class WarfareSystem {
 
       // Training + equipment determine combat stats.
       const training = soldier.skills?.combat ?? 1.0;
+      // Phase 3b Step 3: campaign-hardened veterans fight sharper — each
+      // survived muster adds a small multiplicative edge (capped at +15%).
+      const hardening = 1 + Math.min(0.15, (soldier.veteranCampaigns ?? 1) > 1 ? ((soldier.veteranCampaigns ?? 1) - 1) * 0.05 : 0);
       const weaponDamage = armed ? 22 : (soldier.hasWeapon ? 15 : 9);
-      const dmg = Math.round(weaponDamage * (0.8 + 0.2 * training));
-      const def = (soldier.hasShield ? 0.35 : 0.1) + Math.min(0.15, (training - 1) * 0.05);
+      const dmg = Math.round(weaponDamage * (0.8 + 0.2 * training) * hardening);
+      const def = Math.min(0.6, (soldier.hasShield ? 0.35 : 0.1) + Math.min(0.15, (training - 1) * 0.05) + ((soldier.veteranCampaigns ?? 1) - 1) * 0.02);
 
       if (!soldier.combat) {
         soldier.combat = {
@@ -179,7 +212,32 @@ export class WarfareSystem {
             soldier.militaryDuty = false;
             soldier.warbandId = null;
             soldier.combatRole = null;
-            soldier.job = "unemployed";
+            // Veterans keep their 'soldier' profession after the muster —
+            // they return to barracks drills and answer the next war call
+            // first (Phase 3b Step 2). Conscripts return to the civilian
+            // profession recorded on the economy ledger at muster time.
+            // IMPORTANT: mustering a *professional* soldier does not touch
+            // his economy record (it stays 'soldier'), so rec.job alone can
+            // never distinguish veteran from conscript here — consult the
+            // agent's own job field as well, otherwise veterans get demoted
+            // to whatever stale record predates their enlistment (Phase 3b
+            // Step 3 regression: 0 professionals survived any campaign).
+            const rec = this.sim.economySystem?.getAgentJob?.(sId);
+            const isProfessional = soldier.job === 'soldier' || (rec && rec.job === 'soldier');
+            if (isProfessional) {
+              soldier.job = 'soldier';
+              soldier.jobTitle = this.sim.economySystem.jobDefinitions.soldier?.name || 'Soldier';
+              // Keep the two ledgers in sync so the career-change guard and
+              // job-assignment pass both see him as enlisted content.
+              if (rec && rec.job !== 'soldier') {
+                this.sim.economySystem.assignJob?.(soldier, ['soldier']);
+              }
+            } else if (rec && rec.job !== 'soldier') {
+              soldier.job = rec.job;
+              soldier.jobTitle = this.sim.economySystem.jobDefinitions[rec.job]?.name || rec.job;
+            } else {
+              soldier.job = "unemployed";
+            }
           }
         }
       }
@@ -204,6 +262,25 @@ export class WarfareSystem {
     for (const warband of this.warbands.values()) {
       if (!warband.active) continue;
       this.updateWarband(warband);
+    }
+
+    // Step G (presentation bookkeeping only — never read by sim logic):
+    // stamp each active warband with its centroid + average morale so the
+    // canvas renderer can draw clashing-army markers without scanning
+    // soldier rosters every frame. Determinism-safe: purely derived data.
+    for (const wb of this.warbands.values()) {
+      if (!wb.active || wb.state === "destroyed") continue;
+      let sx = 0, sy = 0, n = 0;
+      for (const sid of wb.soldiers) {
+        const a = this.sim._agentById(sid);
+        if (a && a.alive) { sx += a.x; sy += a.y; n++; }
+      }
+      if (n > 0) {
+        wb.centroidX = sx / n;
+        wb.centroidY = sy / n;
+        wb.markerSize = n;
+      }
+      wb.markerMorale = wb.morale;
     }
   }
 
@@ -285,6 +362,31 @@ export class WarfareSystem {
     const initialSize = warband.initialSize ?? warband.soldiers.length;
     if (warband.soldiers.length > 0 && warband.soldiers.length * 3 < initialSize && warband.state !== "retreating") {
       warband.state = "retreating";
+    }
+
+    // Phase 3b Step 3: wounded soldiers recover at home. Once the band is
+    // back inside its settlement, every wounded man begins a convalescence
+    // countdown; when it expires he is healed and returns to full duty.
+    if (warband.state === "defending" || warband.state === "retreating") {
+      const homeW2 = this.sim.settlementSystem.settlements.get(warband.settlementId);
+      if (homeW2) {
+        for (const sId of warband.soldiers) {
+          const wsa = this.sim._agentById(sId);
+          if (!wsa || !wsa.alive || !wsa.wounded) continue;
+          const dH = Math.hypot(wsa.x - homeW2.center.x, wsa.y - homeW2.center.y);
+          if (dH <= 6.0) {
+            wsa.woundRecovery = (wsa.woundRecovery ?? 0) + 1;
+            if (wsa.woundRecovery >= 150) {
+              wsa.wounded = false;
+              wsa.woundRecovery = 0;
+              wsa.needs.health = Math.max(wsa.needs.health, 70);
+              if (this.sim.eventBus) {
+                this.sim.eventBus.emit("SOLDIER_RECOVERED", { agentId: wsa.id });
+              }
+            }
+          }
+        }
+      }
     }
 
     // Execute state behavior
@@ -373,6 +475,14 @@ export class WarfareSystem {
       const soldier = (s && s.alive) ? s : null;
       if (!soldier) continue;
 
+      // Phase 3b Step 3: wounded soldiers break off the line and limp back
+      // toward home to recover. They no longer fight until healed.
+      if (soldier.wounded) {
+        const homeW = this.sim.settlementSystem.settlements.get(warband.settlementId);
+        if (homeW) soldier.moveToward(homeW.center, this.sim.world);
+        continue;
+      }
+
       let nearest = null;
       let minDist = Infinity;
       for (const e of enemies) {
@@ -416,8 +526,31 @@ export class WarfareSystem {
     const def = defender.combat.defense || 0;
     const finalDmg = Math.max(2, Math.round(rawDmg * (1 - def)));
 
-    defender.needs.health = Math.max(0, (defender.needs.health || 100) - finalDmg);
-    if (defender.combat) defender.combat.health = defender.needs.health;
+    // Damage lands on the canonical agent.health field. needs.health is a
+    // per-tick mirror rebuilt by updateNeeds(); writing only the mirror let
+    // regen re-inflate it between ticks and made soldiers immortal in melee.
+    defender.health = Math.max(0, (defender.health ?? 100) - finalDmg);
+    defender.needs.health = defender.health;
+    if (defender.combat) defender.combat.health = defender.health;
+
+    // Phase 3b Step 3 (combat depth): a soldier knocked below 40 HP but not
+    // killed is WOUNDED — he drops his weapon, stops fighting and must be
+    // carried out of the line. Deterministic threshold check (no RNG draw).
+    // The canonical health field is agent.health (needs.health is only a
+    // mirror rebuilt by updateNeeds each tick — and regen re-inflates it
+    // between the warfare tick and the next mirror sync, which previously
+    // let wounded men keep taking hits until the stale mirror crossed 40).
+    if (defender.alive && defender.militaryDuty && defender.health < 40) {
+      defender.wounded = true;
+      const vBand = this.warbands.get(defender.warbandId);
+      if (vBand) vBand.morale = Math.max(0, vBand.morale - 2); // seeing men fall hurts the band
+      if (this.sim.eventBus && !defender._woundEventSent) {
+        defender._woundEventSent = true;
+        this.sim.eventBus.emit("SOLDIER_WOUNDED", {
+          agentId: defender.id, warbandId: defender.warbandId
+        });
+      }
+    }
 
     // Visual sparks
     this.combatEffects.push({
@@ -455,6 +588,17 @@ export class WarfareSystem {
         );
         if (war && defenderSettlementId) {
           war.casualties[defenderSettlementId] = (war.casualties[defenderSettlementId] || 0) + 1;
+          // Step E: track where the fighting last happened so the UI can
+          // offer "jump to front line". Deterministic (derived from sim
+          // state only); saved with the war record via serialize().
+          war.frontLine = { x: defender.x, y: defender.y, tick: this.sim.clock.tick };
+          war.battles.push({
+            tick: this.sim.clock.tick,
+            x: defender.x,
+            y: defender.y,
+            casualties: war.casualties[defenderSettlementId]
+          });
+          if (war.battles.length > 50) war.battles.splice(0, war.battles.length - 50);
         }
       }
 

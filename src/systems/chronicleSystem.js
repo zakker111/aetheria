@@ -40,7 +40,32 @@ export class ChronicleSystem {
   }
 
   recent(limit = 30) {
-    return this.entries.slice(-limit).reverse();
+    const list = this.entries.slice(-limit).reverse();
+    this._refreshFrontLines(list);
+    return list;
+  }
+
+  // Find the (active or historic) war record between two settlements.
+  _findWarBetween(idA, idB) {
+    if (idA == null || idB == null) return null;
+    const dip = this.sim?.diplomacySystem;
+    if (!dip) return null;
+    const match = (w) => (w.attackerId === idA && w.defenderId === idB) ||
+      (w.attackerId === idB && w.defenderId === idA);
+    return (dip.activeWars || []).find(match) || (dip.warHistory || []).find(match) || null;
+  }
+
+  // Step E: war entries carry a snapshot of the front line taken at
+  // declaration time (usually empty — battles haven't happened yet).
+  // Refresh it from the live war record when the feed is read, so clicking
+  // a ⚔️ entry always jumps to where the fighting actually is. Read-only
+  // w.r.t. simulation state; safe during save/load and determinism checks.
+  _refreshFrontLines(entries) {
+    for (const e of entries) {
+      if (e.kind !== 'war' || e.attackerId == null) continue;
+      const w = this._findWarBetween(e.attackerId, e.defenderId);
+      if (w?.frontLine) e.frontLine = { ...w.frontLine };
+    }
   }
 
   _wireEvents() {
@@ -55,12 +80,29 @@ export class ChronicleSystem {
       const title = d.title || 'A treaty';
       const a = d.settlementA || 'A realm';
       const b = d.settlementB || 'a neighbor';
+      // Step E: ⚔️/🕊️ icons live in the entry text AND as the machine-
+      // readable `icon` field so UI layers can render glyphs without
+      // string-matching. War entries carry front-line coords for
+      // click-to-jump; they refresh from the live war record at read time.
       if (/war/i.test(title)) {
-        this.add('war', `${a} declared war on ${b} — "${title}".`);
-      } else if (/peace|treaty|alliance/i.test(title)) {
-        this.add('peace', `${a} and ${b} made peace: ${title}.`);
+        const w = this._findWarBetween(d.settlementA_id, d.settlementB_id);
+        this.add('war', `⚔️ ${a} declared war on ${b} — "${title}".`, {
+          icon: '⚔️', kind2: 'war',
+          attackerId: d.settlementA_id, defenderId: d.settlementB_id,
+          frontLine: w?.frontLine ? { ...w.frontLine } : null
+        });
+      } else if (/peace|treaty/i.test(title)) {
+        this.add('peace', `🕊️ ${a} and ${b} made peace: ${title.replace(/[^\p{L}\p{P}\p{N}\s]/gu, '').trim() || 'a treaty'}.`, {
+          icon: '🕊️', kind2: 'peace',
+          settlementIds: [d.settlementA_id, d.settlementB_id]
+        });
+      } else if (/alliance/i.test(title)) {
+        this.add('peace', `🤝 ${a} and ${b} became allies: ${title.replace(/[^\p{L}\p{P}\p{N}\s]/gu, '').trim() || 'an alliance'}.`, {
+          icon: '🤝', kind2: 'peace',
+          settlementIds: [d.settlementA_id, d.settlementB_id]
+        });
       } else {
-        this.add('era', `${title}: ${a} ↔ ${b}.`);
+        this.add('era', `${title}: ${a} ↔ ${b}.`, { icon: '📜' });
       }
     });
     bus.on('WARBAND_MOBILIZED', (d) => {
@@ -71,6 +113,15 @@ export class ChronicleSystem {
     });
     bus.on('SETTLEMENT_BURNED', (d) => {
       this.add('fire', `${d.defenderName || 'A town'} was set ablaze by ${d.attackerName || 'raiders'}. Flames spread across the rooftops.`);
+    });
+    // Phase 3b Step 3: combat-depth chronicle entries (rout / wounds).
+    bus.on('WARBAND_ROUTED', (d) => {
+      this.add('war', `🏳️ ${d.settlementName || 'A warband'} broke and routed from the field.`);
+    });
+    bus.on('SOLDIER_WOUNDED', () => {
+      // Wounds are common — record them in aggregate only, so the chronicle
+      // stays readable (the renderer shows wounded status per soldier).
+      this.woundCount = (this.woundCount ?? 0) + 1;
     });
     bus.on('building_destroyed', (d) => {
       const b = d.building;
