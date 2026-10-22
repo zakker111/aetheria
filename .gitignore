@@ -1,0 +1,6 @@
+*.out
+
+node_modules/
+diag*.mjs
+diag*.out
+*.bundle

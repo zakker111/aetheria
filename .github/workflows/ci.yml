@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies (eslint only; game is build-free ES modules)
+        run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+      - name: Lint
+        run: npx eslint src
+      - name: Determinism suite
+        run: node tests/determinism.mjs
+      - name: Gossip save/load suite
+        run: node tests/gossip.mjs
+      - name: Supply chain suite
+        run: node tests/supplychain.mjs
+      - name: War visibility suite
+        run: node tests/warvisible.mjs
+      - name: Warring scenario suite
+        run: node tests/scenario_warring.mjs
+      - name: Soak test
+        run: node tests/soak.mjs
