@@ -379,7 +379,12 @@ export class WarfareSystem {
             if (wsa.woundRecovery >= 150) {
               wsa.wounded = false;
               wsa.woundRecovery = 0;
-              wsa.needs.health = Math.max(wsa.needs.health, 70);
+              // Heal the CANONICAL field too — needs.health is only a mirror
+              // rebuilt from agent.health every tick by updateNeeds(), so
+              // writing just the mirror was silently overwritten and wounded
+              // men never actually recovered to fight strength again.
+              wsa.health = Math.max(wsa.health ?? 100, 70);
+              wsa.needs.health = wsa.health;
               if (this.sim.eventBus) {
                 this.sim.eventBus.emit("SOLDIER_RECOVERED", { agentId: wsa.id });
               }

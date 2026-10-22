@@ -178,6 +178,20 @@ export class SettlementSystem {
         matchedSettlement.center.x = matchedSettlement.center.x * 0.9 + centerX * 0.1;
         matchedSettlement.center.y = matchedSettlement.center.y * 0.9 + centerY * 0.1;
         for (const a of cluster) {
+          // Home-stay rule: an agent who already belongs to some settlement
+          // only re-joins THIS one if it's the nearest existing town to their
+          // home center. Prevents builders/soldiers/farmers walking into a
+          // neighboring town's cluster and being silently reassigned there.
+          const currentSid = this.agentSettlementMap.get(a.id);
+          if (currentSid != null && currentSid !== matchedSettlement.id) {
+            const curS = this.settlements.get(currentSid);
+            if (curS) {
+              const dCur = Math.hypot(curS.center.x - centerX, curS.center.y - centerY);
+              if (dCur < Math.hypot(matchedSettlement.center.x - centerX, matchedSettlement.center.y - centerY)) {
+                continue; // stay loyal to nearer home
+              }
+            }
+          }
           this.agentSettlementMap.set(a.id, matchedSettlement.id);
           a.settlementId = matchedSettlement.id;
           matchedSettlement.agentIds.add(a.id);
