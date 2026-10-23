@@ -441,6 +441,22 @@ export class Agent {
       return;
     }
 
+    // Battlefield attrition ("make them suffer"): while on military duty the
+    // needs gate above has returned early for many ticks, so food/water never
+    // got a chance to spawn survival goals and soldiers were effectively
+    // immortal outside melee — no dehydration spiral, no suffering. Now a
+    // mustered soldier who runs bone-dry or starving keeps his place in the
+    // line but starts losing health every tick (camp fever, thirst on the
+    // march). Deterministic, no RNG draws.
+    if (this.militaryDuty && (this.needs.food <= 0 || this.needs.water <= 0)) {
+      this.health = Math.max(0, this.health - 1);
+      if (this.health <= 0) {
+        this.alive = false;
+        this.deathCause = this.needs.water <= 0 ? "dehydration" : "starvation";
+        return;
+      }
+    }
+
     // 2.6 Desperation & Panic Fleeing: civilians run for their lives when war
     // reaches their doorstep or flames lick at their heels. Wounded, starving
     // agents flee even more readily. Deterministic (no RNG draws).
