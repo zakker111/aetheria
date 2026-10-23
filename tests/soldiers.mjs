@@ -43,7 +43,7 @@ check('economy job records match soldier agents', recOk, recInfo);
 
 // No dead-agent ghost rows in the job ledger
 let ghostOk = true, ghostCount = 0;
-for (const [id, r] of sim.economySystem.agentJobs) {
+for (const [id] of sim.economySystem.agentJobs) {
   const a = sim._agentById(id);
   if (!a || !a.alive) { ghostOk = false; ghostCount++; }
 }
