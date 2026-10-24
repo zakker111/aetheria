@@ -1,0 +1,8 @@
+{
+  "name": "Aetheria - God Simulation",
+  "description": "A god simulation game where you observe and influence autonomous agents, resources, and civilizations across 2.5D isometric terrain.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

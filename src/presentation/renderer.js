@@ -232,6 +232,60 @@ export class CanvasRenderer {
         detail: { x: worldPos.x, y: worldPos.y }
       }));
     });
+
+    // Touch event handlers for tablets & mobile devices
+    let touchDistance = 0;
+    this.canvas.addEventListener("touchstart", (e) => {
+      if (e.touches.length === 1) {
+        isDragging = true;
+        lastX = e.touches[0].clientX;
+        lastY = e.touches[0].clientY;
+        touchDistance = 0;
+      }
+    }, { passive: true });
+
+    this.canvas.addEventListener("touchmove", (e) => {
+      if (isDragging && e.touches.length === 1) {
+        const cx = e.touches[0].clientX;
+        const cy = e.touches[0].clientY;
+        const dx = cx - lastX;
+        const dy = cy - lastY;
+        touchDistance += Math.hypot(dx, dy);
+
+        if (this.camera.is25D) {
+          const tileW = this.camera.zoom * 2.8;
+          const tileH = tileW * this.camera.tilt;
+          const du = dx / (tileW * 0.5);
+          const dv = dy / (tileH * 0.5);
+          const worldDx = (du + dv) * 0.5;
+          const worldDy = (dv - du) * 0.5;
+
+          this.camera.x -= worldDx;
+          this.camera.y -= worldDy;
+        } else {
+          this.camera.x -= dx / this.camera.zoom;
+          this.camera.y -= dy / this.camera.zoom;
+        }
+
+        this.camera.x = Math.max(-5, Math.min(this.world.width + 5, this.camera.x));
+        this.camera.y = Math.max(-5, Math.min(this.world.height + 5, this.camera.y));
+        lastX = cx;
+        lastY = cy;
+      }
+    }, { passive: true });
+
+    this.canvas.addEventListener("touchend", (e) => {
+      isDragging = false;
+      if (touchDistance < 8 && e.changedTouches.length === 1) {
+        const rect = this.canvas.getBoundingClientRect();
+        const screenX = e.changedTouches[0].clientX - rect.left;
+        const screenY = e.changedTouches[0].clientY - rect.top;
+        const worldPos = this.screenToWorld(screenX, screenY);
+        window.dispatchEvent(new CustomEvent("worldclick", {
+          detail: { x: worldPos.x, y: worldPos.y }
+        }));
+      }
+    }, { passive: true });
   }
 
   /**
@@ -373,6 +427,7 @@ export class CanvasRenderer {
 
     // 2. Weather & Floating High-Altitude Clouds
     this.renderClouds();
+    this.renderWeather();
 
     // 3. Dynamic Day/Night Ambient Tint Overlay
     this.renderDayNightLighting();
@@ -380,8 +435,7 @@ export class CanvasRenderer {
     // 4. God Power Visual Particles & Combat Animations
     this.renderVisualEffects();
 
-    // 5. HUD, Realm Chronicle & Selected Entity Overlays
-    this.renderHUD();
+    // 5. Selected Entity Focus Reticle
     this.renderUI();
   }
 
@@ -1363,6 +1417,171 @@ export class CanvasRenderer {
       ctx.fillStyle = "#292524";
       ctx.fillRect(screen.x - bs * 0.2, screen.y - wallH * 0.6, bs * 0.4, wallH * 0.65);
 
+    } else if (type === "monument_pyramid") {
+      // 2.5D Majestic Step Pyramid / Great Sun Shrine
+      const pW = bs * 1.5;
+      const t1H = bs * 0.4;
+      const t2H = bs * 0.35;
+      const t3H = bs * 0.3;
+
+      // Tier 1 Base
+      ctx.fillStyle = "#92400e";
+      ctx.fillRect(screen.x - pW * 0.5, screen.y - t1H, pW, t1H);
+      ctx.fillStyle = "#b45309";
+      ctx.fillRect(screen.x - pW * 0.48, screen.y - t1H, pW * 0.96, t1H * 0.4);
+
+      // Tier 2 Middle
+      const t2W = pW * 0.72;
+      const t2Y = screen.y - t1H;
+      ctx.fillStyle = "#d97706";
+      ctx.fillRect(screen.x - t2W * 0.5, t2Y - t2H, t2W, t2H);
+
+      // Tier 3 Top
+      const t3W = pW * 0.45;
+      const t3Y = t2Y - t2H;
+      ctx.fillStyle = "#f59e0b";
+      ctx.fillRect(screen.x - t3W * 0.5, t3Y - t3H, t3W, t3H);
+
+      // Central Grand Stairway
+      ctx.fillStyle = "#78350f";
+      ctx.beginPath();
+      ctx.moveTo(screen.x - bs * 0.12, t3Y - t3H);
+      ctx.lineTo(screen.x + bs * 0.12, t3Y - t3H);
+      ctx.lineTo(screen.x + bs * 0.22, screen.y);
+      ctx.lineTo(screen.x - bs * 0.22, screen.y);
+      ctx.closePath();
+      ctx.fill();
+
+      // Radiant Golden Sun Capstone
+      const apexY = t3Y - t3H;
+      const glow = Math.sin(now * 0.008) * 3;
+      ctx.fillStyle = "#fde047";
+      ctx.beginPath();
+      ctx.moveTo(screen.x, apexY - bs * 0.35);
+      ctx.lineTo(screen.x - bs * 0.2, apexY);
+      ctx.lineTo(screen.x + bs * 0.2, apexY);
+      ctx.closePath();
+      ctx.fill();
+
+      // Sun halo aura
+      const sunGrad = ctx.createRadialGradient(screen.x, apexY - bs * 0.2, 2, screen.x, apexY - bs * 0.2, bs * 0.7 + glow);
+      sunGrad.addColorStop(0, "rgba(253, 224, 71, 0.7)");
+      sunGrad.addColorStop(0.5, "rgba(245, 158, 11, 0.3)");
+      sunGrad.addColorStop(1, "rgba(245, 158, 11, 0)");
+      ctx.fillStyle = sunGrad;
+      ctx.beginPath();
+      ctx.arc(screen.x, apexY - bs * 0.2, bs * 0.7 + glow, 0, Math.PI * 2);
+      ctx.fill();
+
+    } else if (type === "monument_colosseum") {
+      // 2.5D Grand Roman Amphitheater / Colosseum of Champions
+      const cW = bs * 1.5;
+      const cH = bs * 0.95;
+
+      // Outer Marble Elliptical Arena Wall
+      ctx.fillStyle = "#94a3b8";
+      ctx.fillRect(screen.x - cW * 0.5, screen.y - cH, cW, cH);
+
+      // Travertine stone cornice
+      ctx.fillStyle = "#e2e8f0";
+      ctx.fillRect(screen.x - cW * 0.53, screen.y - cH, cW * 1.06, bs * 0.12);
+
+      // Roman Arches along the facade
+      const archCount = 5;
+      const archSpacing = cW / (archCount + 1);
+      ctx.fillStyle = "#1e293b";
+      for (let i = 1; i <= archCount; i++) {
+        const ax = screen.x - cW * 0.5 + i * archSpacing;
+        ctx.beginPath();
+        ctx.arc(ax, screen.y - cH * 0.45, bs * 0.09, Math.PI, 0);
+        ctx.lineTo(ax + bs * 0.09, screen.y - cH * 0.1);
+        ctx.lineTo(ax - bs * 0.09, screen.y - cH * 0.1);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // Sandy Inner Arena Pit with Golden Glow
+      ctx.fillStyle = "#fbbf24";
+      ctx.beginPath();
+      ctx.ellipse(screen.x, screen.y - cH * 0.1, bs * 0.38, bs * 0.14, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Flanking Crimson Imperial Standards
+      const wave = Math.sin(now * 0.007) * 4;
+      ctx.strokeStyle = "#475569";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(screen.x - cW * 0.42, screen.y - cH);
+      ctx.lineTo(screen.x - cW * 0.42, screen.y - cH - bs * 0.45);
+      ctx.moveTo(screen.x + cW * 0.42, screen.y - cH);
+      ctx.lineTo(screen.x + cW * 0.42, screen.y - cH - bs * 0.45);
+      ctx.stroke();
+
+      ctx.fillStyle = "#dc2626";
+      ctx.beginPath();
+      ctx.moveTo(screen.x - cW * 0.42, screen.y - cH - bs * 0.45);
+      ctx.lineTo(screen.x - cW * 0.42 + bs * 0.28 + wave, screen.y - cH - bs * 0.35);
+      ctx.lineTo(screen.x - cW * 0.42, screen.y - cH - bs * 0.25);
+      ctx.closePath();
+      ctx.fill();
+
+    } else if (type === "monument_monolith") {
+      // 2.5D Sky-Piercing Celestial Obelisk / Monolith
+      const oW = bs * 0.55;
+      const oH = bs * 1.8;
+
+      // Tiered Obsidian Foundation
+      ctx.fillStyle = "#1e293b";
+      ctx.fillRect(screen.x - bs * 0.5, screen.y - bs * 0.2, bs * 1.0, bs * 0.2);
+      ctx.fillStyle = "#334155";
+      ctx.fillRect(screen.x - bs * 0.38, screen.y - bs * 0.32, bs * 0.76, bs * 0.12);
+
+      // Tapering Basalt Shaft
+      ctx.fillStyle = "#0f172a";
+      ctx.beginPath();
+      ctx.moveTo(screen.x - oW * 0.5, screen.y - bs * 0.32);
+      ctx.lineTo(screen.x - oW * 0.25, screen.y - oH);
+      ctx.lineTo(screen.x + oW * 0.25, screen.y - oH);
+      ctx.lineTo(screen.x + oW * 0.5, screen.y - bs * 0.32);
+      ctx.closePath();
+      ctx.fill();
+
+      // Highlight bevel edge
+      ctx.strokeStyle = "#475569";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(screen.x, screen.y - bs * 0.32);
+      ctx.lineTo(screen.x, screen.y - oH);
+      ctx.stroke();
+
+      // Glowing Cyan Celestial Runes
+      const runePulse = 0.5 + 0.5 * Math.sin(now * 0.009);
+      ctx.fillStyle = `rgba(56, 189, 248, ${0.4 + 0.5 * runePulse})`;
+      for (let rY = screen.y - bs * 0.5; rY > screen.y - oH + bs * 0.2; rY -= bs * 0.25) {
+        ctx.fillRect(screen.x - 2, rY, 4, bs * 0.12);
+      }
+
+      // Apex Pyramidion
+      ctx.fillStyle = "#38bdf8";
+      ctx.beginPath();
+      ctx.moveTo(screen.x - oW * 0.25, screen.y - oH);
+      ctx.lineTo(screen.x, screen.y - oH - bs * 0.3);
+      ctx.lineTo(screen.x + oW * 0.25, screen.y - oH);
+      ctx.closePath();
+      ctx.fill();
+
+      // Levitating Pulsing Celestial Energy Orb
+      const orbPulse = Math.sin(now * 0.008) * 3;
+      const orbGrad = ctx.createRadialGradient(screen.x, screen.y - oH - bs * 0.45 + orbPulse, 2, screen.x, screen.y - oH - bs * 0.45 + orbPulse, bs * 0.4);
+      orbGrad.addColorStop(0, "#ffffff");
+      orbGrad.addColorStop(0.3, "#38bdf8");
+      orbGrad.addColorStop(0.8, "rgba(56, 189, 248, 0.4)");
+      orbGrad.addColorStop(1, "rgba(56, 189, 248, 0)");
+      ctx.fillStyle = orbGrad;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - oH - bs * 0.45 + orbPulse, bs * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+
     } else {
       // Generic Fortification / Mine / Structure
       const wallH = bs * 0.8;
@@ -1824,6 +2043,70 @@ export class CanvasRenderer {
       ctx.beginPath();
       ctx.arc(screen.x, screen.y, c.size * this.camera.zoom * 0.4, 0, Math.PI * 2);
       ctx.fill();
+    }
+  }
+
+  /**
+   * Dynamic Weather FX: Rain streaks, thunder flashes, arid drought shimmer
+   */
+  renderWeather() {
+    const ws = this.simulation?.weatherSystem;
+    if (!ws) return;
+    const ctx = this.ctx;
+    const now = Date.now();
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    const weather = ws.currentWeather;
+
+    if (weather === 'rain' || weather === 'storm') {
+      const dropCount = weather === 'storm' ? 220 : 120;
+      ctx.save();
+      ctx.strokeStyle = weather === 'storm' ? "rgba(186, 230, 253, 0.55)" : "rgba(224, 242, 254, 0.40)";
+      ctx.lineWidth = weather === 'storm' ? 1.5 : 1.0;
+
+      const speed = weather === 'storm' ? 0.8 : 0.5;
+      const slant = weather === 'storm' ? 8 : 4;
+      const len = weather === 'storm' ? 22 : 14;
+
+      ctx.beginPath();
+      for (let i = 0; i < dropCount; i++) {
+        const px = (i * 37 + (now * speed * 0.4) * (1 + (i % 5) * 0.2)) % (w + 100) - 50;
+        const py = (i * 97 + now * speed * 1.5) % (h + 50) - 30;
+        ctx.moveTo(px, py);
+        ctx.lineTo(px - slant, py + len);
+      }
+      ctx.stroke();
+
+      // Atmospheric overcast tint
+      ctx.fillStyle = weather === 'storm' ? "rgba(15, 23, 42, 0.28)" : "rgba(30, 41, 59, 0.14)";
+      ctx.fillRect(0, 0, w, h);
+
+      // Lightning strike flash in storms
+      if (ws.recentLightning && ws.recentLightning.expires > now) {
+        const remaining = ws.recentLightning.expires - now;
+        const alpha = Math.max(0, Math.min(0.65, remaining / 350));
+        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+        ctx.fillRect(0, 0, w, h);
+
+        // Lightning bolt from sky to strike point
+        const screen = this.worldToScreen(ws.recentLightning.x, ws.recentLightning.y);
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
+        ctx.lineWidth = 3.5;
+        ctx.beginPath();
+        ctx.moveTo(screen.x + Math.sin(now * 0.1) * 20, 0);
+        ctx.lineTo(screen.x - 15, screen.y * 0.35);
+        ctx.lineTo(screen.x + 20, screen.y * 0.7);
+        ctx.lineTo(screen.x, screen.y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    } else if (weather === 'drought') {
+      // Arid golden haze
+      ctx.save();
+      const pulse = 0.05 + 0.03 * Math.sin(now * 0.002);
+      ctx.fillStyle = `rgba(245, 158, 11, ${pulse})`;
+      ctx.fillRect(0, 0, w, h);
+      ctx.restore();
     }
   }
 

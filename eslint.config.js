@@ -2,7 +2,7 @@ import globals from "globals";
 import js from "@eslint/js";
 
 export default [
-  { ignores: ["node_modules/**", "tests/legacy/**"] },
+  { ignores: ["node_modules/**", "dist/**", "tests/legacy/**"] },
   js.configs.recommended,
   {
     files: ["**/*.js", "**/*.mjs"],

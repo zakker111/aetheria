@@ -28,6 +28,8 @@ import { DiplomacySystem } from "../systems/diplomacySystem.js";
 import { WarfareSystem } from "../systems/warfareSystem.js";
 import { AnimalSystem } from "../systems/animalSystem.js";
 import { ChronicleSystem } from "../systems/chronicleSystem.js";
+import { CivilizationAgeSystem } from "../systems/civilizationAgeSystem.js";
+import { WeatherSystem } from "../systems/weatherSystem.js";
 
 export class Simulation {
   // Deterministic RNG helper: always routes through the seeded world RNG.
@@ -219,6 +221,8 @@ export class Simulation {
     // the world's living history (wars, plagues, founding, burnings...).
     this.animalSystem = new AnimalSystem(this);
     this.chronicleSystem = new ChronicleSystem(this);
+    this.civilizationAgeSystem = new CivilizationAgeSystem(this);
+    this.weatherSystem = new WeatherSystem(this);
     
     // Session statistics
     this.birthsThisSession = 0;
@@ -580,6 +584,10 @@ export class Simulation {
     if (this.cultureSystem) {
       this.cultureSystem.update(this.clock.tick);
     }
+    // Update historical epochs & monuments
+    if (this.civilizationAgeSystem) {
+      this.civilizationAgeSystem.update(this.clock.tick);
+    }
   }
   
   updateAging() {
@@ -632,8 +640,10 @@ export class Simulation {
       this.eventBus.emit('SEASON_CHANGED', { season, year: this.clock.getYear(), tick: this.clock.tick });
     }
 
-    // Environment updates (weather, seasons, etc.) would go here
-    // For now, just let resources regrow
+    // Dynamic Weather System (Rain, Storms, Lightning, Droughts)
+    if (this.weatherSystem) {
+      this.weatherSystem.update(this.clock.tick);
+    }
 
     // Perf: fire layer only matters while something burns. Skip the full-map
     // scan entirely when there are no active fires (common case). Fires can
@@ -1810,6 +1820,8 @@ export class Simulation {
       // wildlife and the chronicle book.
       animals: this.animalSystem.serialize(),
       chronicle: this.chronicleSystem.serialize(),
+      civilizationAges: this.civilizationAgeSystem ? this.civilizationAgeSystem.serialize() : null,
+      weather: this.weatherSystem ? this.weatherSystem.serialize() : null,
       // Warfare: active warbands (march targets, morale, plunder cargo) drive
       // soldier behavior every tick — losing them desyncs a resumed run badly.
       warfare: {
@@ -2014,6 +2026,13 @@ export class Simulation {
     // without this field simply start fresh — agents keep their jobs.
     if (data.career && Array.isArray(data.career.jobChangeCount)) {
       sim._jobChangeCount = new Map(data.career.jobChangeCount);
+    }
+
+    if (data.civilizationAges) {
+      sim.civilizationAgeSystem = CivilizationAgeSystem.deserialize(data.civilizationAges, sim);
+    }
+    if (data.weather) {
+      sim.weatherSystem = WeatherSystem.deserialize(data.weather, sim);
     }
 
     return sim;

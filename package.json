@@ -3,19 +3,28 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node server.js",
-    "start": "node server.js",
-    "build": "echo 'No build step required'",
+    "dev": "vite --host 0.0.0.0 --port 3000",
+    "build": "vite build",
+    "preview": "vite preview --port 3000",
     "lint": "eslint .",
-    "test": "node tests/soak.mjs && node tests/determinism.mjs && node tests/gossip.mjs && node tests/supplychain.mjs",
-    "verify": "npm run lint && npm test"
+    "test": "node tests/soak.mjs && node tests/determinism.mjs && node tests/gossip.mjs && node tests/supplychain.mjs"
   },
   "dependencies": {
     "express": "^5.2.1",
-    "http-server": "^14.1.1"
+    "http-server": "^14.1.1",
+    "lucide-react": "^1.61.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
     "eslint": "^9.39.5",
-    "globals": "^17.12.0"
+    "globals": "^17.12.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
   }
 }
