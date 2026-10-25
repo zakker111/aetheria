@@ -406,24 +406,39 @@ export class Agent {
   generateGoals(simulation, perception = null) {
     this.goals = [];
     
+    const homeSettlement = simulation?.settlementSystem?.getAgentSettlement?.(this.id);
+    const hasTownFood = (homeSettlement?.stockpile?.food || 0) + (homeSettlement?.stockpile?.bread || 0) > 0;
+
     // 1. Critical Hunger & Thirst
     if (this.needs.food < 45) {
       if (this.inventory.bread > 0 || this.inventory.wheat > 0) {
         this.goals.push({ type: "eat_from_inventory", priority: 120 - this.needs.food });
+      } else if (hasTownFood && homeSettlement?.center) {
+        this.goals.push({ type: "eat_from_stockpile", priority: 115 - this.needs.food, target: homeSettlement.center });
+        this.goals.push({ type: "find_food", priority: 105 - this.needs.food });
       } else {
         this.goals.push({ type: "find_food", priority: 110 - this.needs.food });
       }
     } else if (this.needs.food < 75) {
       if (this.inventory.bread > 0 || this.inventory.wheat > 0) {
         this.goals.push({ type: "eat_from_inventory", priority: 65 });
+      } else if (hasTownFood && homeSettlement?.center) {
+        this.goals.push({ type: "eat_from_stockpile", priority: 60, target: homeSettlement.center });
+        this.goals.push({ type: "find_food", priority: 50 });
       } else {
         this.goals.push({ type: "find_food", priority: 55 });
       }
     }
     
     if (this.needs.water < 45) {
+      if (homeSettlement?.center) {
+        this.goals.push({ type: "fetch_town_water", priority: 118 - this.needs.water, target: homeSettlement });
+      }
       this.goals.push({ type: "find_water", priority: 115 - this.needs.water });
     } else if (this.needs.water < 75) {
+      if (homeSettlement?.center) {
+        this.goals.push({ type: "fetch_town_water", priority: 58, target: homeSettlement });
+      }
       this.goals.push({ type: "find_water", priority: 55 });
     }
     
@@ -1869,8 +1884,30 @@ export class Agent {
           break;
         }
         if (this.distanceTo(action.target) < 2.5) {
-          action.target.constructionProgress = (action.target.constructionProgress || 0) + 4;
+          // Consume building materials (wood/planks) from settlement stockpile or builder bag
+          const sid = this.settlementId || (simulation?.settlementSystem?.agentSettlementMap?.get(this.id));
+          let woodUsed = 0;
+          if (sid && simulation?.settlementSystem) {
+            woodUsed = simulation.settlementSystem.withdrawFromStockpile(sid, "wood", 1);
+            if (woodUsed === 0 && (simulation.settlementSystem.settlements.get(sid)?.stockpile?.plank || 0) > 0) {
+              woodUsed = simulation.settlementSystem.withdrawFromStockpile(sid, "plank", 1);
+            }
+          }
+          if (woodUsed === 0 && (this.inventory.wood_log || 0) > 0) {
+            this.inventory.wood_log--;
+            woodUsed = 1;
+          } else if (woodUsed === 0 && (this.inventory.plank || 0) > 0) {
+            this.inventory.plank--;
+            woodUsed = 1;
+          }
+
+          // Progress scales with resource investment and builder skill
+          const progressInc = woodUsed > 0 ? 5 : 2;
+          action.target.constructionProgress = (action.target.constructionProgress || 0) + progressInc;
           this.gainSkill("build", 0.05, 5, 1, tickOf(simulation));
+          if (woodUsed > 0 && eventBus) {
+            eventBus.emit("RESOURCE_CONSUMED", { agentId: this.id, settlementId: sid, resourceType: "wood", amount: woodUsed });
+          }
           
           if (action.target.constructionProgress >= 100) {
             action.target.isComplete = true;
@@ -2111,12 +2148,18 @@ export class Agent {
           this.needs.food = Math.min(100, this.needs.food + 45);
           // Memory: a warm meal when starving is worth remembering.
           if (wasHungry) this.remember("GOOD_MEAL", simulation?.clock?.tick ?? 0, { food: "bread" });
+          if (eventBus) {
+            eventBus.emit("RESOURCE_CONSUMED", { agentId: this.id, resourceType: "bread", amount: 1 });
+          }
           this.currentAction = null;
         } else if (this.inventory.wheat > 0) {
           this.inventory.wheat--;
           const wasHungry2 = this.needs.food < 40;
           this.needs.food = Math.min(100, this.needs.food + 25);
           if (wasHungry2) this.remember("GOOD_MEAL", simulation?.clock?.tick ?? 0, { food: "wheat" });
+          if (eventBus) {
+            eventBus.emit("RESOURCE_CONSUMED", { agentId: this.id, resourceType: "wheat", amount: 1 });
+          }
           this.currentAction = null;
         }
         break;
@@ -2279,10 +2322,19 @@ export class Agent {
         }
         if (this.distanceTo(action.target) < 1.8) {
           this.needs.water = Math.min(100, this.needs.water + 45);
+          if (typeof action.target.consume === 'function') {
+            action.target.consume(1);
+          } else if (typeof action.target.amount === 'number' && action.target.amount > 0) {
+            action.target.amount = Math.max(0, action.target.amount - 1);
+            if (action.target.amount <= 0 && typeof action.target.markDepleted === 'function') {
+              action.target.markDepleted();
+            }
+          }
           if (eventBus) {
             eventBus.emit("RESOURCE_CONSUMED", { 
               agentId: this.id, 
-              resourceType: "water"
+              resourceType: "water",
+              amount: 1
             });
           }
           this.currentAction = null;
@@ -2407,8 +2459,15 @@ export class Agent {
         if (!action.target) { this.currentAction = null; break; }
         if (this.distanceTo(action.target) < 2.2) {
           this.needs.water = Math.min(100, this.needs.water + 65);
+          const sid = this.settlementId || (simulation?.settlementSystem?.agentSettlementMap?.get(this.id));
+          if (sid && simulation?.settlementSystem) {
+            simulation.settlementSystem.withdrawFromStockpile(sid, "water", 1);
+          }
+          if (action.target && typeof action.target.consume === 'function') {
+            action.target.consume(1);
+          }
           if (eventBus) {
-            eventBus.emit("RESOURCE_CONSUMED", { agentId: this.id, resourceType: "water" });
+            eventBus.emit("RESOURCE_CONSUMED", { agentId: this.id, settlementId: sid, resourceType: "water", amount: 1 });
           }
           this.currentAction = null;
         } else {
@@ -2572,6 +2631,10 @@ export class Agent {
               if (taken === 0) taken = simulation.settlementSystem.withdrawFromStockpile(sid, "bread", 1);
               if (taken > 0) {
                 this.needs.food = Math.min(100, this.needs.food + 45);
+                this.remember("GOOD_MEAL", simulation?.clock?.tick ?? 0, { food: "stockpile", from: "settlement" });
+                if (eventBus) {
+                  eventBus.emit("RESOURCE_CONSUMED", { agentId: this.id, settlementId: sid, resourceType: "food", amount: taken });
+                }
               }
             }
           }

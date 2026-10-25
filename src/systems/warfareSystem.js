@@ -55,9 +55,9 @@ export class WarfareSystem {
 
     if (veterans.length === 0 && eligible.length === 0) return null;
 
-    // Determine squad size: 30% to 50% of eligible population, minimum 2, maximum 8
+    // Determine squad size: 30% to 50% of eligible population, minimum 1, maximum 8
     const poolSize = veterans.length + eligible.length;
-    const squadSize = Math.max(2, Math.min(8, Math.floor(poolSize * 0.4)));
+    const squadSize = Math.max(1, Math.min(8, Math.max(1, Math.floor(poolSize * 0.45))));
     // Soldiers first (stable insertion order = deterministic), then civilians.
     const recruited = veterans.concat(eligible).slice(0, squadSize);
 

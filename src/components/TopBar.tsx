@@ -15,7 +15,7 @@ interface TopBarProps {
   dominantAge?: { name: string; icon: string; color: string };
 }
 
-export const TopBar: React.FC<TopBarProps> = ({
+const TopBarComponent: React.FC<TopBarProps> = ({
   time,
   agentCount,
   births,
@@ -181,3 +181,5 @@ export const TopBar: React.FC<TopBarProps> = ({
     </div>
   );
 };
+
+export const TopBar = React.memo(TopBarComponent);

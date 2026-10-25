@@ -12,7 +12,7 @@ interface DiplomacyPanelProps {
   onClose: () => void;
 }
 
-export const DiplomacyPanel: React.FC<DiplomacyPanelProps> = ({
+const DiplomacyPanelComponent: React.FC<DiplomacyPanelProps> = ({
   wars,
   treaties,
   relations,
@@ -306,3 +306,5 @@ export const DiplomacyPanel: React.FC<DiplomacyPanelProps> = ({
     </div>
   );
 };
+
+export const DiplomacyPanel = React.memo(DiplomacyPanelComponent);

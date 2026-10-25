@@ -246,7 +246,7 @@ export const App: React.FC = () => {
       // UI state refresh throttle (4 times/sec)
       if (currentTime - lastUiUpdate > 250) {
         const t = sim.clock.getTime();
-        setTimeState(t);
+        setTimeState((prev) => (prev.days === t.days && prev.hours === t.hours && prev.ticks === t.ticks ? prev : t));
         setAgentCount(sim.agents.length);
         setBirths(sim.birthsThisSession || 0);
         setDeaths(sim.deathsThisSession || 0);
@@ -254,10 +254,12 @@ export const App: React.FC = () => {
         setIsPaused(sim.clock.speed === 0);
 
         if (sim.weatherSystem) {
-          setCurrentWeather(sim.weatherSystem.getWeatherInfo());
+          const wInfo = sim.weatherSystem.getWeatherInfo();
+          setCurrentWeather((prev) => (prev && prev.name === wInfo.name ? prev : wInfo));
         }
         if (sim.civilizationAgeSystem) {
-          setDominantAge(sim.civilizationAgeSystem.getDominantAge());
+          const aInfo = sim.civilizationAgeSystem.getDominantAge();
+          setDominantAge((prev) => (prev && prev.name === aInfo?.name ? prev : aInfo));
         }
 
         // Count resources
@@ -276,7 +278,8 @@ export const App: React.FC = () => {
             else if (r.resourceType === 'water') water++;
           }
         }
-        setResources({ food, wood, ore, water, total: resList ? resList.length : 0 });
+        const totalRes = resList ? resList.length : 0;
+        setResources((prev) => (prev.food === food && prev.wood === wood && prev.ore === ore && prev.water === water && prev.total === totalRes ? prev : { food, wood, ore, water, total: totalRes }));
 
         // Settlements
         const settlementMap = sim.settlementSystem?.settlements;

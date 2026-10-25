@@ -1498,8 +1498,15 @@ export class Simulation {
   }
 
   updateResources() {
+    const season = this.clock.getSeason();
+    const seasonFertility = WorldState.seasonFertility(season);
+    const weatherType = this.weatherSystem?.currentWeather?.type;
+    const isRaining = weatherType === "rain" || weatherType === "storm";
+    // Rain and fertile seasons boost vegetation regrowth
+    const envBoost = (isRaining ? 1.6 : 1.0) * seasonFertility;
+
     for (const resource of this.resources) {
-      resource.update();
+      resource.update(envBoost);
     }
 
     // Ground loot decay + cleanup (Phase 1 — Deep Economy)
@@ -1509,7 +1516,7 @@ export class Simulation {
     }
     
     // Natural ecological replenishment: keep the world vibrant with food, wood, and ores
-    if (this.clock.tick % 40 === 0) {
+    if (this.clock.tick % 30 === 0) {
       this.maintainWorldResources();
     }
   }
@@ -1519,64 +1526,83 @@ export class Simulation {
     let woodCount = 0;
     let oreCount = 0;
 
+    // Count only active, harvestable resources (excluding depleted stumps and empty seams)
     for (const r of this.resources) {
-      if (r.destroyed) continue;
+      if (r.destroyed || r.depleted || r.amount <= 0) continue;
       if (r.resourceType === "food") foodCount++;
       else if (r.resourceType === "wood") woodCount++;
       else if (r.resourceType === "ore") oreCount++;
     }
 
-    // Regrow wood in forests/jungles — vegetation follows the seasons
+    // Regrow wood in forests/jungles/grasslands — vegetation follows the seasons & rainfall
     const season = this.clock.getSeason();
     const fertility = WorldState.seasonFertility(season);
-    if (woodCount < 120) {
-      const needed = Math.max(1, Math.min(8, Math.round((120 - woodCount) * fertility)));
+    const weatherType = this.weatherSystem?.currentWeather?.type;
+    const isRaining = weatherType === "rain" || weatherType === "storm";
+
+    const targetWood = 150;
+    if (woodCount < targetWood) {
+      const needed = Math.max(1, Math.min(10, Math.round((targetWood - woodCount) * (isRaining ? 1.4 : 1.0) * fertility)));
       for (let k = 0; k < needed; k++) {
-        const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
-        const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
-        const terrain = this.world.getTerrain(x, y);
-        if (terrain && (terrain.biome === "forest" || terrain.biome === "jungle") && this.world.isWalkable(x, y)) {
-          const entities = this.world.getEntitiesAt(x, y);
-          if (!entities.some(e => e.type === "resource")) {
-            const res = new Resource(x, y, "wood", 50, this.idGen);
-            this.resources.push(res);
-            this.world.addToSpatialIndex(x, y, res);
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
+          const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
+          const terrain = this.world.getTerrain(x, y);
+          if (terrain && (terrain.biome === "forest" || terrain.biome === "jungle" || terrain.biome === "grassland") && this.world.isWalkable(x, y)) {
+            const entities = this.world.getEntitiesAt(x, y);
+            if (!entities.some(e => e.type === "resource" || e.type === "building")) {
+              const res = new Resource(x, y, "wood", Math.floor(35 + this._rng().next() * 25), this.idGen);
+              this.resources.push(res);
+              this.world.addToSpatialIndex(x, y, res);
+              woodCount++;
+              break;
+            }
           }
         }
       }
     }
 
-    // Regrow food in grasslands/savannas/plains
-    if (foodCount < 120) {
-      const needed = Math.min(8, 120 - foodCount);
+    // Regrow food in grasslands/savannas/plains/forests
+    const targetFood = 140;
+    if (foodCount < targetFood) {
+      const needed = Math.max(1, Math.min(10, Math.round((targetFood - foodCount) * (isRaining ? 1.4 : 1.0) * fertility)));
       for (let k = 0; k < needed; k++) {
-        const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
-        const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
-        const terrain = this.world.getTerrain(x, y);
-        if (terrain && (terrain.biome === "grassland" || terrain.biome === "savanna" || terrain.biome === "beach") && this.world.isWalkable(x, y)) {
-          const entities = this.world.getEntitiesAt(x, y);
-          if (!entities.some(e => e.type === "resource")) {
-            const res = new Resource(x, y, "food", 45, this.idGen);
-            this.resources.push(res);
-            this.world.addToSpatialIndex(x, y, res);
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
+          const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
+          const terrain = this.world.getTerrain(x, y);
+          if (terrain && (terrain.biome === "grassland" || terrain.biome === "savanna" || terrain.biome === "beach" || terrain.biome === "forest") && this.world.isWalkable(x, y)) {
+            const entities = this.world.getEntitiesAt(x, y);
+            if (!entities.some(e => e.type === "resource" || e.type === "building")) {
+              const res = new Resource(x, y, "food", Math.floor(30 + this._rng().next() * 25), this.idGen);
+              this.resources.push(res);
+              this.world.addToSpatialIndex(x, y, res);
+              foodCount++;
+              break;
+            }
           }
         }
       }
     }
 
     // Uncover ore deposits in mountains/highlands
-    if (oreCount < 80) {
-      const needed = Math.min(6, 80 - oreCount);
+    const targetOre = 90;
+    if (oreCount < targetOre) {
+      const needed = Math.min(6, targetOre - oreCount);
       for (let k = 0; k < needed; k++) {
-        const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
-        const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
-        const terrain = this.world.getTerrain(x, y);
-        if (terrain && (terrain.biome === "mountain" || terrain.biome === "highland" || terrain.biome === "tundra") && this.world.isWalkable(x, y)) {
-          const entities = this.world.getEntitiesAt(x, y);
-          if (!entities.some(e => e.type === "resource")) {
-            const res = new Resource(x, y, "ore", 60, this.idGen);
-            this.resources.push(res);
-            this.world.addToSpatialIndex(x, y, res);
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
+          const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
+          const terrain = this.world.getTerrain(x, y);
+          if (terrain && (terrain.biome === "mountain" || terrain.biome === "highland" || terrain.biome === "tundra") && this.world.isWalkable(x, y)) {
+            const entities = this.world.getEntitiesAt(x, y);
+            if (!entities.some(e => e.type === "resource" || e.type === "building")) {
+              const res = new Resource(x, y, "ore", Math.floor(45 + this._rng().next() * 30), this.idGen);
+              this.resources.push(res);
+              this.world.addToSpatialIndex(x, y, res);
+              oreCount++;
+              break;
+            }
           }
         }
       }

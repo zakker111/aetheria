@@ -8,12 +8,14 @@ interface MiniMapRadarProps {
   onPanTo: (x: number, y: number) => void;
 }
 
-export const MiniMapRadar: React.FC<MiniMapRadarProps> = ({
+const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
   simulation,
   renderer,
   onPanTo,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const terrainCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const terrainDrawnRef = useRef(false);
   const [mode, setMode] = useState<RadarMode>('territory');
   const [isMinimized, setIsMinimized] = useState(false);
   const isDraggingRef = useRef(false);
@@ -44,28 +46,33 @@ export const MiniMapRadar: React.FC<MiniMapRadarProps> = ({
   );
 
   useEffect(() => {
+    if (isMinimized) return;
     let animId: number;
+    let lastRenderTime = 0;
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const renderRadar = () => {
-      const world = simulation?.world;
-      if (!world) {
-        animId = requestAnimationFrame(renderRadar);
-        return;
-      }
+    // Build or update offscreen terrain canvas once
+    if (!terrainCanvasRef.current) {
+      terrainCanvasRef.current = document.createElement('canvas');
+      terrainCanvasRef.current.width = RADAR_SIZE;
+      terrainCanvasRef.current.height = RADAR_SIZE;
+    }
 
+    const tCanvas = terrainCanvasRef.current;
+    const tCtx = tCanvas.getContext('2d');
+
+    const updateTerrainBuffer = () => {
+      const world = simulation?.world;
+      if (!world || !tCtx) return;
       const W = world.width || 128;
       const H = world.height || 128;
       const scaleX = RADAR_SIZE / W;
       const scaleY = RADAR_SIZE / H;
 
-      ctx.clearRect(0, 0, RADAR_SIZE, RADAR_SIZE);
-
-      // 1. Draw Biome Base
       const biomeColors: { [key: string]: string } = {
         water: '#1e3a8a',
         beach: '#fde047',
@@ -79,14 +86,42 @@ export const MiniMapRadar: React.FC<MiniMapRadarProps> = ({
         swamp: '#3f6212',
       };
 
-      // Fast low-res terrain sample (step = 2)
+      tCtx.clearRect(0, 0, RADAR_SIZE, RADAR_SIZE);
       for (let y = 0; y < H; y += 2) {
         for (let x = 0; x < W; x += 2) {
           const idx = y * W + x;
           const b = world.biome ? world.biome[idx] : 'grassland';
-          ctx.fillStyle = biomeColors[b] || '#15803d';
-          ctx.fillRect(x * scaleX, y * scaleY, scaleX * 2 + 0.5, scaleY * 2 + 0.5);
+          tCtx.fillStyle = biomeColors[b] || '#15803d';
+          tCtx.fillRect(x * scaleX, y * scaleY, scaleX * 2 + 0.5, scaleY * 2 + 0.5);
         }
+      }
+      terrainDrawnRef.current = true;
+    };
+
+    if (!terrainDrawnRef.current) {
+      updateTerrainBuffer();
+    }
+
+    const renderRadar = (timestamp: number) => {
+      animId = requestAnimationFrame(renderRadar);
+
+      // Throttle radar updates to ~25 FPS to conserve GPU/CPU cycles
+      if (timestamp - lastRenderTime < 40) return;
+      lastRenderTime = timestamp;
+
+      const world = simulation?.world;
+      if (!world) return;
+
+      const W = world.width || 128;
+      const H = world.height || 128;
+      const scaleX = RADAR_SIZE / W;
+      const scaleY = RADAR_SIZE / H;
+
+      ctx.clearRect(0, 0, RADAR_SIZE, RADAR_SIZE);
+
+      // 1. Draw pre-rendered Biome Base via single blit
+      if (tCanvas) {
+        ctx.drawImage(tCanvas, 0, 0);
       }
 
       // 2. Burning Fires overlay
@@ -188,8 +223,6 @@ export const MiniMapRadar: React.FC<MiniMapRadarProps> = ({
         ctx.lineWidth = 1.2;
         ctx.strokeRect(cx - viewW / 2, cy - viewH / 2, viewW, viewH);
       }
-
-      animId = requestAnimationFrame(renderRadar);
     };
 
     const handleGlobalRelease = () => {
@@ -204,7 +237,7 @@ export const MiniMapRadar: React.FC<MiniMapRadarProps> = ({
       window.removeEventListener('mouseup', handleGlobalRelease);
       window.removeEventListener('touchend', handleGlobalRelease);
     };
-  }, [simulation, renderer, mode]);
+  }, [simulation, renderer, mode, isMinimized]);
 
   if (isMinimized) {
     return (
@@ -338,3 +371,5 @@ export const MiniMapRadar: React.FC<MiniMapRadarProps> = ({
     </div>
   );
 };
+
+export const MiniMapRadar = React.memo(MiniMapRadarComponent);

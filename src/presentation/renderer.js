@@ -712,6 +712,11 @@ export class CanvasRenderer {
     for (let y = minY; y <= maxY; y++) {
       for (let x = minX; x <= maxX; x++) {
         const idx = y * w + x;
+        const isBridge = Boolean(world.bridgeTiles && world.bridgeTiles[idx]);
+        const isRoad = Boolean(world.roadTiles && world.roadTiles[idx]);
+        const isFire = Boolean(world.fireTiles && world.fireTiles[idx] > 0);
+        if (!isBridge && !isRoad && !isFire) continue;
+
         const elev = this.getTileElevation(x, y);
 
         // Bridges spanning water

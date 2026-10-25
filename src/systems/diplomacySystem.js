@@ -206,14 +206,14 @@ export class DiplomacySystem {
     // what eventually tips deep peace into tension even when trade is good.
     for (const s of settlements) {
       const pop = s.population || s.agentIds?.size || 0;
-      if (pop < 35) continue; // too small to project power — no grudges yet
+      if (pop < 3) continue; // Early societies project power and accumulate grudges
       const rival = this.nearestRival(s);
       if (!rival) continue;
       const dist = Math.hypot(s.center.x - rival.center.x, s.center.y - rival.center.y);
-      if (dist > 60) continue; // only genuine neighbors chafe
+      if (dist > 75) continue; // genuine neighbors chafe across territory borders
       const rivalPop = rival.population || rival.agentIds?.size || 0;
       const scarcity = rivalPop > pop ? 1.4 : 1.0; // envied stronger neighbor
-      this.addGrievance(s.id, rival.id, "Border Friction", 0.8 * scarcity);
+      this.addGrievance(s.id, rival.id, "Border Friction", 1.2 * scarcity);
     }
 
     for (let i = 0; i < settlements.length; i++) {
@@ -237,20 +237,20 @@ export class DiplomacySystem {
         const cooperation = ((s1.culture?.values?.cooperation ?? 0.5) + (s2.culture?.values?.cooperation ?? 0.5)) / 2;
 
         if (cooperation > 0.65) rel.score += 0.2;
-        if (belligerence1 > 0.6 || belligerence2 > 0.6) rel.score -= 0.3;
+        if (belligerence1 > 0.4 || belligerence2 > 0.4) rel.score -= 0.35;
 
-        // Proximity friction
+        // Proximity friction across regional distances
         const dist = Math.hypot(s1.center.x - s2.center.x, s1.center.y - s2.center.y);
-        if (dist < 28 && rel.status !== DIPLOMATIC_STATUS.ALLIANCE) {
-          rel.score -= 0.15;
+        if (dist < 65 && rel.status !== DIPLOMATIC_STATUS.ALLIANCE) {
+          const proximityPressure = Math.max(0.12, (65 - dist) * 0.008);
+          rel.score -= proximityPressure;
         }
 
-        // Grievance pressure: accumulated grudges pull the relation score
-        // down toward whichever side resents the other more.
+        // Grievance pressure: accumulated grudges pull the relation score down
         const g12 = this.grievances.get(s1.id)?.get(s2.id)?.weight ?? 0;
         const g21 = this.grievances.get(s2.id)?.get(s1.id)?.weight ?? 0;
         const grudge = Math.max(g12, g21);
-        if (grudge > 0) rel.score -= grudge * 0.04;
+        if (grudge > 0) rel.score -= grudge * 0.08;
 
         rel.score = Math.max(0, Math.min(100, rel.score));
 
@@ -259,26 +259,33 @@ export class DiplomacySystem {
           // Check if either side is exhausted or wants peace
           this.checkWarWeariness(s1, s2, rel, tick);
         } else if (rel.status === DIPLOMATIC_STATUS.ALLIANCE) {
-          if (rel.score < 60) {
+          if (rel.score < 55) {
             rel.status = DIPLOMATIC_STATUS.PEACE;
             this.emitDiplomacyEvent(s1, s2, "Alliance Dissolved", "Friendly ties have cooled back to standard peace.");
           }
         } else if (rel.status === DIPLOMATIC_STATUS.PEACE) {
           if (rel.score >= 82) {
             this.formAlliance(s1.id, s2.id, tick);
-          } else if (rel.score < 28) {
+          } else if (rel.score < 35) {
             rel.status = DIPLOMATIC_STATUS.TENSION;
             this.emitDiplomacyEvent(s1, s2, "Border Tensions", "Rivalry and border disputes spark rising friction.");
           }
         } else if (rel.status === DIPLOMATIC_STATUS.TENSION) {
-          if (rel.score >= 38) {
+          if (rel.score >= 45) {
             rel.status = DIPLOMATIC_STATUS.PEACE;
-          } else if (rel.score <= 12 && rel.truceUntilTick <= tick) {
+          } else if (rel.score <= 22 && rel.truceUntilTick <= tick) {
             // Evaluate all potential casus belli for each direction and pick the best-justified war
-            const grievance = this.evaluateCasusBelli(s1, s2);
-            if (grievance) {
-              this.declareWar(grievance.attackerId, grievance.defenderId, grievance.reason, tick);
+            let grievance = this.evaluateCasusBelli(s1, s2);
+            if (!grievance) {
+              const attFirst = (s1.culture?.values?.belligerence ?? 0.3) >= (s2.culture?.values?.belligerence ?? 0.3);
+              grievance = {
+                attackerId: attFirst ? s1.id : s2.id,
+                defenderId: attFirst ? s2.id : s1.id,
+                reason: "Territorial Dispute — Border Escalation",
+                score: 25
+              };
             }
+            this.declareWar(grievance.attackerId, grievance.defenderId, grievance.reason, tick);
           }
         }
       }
@@ -349,10 +356,10 @@ export class DiplomacySystem {
 
       // 2) Diplomatic rift — deep mutual distrust / betrayed proximity friction
       const rel = this.getRelation(s1.id, s2.id);
-      if (rel && rel.score <= 12) {
+      if (rel && rel.score <= 25) {
         candidates.push({ attackerId: att.id, defenderId: def.id,
           reason: "Diplomatic Rift — Border Skirmish",
-          score: 20 + (12 - rel.score) * 1.5 });
+          score: 20 + (25 - rel.score) * 1.5 });
       }
 
       // 3) Religious difference — zealous attacker vs heretic neighbor of a different faith
@@ -369,18 +376,18 @@ export class DiplomacySystem {
           }
         }
         const zeal = zealN > 0 ? zealSum / zealN : 0;
-        if (zeal >= 65) {
+        if (zeal >= 55) {
           candidates.push({ attackerId: att.id, defenderId: def.id,
             reason: "Holy War — Crusade Against Heretics",
-            score: 28 + (zeal - 65) * 1.2 });
+            score: 28 + (zeal - 55) * 1.2 });
         }
       }
 
-      // 4) Cultural militarism drift — highly belligerent society picking fights
-      if (belligerence > 0.55) {
+      // 4) Cultural militarism drift — belligerent society picking fights
+      if (belligerence > 0.40) {
         candidates.push({ attackerId: att.id, defenderId: def.id,
           reason: "Militarist Aggression — Conquest",
-          score: 15 + belligerence * 35 });
+          score: 18 + belligerence * 35 });
       }
     }
 

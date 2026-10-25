@@ -7,7 +7,7 @@ interface SocietiesPanelProps {
   onClose: () => void;
 }
 
-export const SocietiesPanel: React.FC<SocietiesPanelProps> = ({
+const SocietiesPanelComponent: React.FC<SocietiesPanelProps> = ({
   settlements,
   onSelectSettlement,
   onClose,
@@ -134,3 +134,5 @@ export const SocietiesPanel: React.FC<SocietiesPanelProps> = ({
     </div>
   );
 };
+
+export const SocietiesPanel = React.memo(SocietiesPanelComponent);

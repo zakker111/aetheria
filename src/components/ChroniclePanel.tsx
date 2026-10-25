@@ -4,7 +4,7 @@ interface ChroniclePanelProps {
   events: string[];
 }
 
-export const ChroniclePanel: React.FC<ChroniclePanelProps> = ({ events }) => {
+const ChroniclePanelComponent: React.FC<ChroniclePanelProps> = ({ events }) => {
   return (
     <div
       style={{
@@ -62,3 +62,5 @@ export const ChroniclePanel: React.FC<ChroniclePanelProps> = ({ events }) => {
     </div>
   );
 };
+
+export const ChroniclePanel = React.memo(ChroniclePanelComponent);

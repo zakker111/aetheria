@@ -19,38 +19,37 @@ export class Resource {
 
     // Regrowth rates tailored per resource type
     if (resourceType === "food") {
-      this.regrowRate = 0.05; // Wild crops & berry bushes regrow quickly
-      this.recoveryTime = 60;  // fallow patch rests briefly, then greens again
+      this.regrowRate = 0.12; // Wild crops & berry bushes regrow quickly
+      this.recoveryTime = 35;  // fallow patch rests briefly, then greens again
       this.depletedLabel = "Fallow Patch";
       this.label = "Wild Food";
     } else if (resourceType === "wood") {
-      this.regrowRate = 0.03; // Trees regrow steadily
-      this.recoveryTime = 180; // saplings take a while to grow back
+      this.regrowRate = 0.08; // Trees regrow steadily
+      this.recoveryTime = 75;  // saplings sprout back from stumps
       this.depletedLabel = "Stump";
       this.label = "Timber Grove";
     } else if (resourceType === "ore") {
-      this.regrowRate = 0.02; // Ore veins slowly replenish
-      this.recoveryTime = 300; // mineral seams recharge very slowly
+      this.regrowRate = 0.04; // Ore veins slowly replenish
+      this.recoveryTime = 140; // mineral seams recharge
       this.depletedLabel = "Spent Seam";
       this.label = "Mineral Ore Deposit";
     } else if (resourceType === "gem") {
-      // Rare crystal vein: precious stones for grand masonry and jewelry.
-      // Almost never regrows — gems stay scarce by design, so towns must
-      // prospect distant mountains (or trade) to complete castles.
-      this.regrowRate = 0.003;
-      this.recoveryTime = 900; // crystals are effectively mined out for good
+      this.regrowRate = 0.01;
+      this.recoveryTime = 360;
       this.depletedLabel = "Mined-Out Vein";
       this.label = "Crystal Vein";
     } else {
-      this.regrowRate = 0.1; // Water springs bubble continuously
-      this.recoveryTime = 30;  // an exhausted spring wells back up fast
+      this.regrowRate = 0.2;  // Water springs bubble continuously
+      this.recoveryTime = 20;  // an exhausted spring wells back up fast
       this.depletedLabel = "Dried Spring";
       this.label = "Freshwater Spring";
     }
   }
 
-  update() {
+  update(environmentalModifier = 1.0) {
     if (this.destroyed) return;
+
+    const rate = Math.max(0.005, this.regrowRate * (environmentalModifier || 1.0));
 
     if (this.amount <= 0) {
       // Node depleted: sit dormant until the recovery countdown elapses,
@@ -58,10 +57,12 @@ export class Resource {
       if (this.recoveryTicks > 0) {
         this.recoveryTicks--;
         if (this.recoveryTicks === 0) {
-          // Recovery over: start refilling immediately and re-enter the
-          // spatial index on the next rebuild so agents can find it again.
-          this.amount = Math.min(this.maxAmount, this.regrowRate);
+          // Recovery over: sprouts green shoots / sapling immediately
+          this.amount = Math.min(this.maxAmount, Math.max(1, rate * 6));
           this.depleted = false;
+          if (this.normalLabel) {
+            this.label = this.normalLabel;
+          }
         }
       }
       return;
@@ -69,10 +70,10 @@ export class Resource {
 
     // Refilling toward capacity.
     if (this.amount < this.maxAmount) {
-      this.amount = Math.min(this.maxAmount, this.amount + this.regrowRate);
+      this.amount = Math.min(this.maxAmount, this.amount + rate);
       // Once it has visibly recovered, restore the normal label.
       if (this.depletedLabel && this.label === this.depletedLabel &&
-          this.amount >= this.maxAmount * 0.25) {
+          this.amount >= this.maxAmount * 0.2) {
         this.label = this.normalLabel;
       }
     }
