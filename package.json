@@ -7,7 +7,7 @@
     "build": "vite build",
     "preview": "vite preview --port 3000",
     "lint": "eslint .",
-    "test": "node tests/soak.mjs && node tests/determinism.mjs && node tests/gossip.mjs && node tests/supplychain.mjs"
+    "test": "node tests/soak.mjs && node tests/determinism.mjs && node tests/gossip.mjs && node tests/supplychain.mjs && node tests/warvisible.mjs && node tests/scenario_warring.mjs"
   },
   "dependencies": {
     "express": "^5.2.1",

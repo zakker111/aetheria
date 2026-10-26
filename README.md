@@ -32,9 +32,9 @@ Aetheria features a deterministic entity-component-system simulation engine rend
   - Provoke War, Muster Army, Enforce Peace
   - Bless (`0`), Smite, Remove
 - **Persistence**: Save and load world state directly to browser `localStorage`
-- **Starter Scenarios**: Launch with `?scenario=warring` for immediate border friction between hereditary rivals
+- **Default Warring Kingdoms Simulation**: Autonomous feuds, early casus belli friction, military mobilization, and border skirmishes are active by default and run continuously across emerging settlements.
 
-## 🏃 Running the Application
+## 🏃 Running and Testing Locally
 
 ```bash
 # Install dependencies
@@ -43,9 +43,42 @@ npm install
 # Start development server on port 3000
 npm run dev
 
-# Build for production
+# Run linting check
+npm run lint
+
+# Build production assets (outputs to dist/ with relative paths)
 npm run build
 
-# Run simulation test suite
+# Run all 6 automated test suites
 npm test
 ```
+
+### Automated Test Suites
+
+The test suite thoroughly verifies engine mechanics, economy, and deterministic reproducibility:
+1. `tests/determinism.mjs`: Verifies identical tick-by-tick RNG and simulation state progression from identical seeds.
+2. `tests/gossip.mjs`: Verifies full save/load round-trip determinism (fresh vs resumed simulation equivalence).
+3. `tests/supplychain.mjs`: Validates 9-phase supply chain loop (harvesting, workshop queues, bread/plank distribution, trade routes, and caravans).
+4. `tests/warvisible.mjs`: Validates grievance ledger decay, casus belli triggers, war declarations, and warband formation.
+5. `tests/scenario_warring.mjs`: Validates default Warring Kingdoms initialization, accelerated rivalry, and combat events.
+6. `tests/soak.mjs`: Long-run soak test (1000+ ticks) ensuring 0 crashes, 0 NaN anomalies, stable demographics, and active settlements.
+
+## 🚀 GitHub Push & GitHub Pages Deployment
+
+The repository is fully configured for automated GitHub CI and GitHub Pages deployment:
+
+### Ready-to-Use GitHub Actions Workflows
+- **`/.github/workflows/deploy.yml`**: Triggers on push to `main` or `master`. Checks out the code, installs dependencies, builds the production app with relative paths, and deploys directly to GitHub Pages using the official `actions/deploy-pages@v4`.
+- **`/.github/workflows/ci.yml`**: Runs `npm run lint`, `npm run build`, and all 6 automated test suites on pull requests and pushes.
+
+### Deploying to GitHub
+1. Add your GitHub remote repository:
+   ```bash
+   git remote add origin https://github.com/<username>/<repo-name>.git
+   git branch -M main
+   git push -u origin main
+   ```
+2. Enable GitHub Actions for Pages:
+   - On GitHub, navigate to your repository **Settings** → **Pages**.
+   - Under **Build and deployment** > **Source**, select **GitHub Actions**.
+3. Push to `main` and your game will be live at `https://<username>.github.io/<repo-name>/`.

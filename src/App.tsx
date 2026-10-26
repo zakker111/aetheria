@@ -34,14 +34,8 @@ export const App: React.FC = () => {
   const [rendererInstance, setRendererInstance] = useState<any>(null);
   const [isMuted, setIsMuted] = useState(() => soundManager.isMuted());
 
-  // Scenario
-  const [scenario, setScenario] = useState<string | null>(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      return params.get('scenario') || null;
-    }
-    return null;
-  });
+  // Scenario - Warring Kingdoms is default and always active
+  const scenario = 'warring';
 
   // UI state
   const [currentTool, setCurrentTool] = useState<ToolType>('inspect');
@@ -110,14 +104,12 @@ export const App: React.FC = () => {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
 
-    const sim = new Simulation(Date.now(), 128, 128, scenario ? { scenario } : {});
+    const sim = new Simulation(Date.now(), 128, 128, { scenario: 'warring' });
     simRef.current = sim;
 
-    if (scenario === 'warring') {
-      setTimeout(() => {
-        showNotification('⚔️ Warring Kingdoms: your founding towns are hereditary rivals');
-      }, 500);
-    }
+    setTimeout(() => {
+      showNotification('⚔️ Warring Kingdoms: hereditary rivalries active — wars always on');
+    }, 500);
 
     const renderer = new CanvasRenderer(canvas, sim.world, sim);
     rendererRef.current = renderer;
@@ -452,33 +444,6 @@ export const App: React.FC = () => {
   });
 
   // Action handlers
-  const handleToggleScenario = () => {
-    const nextScenario = scenario === 'warring' ? null : 'warring';
-    setScenario(nextScenario);
-
-    const url = new URL(window.location.href);
-    if (nextScenario) {
-      url.searchParams.set('scenario', nextScenario);
-    } else {
-      url.searchParams.delete('scenario');
-    }
-    window.history.replaceState({}, '', url.toString());
-
-    if (nextScenario === 'warring') {
-      showNotification('⚔️ Warring Kingdoms: founding towns initialized as hereditary rivals!');
-      setChronicleEvents((prev) => [
-        '⚔️ Warring Kingdoms era begins! Founding settlements declare immediate blood feuds.',
-        ...prev,
-      ]);
-    } else {
-      showNotification('🌿 Peaceful World: civilizations awaken in tranquil harmony.');
-      setChronicleEvents((prev) => [
-        '🌿 Peaceful World awakened. Autonomous tribes gather and build harmoniously.',
-        ...prev,
-      ]);
-    }
-  };
-
   const handleToggleView = () => {
     if (rendererRef.current) {
       const mode = rendererRef.current.toggle25D();
@@ -733,8 +698,6 @@ export const App: React.FC = () => {
           heightScaleLabel={heightScaleLabel}
           isPaused={isPaused}
           speed={speed}
-          scenario={scenario}
-          onToggleScenario={handleToggleScenario}
           onToggleView={handleToggleView}
           onCycleHeight={handleCycleHeight}
           onTogglePause={handleTogglePause}

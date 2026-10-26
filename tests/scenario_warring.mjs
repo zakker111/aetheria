@@ -36,15 +36,20 @@ check('warring scenario has active wars',
 const w2 = firstWarTick(777, 'warring');
 check('warring scenario deterministic across identical seeds', w1.tick === w2.tick);
 
-// --- 2. Default worlds unaffected ------------------------------------------
-const d1 = firstWarTick(777, null);
+// --- 2. Default worlds are Warring Kingdoms by default (Wars Always On) ----
+const d1 = firstWarTick(777);
 console.log(`INFO: default seed=777 first war at tick ${d1.tick}`);
-check('default world NOT forced into instant war (war only after scenario window)',
-  d1.tick === -1 || d1.tick > 600);
-check('default settlements keep normal culture ethos',
-  [...d1.sim.settlementSystem.settlements.values()].every(s => !s.culture || s.culture.ethos !== 'Warring Kingdom'));
-check('default diplomacy has no seeded feuds pending',
-  d1.sim.diplomacySystem.seededFeuds.length === 0);
+check('default world is warring kingdoms and declares war within 600 ticks',
+  d1.tick >= 0 && d1.tick <= 600);
+check('default settlements have Warring Kingdom ethos',
+  [...d1.sim.settlementSystem.settlements.values()].every(s => !s.culture || s.culture.ethos === 'Warring Kingdom'));
+check('default diplomacy has seeded feuds initialized',
+  d1.sim.diplomacySystem.seededFeuds.length >= 0);
+
+// Explicit peaceful scenario can be requested
+const p1 = firstWarTick(777, 'peaceful');
+check('peaceful scenario settlements keep non-warring ethos',
+  [...p1.sim.settlementSystem.settlements.values()].every(s => !s.culture || s.culture.ethos !== 'Warring Kingdom'));
 
 // --- 3. Save/load resume preserves the war ---------------------------------
 {

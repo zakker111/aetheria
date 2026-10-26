@@ -5,8 +5,6 @@ interface ControlsHeaderProps {
   heightScaleLabel: string;
   isPaused: boolean;
   speed: number;
-  scenario: string | null;
-  onToggleScenario: () => void;
   onToggleView: () => void;
   onCycleHeight: () => void;
   onTogglePause: () => void;
@@ -29,8 +27,6 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
   heightScaleLabel,
   isPaused,
   speed,
-  scenario,
-  onToggleScenario,
   onToggleView,
   onCycleHeight,
   onTogglePause,
@@ -61,8 +57,6 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
     alignItems: 'center',
     gap: '4px',
   };
-
-  const isWarring = scenario === 'warring';
 
   return (
     <div
@@ -107,23 +101,6 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
 
       <button style={buttonStyle} onClick={onCenterCamera} title="Center on civilization">
         🎯 Center
-      </button>
-
-      <button
-        style={{
-          ...buttonStyle,
-          background: isWarring ? 'rgba(239, 68, 68, 0.25)' : '#1e293b',
-          borderColor: isWarring ? '#ef4444' : '#475569',
-          color: isWarring ? '#fca5a5' : '#e2e8f0',
-        }}
-        onClick={onToggleScenario}
-        title={
-          isWarring
-            ? 'Warring Kingdoms active (hereditary rivals, instant war). Click to switch to normal world.'
-            : 'Switch to Warring Kingdoms scenario (founding towns are hereditary rivals with fast warfare)'
-        }
-      >
-        {isWarring ? '⚔️ Warring: ON' : '⚔️ Warring Scenario'}
       </button>
 
       <button

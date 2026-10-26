@@ -96,7 +96,7 @@ Aetheria is a 2D god simulation game where players influence a living world, man
   - Capture points and occupation mechanics.
 
 ### Phase 3c — Wars, Diplomacy & Watchability (ACTIVE, shipped)
-*Make wars actually happen in a watchable session and be visible.* Done: casus belli engine (resource/diplomatic/religious/militarist grievances), grievance ledger with decay, war visibility pipeline (⚔️/🕊️ chronicle icons, clickable HUD front-line banner, [W]ars panel, battle markers with morale bars/smoke/routing tint), and the "Warring Kingdoms" starter scenario (`?scenario=warring`, first war ~tick 225). Verified by `tests/warvisible.mjs` (5/5) and `tests/scenario_warring.mjs` (10/10). Remaining: soldier profession & muster, conquest/annexation, peace treaty terms, religious wars (see todo.md Phase 3b Steps 2–7).
+*Make wars actually happen in a watchable session and be visible.* Done: casus belli engine (resource/diplomatic/religious/militarist grievances), grievance ledger with decay, war visibility pipeline (⚔️/🕊️ chronicle icons, clickable HUD front-line banner, [W]ars panel, battle markers with morale bars/smoke/routing tint), and the "Warring Kingdoms" simulation mode active by default (first war ~tick 225, continuous border conflicts). Verified by `tests/warvisible.mjs` (5/5) and `tests/scenario_warring.mjs` (10/10). Production deployment configured for GitHub Actions & GitHub Pages with relative asset bundling.
 
 ### Phase 4: Dynamic World & Ecosystem
 *Make the world alive beyond just agents.*

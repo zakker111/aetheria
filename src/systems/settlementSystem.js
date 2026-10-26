@@ -74,13 +74,15 @@ export class SettlementSystem {
       resources: {
         food: 30,
         wood: 25,
-        ore: 15
+        ore: 15,
+        water: 25
       },
       stockpile: {
         food: 30,
         wood: 25,
         stone: 15,
-        ore: 15
+        ore: 15,
+        water: 25
       },
       leadership: null,
       leadershipTitle: "Elder",
@@ -350,10 +352,12 @@ export class SettlementSystem {
     const settlement = this.settlements.get(settlementId);
     if (!settlement) return false;
     if (!settlement.stockpile) {
-      settlement.stockpile = { food: 0, wood: 0, stone: 0, ore: 0 };
+      settlement.stockpile = { food: 0, wood: 0, stone: 0, ore: 0, water: 0 };
     }
     settlement.stockpile[resourceType] = (settlement.stockpile[resourceType] || 0) + amount;
-    settlement.resources[resourceType] = settlement.stockpile[resourceType];
+    if (settlement.resources) {
+      settlement.resources[resourceType] = settlement.stockpile[resourceType];
+    }
     return true;
   }
 
@@ -361,9 +365,13 @@ export class SettlementSystem {
     const settlement = this.settlements.get(settlementId);
     if (!settlement || !settlement.stockpile) return 0;
     const available = settlement.stockpile[resourceType] || 0;
-    const taken = Math.min(available, amount);
-    settlement.stockpile[resourceType] -= taken;
-    settlement.resources[resourceType] = settlement.stockpile[resourceType];
+    const taken = Math.min(available, Math.max(0, amount));
+    if (taken > 0 || settlement.stockpile[resourceType] !== undefined) {
+      settlement.stockpile[resourceType] = Math.max(0, available - taken);
+      if (settlement.resources) {
+        settlement.resources[resourceType] = settlement.stockpile[resourceType];
+      }
+    }
     return taken;
   }
   

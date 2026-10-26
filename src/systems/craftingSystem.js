@@ -745,8 +745,4 @@ class CraftingSystem {
     }
 }
 
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports.CraftingSystem = CraftingSystem;
-}
-
 export { CraftingSystem };

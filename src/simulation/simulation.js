@@ -109,9 +109,8 @@ export class Simulation {
 
   constructor(seed = Date.now(), width = 128, height = 128, options = {}) {
     this.seed = seed;
-    // Step H: optional starter scenario ('warring' = Warring Kingdoms).
-    // Purely additive bookkeeping — default worlds are unaffected.
-    this._scenario = options.scenario || null;
+    // Step H: Warring scenario is active by default and always on.
+    this._scenario = (options.scenario !== undefined && options.scenario !== null) ? options.scenario : 'warring';
     this.idGen = new IDGenerator();
     // Isolated per-simulation bus: no shared listeners/history across sims (determinism fix)
     this.eventBus = new EventBus({ isolated: true });
@@ -1808,7 +1807,7 @@ export class Simulation {
   serialize() {
     return {
       seed: this.seed ?? this.world.seed,
-      scenario: this._scenario || null,
+      scenario: this._scenario || 'warring',
       worldSeed: this.world.seed,
       rngState: this.world.rng.getState(), // determinism: restore RNG stream on load
       world: this.world.serialize(), // terrain arrays (skipTerrain load path)
