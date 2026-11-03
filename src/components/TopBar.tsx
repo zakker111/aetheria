@@ -13,6 +13,7 @@ interface TopBarProps {
   is25D: boolean;
   weather?: { name: string; icon: string; description: string };
   dominantAge?: { name: string; icon: string; color: string };
+  lodStats?: { tier0: number; tier1: number; tier2: number; avgTickMs: number };
 }
 
 const TopBarComponent: React.FC<TopBarProps> = ({
@@ -26,6 +27,7 @@ const TopBarComponent: React.FC<TopBarProps> = ({
   is25D,
   weather,
   dominantAge,
+  lodStats,
 }) => {
   return (
     <div
@@ -177,6 +179,29 @@ const TopBarComponent: React.FC<TopBarProps> = ({
             💧 Water: <b style={{ color: '#38bdf8' }}>{resources.water}</b>
           </span>
         </div>
+        {lodStats && (
+          <div
+            style={{
+              gridColumn: 'span 2',
+              display: 'flex',
+              justifyContent: 'space-between',
+              fontSize: '11px',
+              color: '#94a3b8',
+              borderTop: '1px solid rgba(255,255,255,0.06)',
+              paddingTop: '4px',
+              marginTop: '1px',
+            }}
+          >
+            <span>
+              ⚡ Sim: <b style={{ color: '#38bdf8' }}>{lodStats.avgTickMs.toFixed(1)}ms</b>
+            </span>
+            <span title="LOD Distribution: T0 (In Viewport), T1 (Active Towns), T2 (Hinterland Macro)">
+              LOD: <span style={{ color: '#4ade80' }}>T0:{lodStats.tier0}</span> |{' '}
+              <span style={{ color: '#fbbf24' }}>T1:{lodStats.tier1}</span> |{' '}
+              <span style={{ color: '#a78bfa' }}>T2:{lodStats.tier2}</span>
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

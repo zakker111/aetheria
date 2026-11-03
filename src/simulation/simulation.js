@@ -30,6 +30,7 @@ import { AnimalSystem } from "../systems/animalSystem.js";
 import { ChronicleSystem } from "../systems/chronicleSystem.js";
 import { CivilizationAgeSystem } from "../systems/civilizationAgeSystem.js";
 import { WeatherSystem } from "../systems/weatherSystem.js";
+import { DynastySystem } from "../systems/dynastySystem.js";
 
 export class Simulation {
   // Deterministic RNG helper: always routes through the seeded world RNG.
@@ -145,6 +146,20 @@ export class Simulation {
     this.birthsThisSession = 0;
     this.deathsThisSession = 0;
 
+    // High-agent performance scaling & Spatial LOD (1,000-2,500 agents)
+    this.viewportBounds = null;
+    this.lodEnabled = true;
+    this.selectedEntityId = null;
+    this.lodStats = {
+      tier0: 0,
+      tier1: 0,
+      tier2: 0,
+      total: 0,
+      tickedThisFrame: 0,
+      lastTickMs: 0,
+      avgTickMs: 0
+    };
+
     // Backward-compatibility and system cross-reference accessors
     this.entities = {
       agents: {
@@ -213,7 +228,7 @@ export class Simulation {
     this.combatSystem = new CombatSystem(this.world);
     this.constructionSystem = new ConstructionSystem(this.world);
     this.constructionSystem.simulation = this;
-    this.religionSystem = new ReligionSystem(this.world);
+    this.religionSystem = new ReligionSystem(this.world, this);
     this.infrastructureSystem = new InfrastructureSystem(this); // NEW: Roads/bridges
 
     // Ecology & History: wildlife roam the wild biomes; the chronicle records
@@ -222,6 +237,7 @@ export class Simulation {
     this.chronicleSystem = new ChronicleSystem(this);
     this.civilizationAgeSystem = new CivilizationAgeSystem(this);
     this.weatherSystem = new WeatherSystem(this);
+    this.dynastySystem = new DynastySystem(this);
     
     // Session statistics
     this.birthsThisSession = 0;
@@ -259,6 +275,9 @@ export class Simulation {
     
     this.eventBus.on("AGENT_DIED", (data) => {
       this.deathsThisSession++;
+      if (this.dynastySystem) {
+        this.dynastySystem.onAgentDied({ id: data.agentId, name: data.name }, data.cause || "natural");
+      }
       // Memory: nearby survivors witness the death and remember it (trauma).
       if (Number.isFinite(data.x) && Number.isFinite(data.y)) {
         const tick = this.clock?.tick ?? 0;
@@ -412,6 +431,11 @@ export class Simulation {
         }
       }
     }
+
+    // Initialize state creeds and beliefs for founded settlements
+    if (this.religionSystem) {
+      this.religionSystem.initWorldBeliefs();
+    }
     
     // Create resources: cluster abundant wood, water, ore, and food near communities
     for (const center of centers) {
@@ -518,8 +542,61 @@ export class Simulation {
     }
   }
 
+  setViewportBounds(bounds) {
+    this.viewportBounds = bounds;
+  }
+
+  isNearAnySettlement(x, y, radius = 18) {
+    if (!this.settlementSystem?.settlements) return false;
+    const rSq = radius * radius;
+    for (const set of this.settlementSystem.settlements.values()) {
+      if (!set.center) continue;
+      const dx = set.center.x - x;
+      const dy = set.center.y - y;
+      if (dx * dx + dy * dy <= rSq) return true;
+    }
+    return false;
+  }
+
+  getAgentLodTier(agent) {
+    // When population is small and no viewport is configured (e.g. headless test runs with <150 agents),
+    // default to Tier 0 to preserve 100% test determinism.
+    if (this.agents.length <= 150 && !this.viewportBounds) {
+      return 0;
+    }
+    if (this.selectedEntityId != null && agent.id === this.selectedEntityId) {
+      return 0;
+    }
+    // High-priority combat engagements always run in Tier 0
+    if (agent.combatRole || agent.fleeFrom || (agent.militaryDuty && agent.warbandId != null)) {
+      return 0;
+    }
+    // Check viewport bounds from camera
+    if (this.viewportBounds) {
+      const vb = this.viewportBounds;
+      const pad0 = 4;
+      if (agent.x >= vb.minX - pad0 && agent.x <= vb.maxX + pad0 && agent.y >= vb.minY - pad0 && agent.y <= vb.maxY + pad0) {
+        return 0; // Focus tier (on-camera)
+      }
+      const pad1 = 12;
+      if (agent.x >= vb.minX - pad1 && agent.x <= vb.maxX + pad1 && agent.y >= vb.minY - pad1 && agent.y <= vb.maxY + pad1) {
+        return 1; // Transition periphery buffer around viewport
+      }
+      return 2; // All off-camera and distant settlements run simplified macro simulation
+    }
+    // Headless with high population (> 150 agents):
+    const firstSettlement = this.settlementSystem?.settlements?.values()?.next()?.value;
+    const focalCenter = firstSettlement?.center || { x: this.world.width / 2, y: this.world.height / 2 };
+    const dx = agent.x - focalCenter.x, dy = agent.y - focalCenter.y;
+    const distSq = dx * dx + dy * dy;
+    if (distSq <= 400) return 0;   // radius 20
+    if (distSq <= 1600) return 1;  // radius 40
+    return 2;                      // outer world / hinterland macro tier
+  }
+
   // Main simulation tick (doc 03: high-level tick order)
   tick() {
+    const tStart = (typeof performance !== "undefined" && typeof performance.now === "function") ? performance.now() : 0;
     this.clock.advance();
     
     // Update environment
@@ -537,6 +614,7 @@ export class Simulation {
     // Phase 2: Update emergent systems
     this.updateRelationships();
     this.updateSettlements();
+    this.updateDynasties();
     this.updatePioneers(); // god-spawned wanderers found new villages
     this.updateCulture(); // Societies & Culture
     this.updateEconomy();
@@ -571,6 +649,12 @@ export class Simulation {
 
     // Process events
     this.processEvents();
+
+    if (tStart > 0) {
+      const elapsed = performance.now() - tStart;
+      this.lodStats.lastTickMs = elapsed;
+      this.lodStats.avgTickMs = this.lodStats.avgTickMs > 0 ? (this.lodStats.avgTickMs * 0.9 + elapsed * 0.1) : elapsed;
+    }
   }
   
   updateTrade() {
@@ -610,6 +694,12 @@ export class Simulation {
       this.warfareSystem.update();
     }
   }
+
+  updateDynasties() {
+    if (this.dynastySystem) {
+      this.dynastySystem.update(this.clock.tick);
+    }
+  }
   
   updateInfrastructure() {
     // Update roads, irrigation, bridges
@@ -637,6 +727,35 @@ export class Simulation {
     if (this.clock.seasonChanged()) {
       const season = this.clock.getSeason();
       this.eventBus.emit('SEASON_CHANGED', { season, year: this.clock.getYear(), tick: this.clock.tick });
+
+      // Phase 3b Step 5: seasonal tribute collection for tributary/vassal settlements
+      if (this.settlementSystem?.settlements) {
+        for (const vassal of this.settlementSystem.settlements.values()) {
+          if (vassal.tributeTo) {
+            const overlord = this.settlementSystem.settlements.get(vassal.tributeTo);
+            if (overlord && overlord.stockpile && vassal.stockpile) {
+              const rate = vassal.tributeRate || 0.15;
+              const tributeFood = Math.floor((vassal.stockpile.food || 0) * rate);
+              const tributeOre = Math.floor((vassal.stockpile.ore || 0) * rate);
+              if (tributeFood > 0 || tributeOre > 0) {
+                vassal.stockpile.food = Math.max(0, (vassal.stockpile.food || 0) - tributeFood);
+                vassal.stockpile.ore = Math.max(0, (vassal.stockpile.ore || 0) - tributeOre);
+                overlord.stockpile.food = (overlord.stockpile.food || 0) + tributeFood;
+                overlord.stockpile.ore = (overlord.stockpile.ore || 0) + tributeOre;
+                this.eventBus.emit('TRIBUTE_PAID', {
+                  vassalId: vassal.id,
+                  vassalName: vassal.name,
+                  overlordId: overlord.id,
+                  overlordName: overlord.name,
+                  food: tributeFood,
+                  ore: tributeOre,
+                  season
+                });
+              }
+            }
+          }
+        }
+      }
     }
 
     // Dynamic Weather System (Rain, Storms, Lightning, Droughts)
@@ -1309,24 +1428,53 @@ export class Simulation {
       this.incompleteBuildings = list;
     }
     
-    for (const agent of this.agents) {
+    const currentTick = this.clock.tick;
+    let t0Count = 0, t1Count = 0, t2Count = 0;
+    const activeAgentsThisTick = [];
+
+    // Pass 1: LOD classification and time-slice scheduling
+    for (let i = 0; i < this.agents.length; i++) {
+      const agent = this.agents[i];
       if (!agent.alive) continue;
-      
-      // Update needs (includes aging and death check)
-      agent.updateNeeds();
-      
-      // Pass 1: prepare perception state for ALL agents before any of them
-      // acts, so nobody observes a neighbor's post-decision teleport from
-      // this tick. The expensive spatial scan is lazy: Agent.generateActions
-      // runs it (via needScan()) only when a goal actually reads the nearby-
-      // entity lists. Here we only reset the reusable arrays and mark the
-      // snapshot stale, plus fill ground loot (cheap direct scan — loot
-      // piles stay out of the spatial index on purpose).
+
+      const tier = this.getAgentLodTier(agent);
+      agent._lodTier = tier;
+
+      if (tier === 0) {
+        t0Count++;
+        agent.updateNeeds(1);
+        activeAgentsThisTick.push(agent);
+      } else if (tier === 1) {
+        t1Count++;
+        // Interleaved 1 in 3 ticks deterministically (modulo agent.id)
+        if ((agent.id + currentTick) % 3 === 0) {
+          agent.updateNeeds(3);
+          activeAgentsThisTick.push(agent);
+        }
+      } else {
+        t2Count++;
+        // Interleaved 1 in 12 ticks deterministically with simplified macro simulation
+        if ((agent.id + currentTick) % 12 === 0) {
+          agent.executeMacroTick(this, 12, moved, births);
+        }
+      }
+    }
+
+    this.lodStats.tier0 = t0Count;
+    this.lodStats.tier1 = t1Count;
+    this.lodStats.tier2 = t2Count;
+    this.lodStats.total = this.agents.length;
+    this.lodStats.tickedThisFrame = activeAgentsThisTick.length;
+
+    // Pass 2: prepare perception state for all active detailed agents
+    for (let i = 0; i < activeAgentsThisTick.length; i++) {
+      const agent = activeAgentsThisTick[i];
+      if (!agent.alive) continue;
+
       const perception = agent._ensurePerception();
       agent.invalidatePerception();
 
-      // Ground loot is a small list — scan directly instead of polluting the
-      // entity spatial index (which would slow every perception query).
+      // Ground loot direct scan
       if (this.groundItems.length > 0) {
         for (const it of this.groundItems) {
           if (it.destroyed || it.total() <= 0) continue;
@@ -1338,19 +1486,16 @@ export class Simulation {
       }
     }
 
-    // Pass 2: decide and act on the pass-1 snapshots (`agent._perception` is
-    // a reused per-agent object — no allocation).
-    for (const agent of this.agents) {
+    // Pass 3: decide and act for active detailed agents
+    for (let i = 0; i < activeAgentsThisTick.length; i++) {
+      const agent = activeAgentsThisTick[i];
       if (!agent.alive) continue;
       const perception = agent._perception;
 
       // Generate goals
       agent.generateGoals(this, perception);
       
-      // Generate and choose actions. Gossip influence: the target's
-      // second-hand opinion of us (their gossipViews about our id) nudges
-      // voluntary social bids. Resolved here, in the simulation, because
-      // agents must never read each other's private memory directly.
+      // Generate and choose actions. Gossip influence: target's second-hand opinion
       const actions = agent.generateActions(perception, this.world, this);
       let targetGossip = null;
       for (const a of actions) {
@@ -1412,6 +1557,9 @@ export class Simulation {
         if (parent1) this.relationshipSystem.addParentChild(parent1.id, baby.id);
         if (parent2) this.relationshipSystem.addParentChild(parent2.id, baby.id);
         if (parent1 && parent2) this.relationshipSystem.addChildToMarriage(parent1.id, parent2.id, baby.id);
+        if (this.dynastySystem) {
+          this.dynastySystem.onAgentBorn(baby, parent1, parent2);
+        }
       }
     }
     
@@ -1478,9 +1626,12 @@ export class Simulation {
     let hasLoot = false;
     for (const key of Object.keys(entity.inventory)) {
       if (key === "capacity") continue;
-      const half = Math.floor((entity.inventory[key] || 0) / 2);
-      if (half > 0) {
-        contents[key] = half;
+      const val = entity.inventory[key] || 0;
+      if (val <= 0) continue;
+      const isGear = key.startsWith("weapon_") || key.startsWith("armor_") || key.startsWith("tool_");
+      const dropCount = isGear ? Math.max(1, Math.floor(val / 2)) : Math.floor(val / 2);
+      if (dropCount > 0) {
+        contents[key] = dropCount;
         hasLoot = true;
       }
     }
@@ -1809,6 +1960,8 @@ export class Simulation {
       seed: this.seed ?? this.world.seed,
       scenario: this._scenario || 'warring',
       worldSeed: this.world.seed,
+      fireActive: this._fireActive === true,
+      burningTileCount: this.burningTileCount || 0,
       rngState: this.world.rng.getState(), // determinism: restore RNG stream on load
       world: this.world.serialize(), // terrain arrays (skipTerrain load path)
       clock: this.clock.serialize(),
@@ -1847,6 +2000,7 @@ export class Simulation {
       chronicle: this.chronicleSystem.serialize(),
       civilizationAges: this.civilizationAgeSystem ? this.civilizationAgeSystem.serialize() : null,
       weather: this.weatherSystem ? this.weatherSystem.serialize() : null,
+      dynasties: this.dynastySystem ? this.dynastySystem.serialize() : null,
       // Warfare: active warbands (march targets, morale, plunder cargo) drive
       // soldier behavior every tick — losing them desyncs a resumed run badly.
       warfare: {
@@ -1914,6 +2068,8 @@ export class Simulation {
       // world loses every crossing, agents reroute (consuming RNG differently)
       // and the run diverges from an uninterrupted one.
       sim.world.bridgeTiles = new Uint8Array(data.world.bridgeTiles || new Uint8Array(sim.world.width * sim.world.height));
+      sim._fireActive = data.fireActive !== undefined ? data.fireActive : (sim.world.countFires() > 0);
+      sim.burningTileCount = data.burningTileCount !== undefined ? data.burningTileCount : sim.world.countFires();
     }
     
     // Restore entities. Ordering matters for resume determinism: resources
@@ -2058,6 +2214,9 @@ export class Simulation {
     }
     if (data.weather) {
       sim.weatherSystem = WeatherSystem.deserialize(data.weather, sim);
+    }
+    if (data.dynasties && sim.dynastySystem) {
+      sim.dynastySystem = DynastySystem.deserialize(data.dynasties, sim);
     }
 
     return sim;

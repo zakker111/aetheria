@@ -27,6 +27,11 @@ export class WarfareSystem {
     const settlement = this.sim.settlementSystem?.settlements.get(settlementId);
     if (!settlement) return null;
 
+    // Phase 3b Step 7: check demilitarization treaty terms
+    if (settlement.demilitarizedUntil && settlement.demilitarizedUntil > this.sim.clock.tick) {
+      return null;
+    }
+
     // Check if settlement already has an active warband
     for (const wb of this.warbands.values()) {
       if (wb.settlementId === settlementId && wb.active) {
@@ -79,19 +84,17 @@ export class WarfareSystem {
     // Equip soldiers with weapons and gear from settlement stockpile
     const hasOre = (settlement.stockpile?.ore ?? 0) >= 2;
     const hasWood = (settlement.stockpile?.wood ?? 0) >= 2;
-    // Step 3: forged spears in the stockpile are real weapons — each recruit
-    // draws one (deterministically, in recruitment order). A smithing
-    // settlement marches an armed warband; a poor one marches farmers with
-    // hoes. Visible quality difference on the battlefield.
+    // Step 3: forged weapons & shields in the stockpile are drawn deterministically
+    // in recruitment order. Swords (dmg 28, spd 35, range 1.8), spears (dmg 22, spd 40, range 2.2),
+    // bows (dmg 18, spd 50, range 5.5, role: archer), shields (+defense & deflection).
+    let swordStock = Math.floor(settlement.stockpile?.weapon_sword ?? 0);
     let spearStock = Math.floor(settlement.stockpile?.weapon_spear ?? 0);
+    let bowStock = Math.floor(settlement.stockpile?.weapon_bow ?? 0);
+    let shieldStock = Math.floor(settlement.stockpile?.armor_shield ?? 0);
 
     recruited.forEach((soldier, idx) => {
       soldier.militaryDuty = true;
       soldier.warbandId = warbandId;
-      // Conscripts take up arms but keep their civilian profession on the
-      // economy ledger (job field only reflects duty while mustered);
-      // professional soldiers already carry a 'soldier' record. This keeps
-      // records and agent state in sync after demobilization.
       if (soldier.job !== 'soldier') {
         this.sim.economySystem?.agentJobs?.set(soldier.id, {
           job: soldier.job || 'unemployed',
@@ -101,51 +104,116 @@ export class WarfareSystem {
         });
       }
       soldier.job = "soldier";
-      // Phase 3b Step 3: battle-hardened veterans get promoted — after
-      // surviving a campaign they march as elites (higher damage/defense
-      // via the combat-skill bonus applied below). Deterministic counter.
       soldier.veteranCampaigns = (soldier.veteranCampaigns ?? 0) + 1;
-      soldier.combatRole = idx === 0 ? "commander" : (role === "defense" ? "shieldbearer" : "vanguard");
 
-      // Weaponry and defense
-      const armed = spearStock > 0;
-      if (armed) {
+      // Draw weaponry
+      let weaponType = "unarmed";
+      let weaponDamage = 9;
+      let weaponRange = 1.8;
+      let attackSpeed = 45;
+
+      if (swordStock > 0) {
+        swordStock--;
+        settlement.stockpile.weapon_sword = (settlement.stockpile.weapon_sword || 0) - 1;
+        soldier.inventory.weapon_sword = (soldier.inventory.weapon_sword || 0) + 1;
+        weaponType = "sword";
+        weaponDamage = 28;
+        weaponRange = 1.8;
+        attackSpeed = 35;
+      } else if (spearStock > 0) {
         spearStock--;
         settlement.stockpile.weapon_spear = (settlement.stockpile.weapon_spear || 0) - 1;
         soldier.inventory.weapon_spear = (soldier.inventory.weapon_spear || 0) + 1;
+        weaponType = "spear";
+        weaponDamage = 22;
+        weaponRange = 2.2;
+        attackSpeed = 40;
+      } else if (bowStock > 0) {
+        bowStock--;
+        settlement.stockpile.weapon_bow = (settlement.stockpile.weapon_bow || 0) - 1;
+        soldier.inventory.weapon_bow = (soldier.inventory.weapon_bow || 0) + 1;
+        weaponType = "bow";
+        weaponDamage = 18;
+        weaponRange = 5.5;
+        attackSpeed = 50;
+      } else {
+        const hasTool = !!(soldier.inventory.tool_pickaxe || soldier.inventory.tool_axe);
+        if (hasOre || hasTool) {
+          weaponType = "improvised";
+          weaponDamage = 15;
+          weaponRange = 1.8;
+          attackSpeed = 45;
+        }
       }
-      soldier.hasWeapon = armed || hasOre || !!(soldier.inventory.tool_pickaxe || soldier.inventory.tool_axe);
-      soldier.hasShield = role === "defense" || hasWood;
+
+      // Draw shield
+      let hasShield = false;
+      let shieldDef = 0.0;
+      let blockChance = 0.0;
+      if (shieldStock > 0) {
+        shieldStock--;
+        settlement.stockpile.armor_shield = (settlement.stockpile.armor_shield || 0) - 1;
+        soldier.inventory.armor_shield = (soldier.inventory.armor_shield || 0) + 1;
+        hasShield = true;
+        shieldDef = 0.25;
+        blockChance = 0.35;
+      } else if (role === "defense" || hasWood) {
+        hasShield = true;
+        shieldDef = 0.15;
+        blockChance = 0.20;
+      }
+
+      soldier.hasWeapon = weaponType !== "unarmed";
+      soldier.hasShield = hasShield;
+
+      // Assign tactical combat role
+      if (idx === 0) {
+        soldier.combatRole = "commander";
+      } else if (weaponType === "bow") {
+        soldier.combatRole = "archer";
+      } else if (hasShield && role === "defense") {
+        soldier.combatRole = "shieldbearer";
+      } else {
+        soldier.combatRole = "vanguard";
+      }
+
+      // Phase 3b Step 6: check if mobilizing for a Holy War crusade
+      const activeWar = this.sim.diplomacySystem?.activeWars?.find(w => 
+        (w.attackerId === settlementId && w.defenderId === targetSettlementId) ||
+        (w.defenderId === settlementId && w.attackerId === targetSettlementId)
+      );
+      const isHolyWar = !!(activeWar?.isHolyWar || activeWar?.casusBelli?.includes("Holy War"));
 
       // Training + equipment determine combat stats.
       const training = soldier.skills?.combat ?? 1.0;
-      // Phase 3b Step 3: campaign-hardened veterans fight sharper — each
-      // survived muster adds a small multiplicative edge (capped at +15%).
       const hardening = 1 + Math.min(0.15, (soldier.veteranCampaigns ?? 1) > 1 ? ((soldier.veteranCampaigns ?? 1) - 1) * 0.05 : 0);
-      const weaponDamage = armed ? 22 : (soldier.hasWeapon ? 15 : 9);
-      const dmg = Math.round(weaponDamage * (0.8 + 0.2 * training) * hardening);
-      const def = Math.min(0.6, (soldier.hasShield ? 0.35 : 0.1) + Math.min(0.15, (training - 1) * 0.05) + ((soldier.veteranCampaigns ?? 1) - 1) * 0.02);
+      let dmg = Math.round(weaponDamage * (0.8 + 0.2 * training) * hardening);
+      if (isHolyWar) dmg = Math.round(dmg * 1.25); // Sacred zealot fervor!
+      const def = Math.min(0.65, (hasShield ? (0.2 + shieldDef) : 0.1) + Math.min(0.15, (training - 1) * 0.05) + ((soldier.veteranCampaigns ?? 1) - 1) * 0.02);
 
-      if (!soldier.combat) {
-        soldier.combat = {
-          health: 100,
-          maxHealth: 100,
-          damage: dmg,
-          defense: def,
-          range: armed ? 2.2 : 1.8,
-          attackCooldown: 0,
-          attackSpeed: armed ? 40 : 45
-        };
-      } else {
-        soldier.combat.damage = dmg;
-        soldier.combat.defense = def;
-        soldier.combat.range = armed ? 2.2 : 1.8;
-        soldier.combat.attackSpeed = armed ? 40 : 45;
-      }
+      soldier.combat = {
+        health: soldier.health ?? 100,
+        maxHealth: 100,
+        damage: dmg,
+        defense: def,
+        range: weaponRange,
+        attackCooldown: 0,
+        attackSpeed,
+        weaponType,
+        hasShield,
+        blockChance,
+        zealotFervor: isHolyWar
+      };
     });
 
     const targetSettlement = targetSettlementId ? this.sim.settlementSystem.settlements.get(targetSettlementId) : null;
     const marchTarget = targetSettlement ? { ...targetSettlement.center } : { ...settlement.center };
+
+    const activeWarForBand = this.sim.diplomacySystem?.activeWars?.find(w => 
+      (w.attackerId === settlementId && w.defenderId === targetSettlementId) ||
+      (w.defenderId === settlementId && w.attackerId === targetSettlementId)
+    );
+    const bandHolyWar = !!(activeWarForBand?.isHolyWar || activeWarForBand?.casusBelli?.includes("Holy War"));
 
     const warband = {
       id: warbandId,
@@ -159,7 +227,8 @@ export class WarfareSystem {
       state: role === "defense" ? "defending" : "marching",
       targetSettlementId,
       marchTarget,
-      morale: 100,
+      isHolyWar: bandHolyWar,
+      morale: bandHolyWar ? 120 : 100,
       initialSize: recruited.length,
       active: true,
       plunderCargo: { food: 0, wood: 0, ore: 0 }
@@ -237,6 +306,17 @@ export class WarfareSystem {
               soldier.jobTitle = this.sim.economySystem.jobDefinitions[rec.job]?.name || rec.job;
             } else {
               soldier.job = "unemployed";
+            }
+
+            // Return surviving military equipment to settlement stockpile
+            const sHome = this.sim.settlementSystem?.settlements.get(settlementId);
+            if (sHome?.stockpile && soldier.inventory) {
+              for (const gearKey of ['weapon_sword', 'weapon_spear', 'weapon_bow', 'armor_shield']) {
+                if (soldier.inventory[gearKey]) {
+                  sHome.stockpile[gearKey] = (sHome.stockpile[gearKey] || 0) + soldier.inventory[gearKey];
+                  delete soldier.inventory[gearKey];
+                }
+              }
             }
           }
         }
@@ -350,7 +430,8 @@ export class WarfareSystem {
     // the "losing side penalty" — casualties drain morale, low morale drains
     // further fights, and routed bands abandon the field instead of dying
     // to a last stand. Deterministic (no RNG draw needed).
-    if (warband.morale <= 25 && warband.state !== "retreating") {
+    const routThreshold = warband.isHolyWar ? 15 : 25;
+    if (warband.morale <= routThreshold && warband.state !== "retreating") {
       warband.state = "retreating";
       if (this.sim.eventBus) {
         this.sim.eventBus.emit("WARBAND_ROUTED", {
@@ -529,26 +610,49 @@ export class WarfareSystem {
     // Damage formula
     const rawDmg = attacker.combat.damage * veteranBonus + (this.sim.world.rng.next() * 4 - 2);
     const def = defender.combat.defense || 0;
-    const finalDmg = Math.max(2, Math.round(rawDmg * (1 - def)));
+    let finalDmg = Math.max(2, Math.round(rawDmg * (1 - def)));
 
-    // Damage lands on the canonical agent.health field. needs.health is a
-    // per-tick mirror rebuilt by updateNeeds(); writing only the mirror let
-    // regen re-inflate it between ticks and made soldiers immortal in melee.
+    // Shield deflection / block check
+    const hasShield = defender.combat?.hasShield || defender.hasShield;
+    const blockChance = defender.combat?.blockChance ?? (hasShield ? 0.25 : 0.0);
+    const blocked = hasShield && (this.sim.world.rng.next() < blockChance);
+    if (blocked) {
+      finalDmg = Math.max(1, Math.round(finalDmg * 0.45));
+      this.combatEffects.push({
+        x: (attacker.x + defender.x) / 2,
+        y: (attacker.y + defender.y) / 2,
+        type: "shield_block",
+        duration: 15
+      });
+    }
+
+    // Damage lands on the canonical agent.health field.
     defender.health = Math.max(0, (defender.health ?? 100) - finalDmg);
     defender.needs.health = defender.health;
     if (defender.combat) defender.combat.health = defender.health;
 
     // Phase 3b Step 3 (combat depth): a soldier knocked below 40 HP but not
     // killed is WOUNDED — he drops his weapon, stops fighting and must be
-    // carried out of the line. Deterministic threshold check (no RNG draw).
-    // The canonical health field is agent.health (needs.health is only a
-    // mirror rebuilt by updateNeeds each tick — and regen re-inflates it
-    // between the warfare tick and the next mirror sync, which previously
-    // let wounded men keep taking hits until the stale mirror crossed 40).
+    // carried out of the line. Deterministic threshold check.
     if (defender.alive && defender.militaryDuty && defender.health < 40) {
       defender.wounded = true;
       const vBand = this.warbands.get(defender.warbandId);
       if (vBand) vBand.morale = Math.max(0, vBand.morale - 2); // seeing men fall hurts the band
+
+      // Phase 3b Step 7: chance to capture wounded soldier as Prisoner of War
+      if (!defender.captive && (this.sim._rng().next() < 0.35)) {
+        defender.captive = true;
+        defender.prisonerOf = warband.settlementId;
+        defender.militaryDuty = false;
+        defender.combatRole = null;
+        if (this.sim.eventBus) {
+          this.sim.eventBus.emit("SOLDIER_CAPTURED", {
+            agentId: defender.id,
+            captorSettlementId: warband.settlementId
+          });
+        }
+      }
+
       if (this.sim.eventBus && !defender._woundEventSent) {
         defender._woundEventSent = true;
         this.sim.eventBus.emit("SOLDIER_WOUNDED", {
@@ -557,25 +661,23 @@ export class WarfareSystem {
       }
     }
 
-    // Visual sparks
-    this.combatEffects.push({
-      x: (attacker.x + defender.x) / 2,
-      y: (attacker.y + defender.y) / 2,
-      type: "clash",
-      duration: 15
-    });
+    // Visual combat clash or arrow trajectory
+    const isRanged = attacker.combat.weaponType === "bow";
+    if (!blocked) {
+      this.combatEffects.push({
+        x: (attacker.x + defender.x) / 2,
+        y: (attacker.y + defender.y) / 2,
+        type: isRanged ? "arrow" : "clash",
+        duration: 15
+      });
+    }
 
     if (defender.needs.health <= 0) {
       defender.alive = false;
       this.sim.deathsThisSession++;
 
-      // Step 3: war casualties leave scavengable gear behind — spears, tools
-      // and half of carried goods drop as a ground loot pile via the same
-      // deterministic system used for all deaths.
-      if (defender.inventory) {
-        defender.inventory.weapon_spear = undefined;
-        delete defender.inventory.weapon_spear;
-      }
+      // Step 3: war casualties leave scavengable gear behind — weapons, tools,
+      // and carried goods drop as a ground loot pile via dropInventoryOnGround.
       this.sim.dropInventoryOnGround(defender);
 
       // Morale swing: losing a man hurts your band, emboldens the enemy's.
@@ -584,7 +686,7 @@ export class WarfareSystem {
       if (killerBand) killerBand.morale = Math.min(100, killerBand.morale + 4);
       if (victimBand) victimBand.morale = Math.max(0, victimBand.morale - 6);
       
-      // Record war casualty
+      // Record war casualty & weariness
       if (this.sim.diplomacySystem) {
         const defenderSettlementId = this.sim.settlementSystem.getAgentSettlement(defender.id)?.id;
         const war = this.sim.diplomacySystem.activeWars.find(w => 
@@ -593,6 +695,8 @@ export class WarfareSystem {
         );
         if (war && defenderSettlementId) {
           war.casualties[defenderSettlementId] = (war.casualties[defenderSettlementId] || 0) + 1;
+          war.weariness = war.weariness || {};
+          war.weariness[defenderSettlementId] = (war.weariness[defenderSettlementId] || 0) + 12;
           // Step E: track where the fighting last happened so the UI can
           // offer "jump to front line". Deterministic (derived from sim
           // state only); saved with the war record via serialize().
@@ -630,26 +734,36 @@ export class WarfareSystem {
       return;
     }
 
+    // Multi-stage siege progression
+    warband.siegeTicks = (warband.siegeTicks || 0) + 1;
+    if (warband.siegeTicks < 3) {
+      warband.siegeStage = "encirclement";
+    } else if (warband.siegeTicks < 6) {
+      warband.siegeStage = "breach";
+      warband.hasRam = true;
+    } else {
+      warband.siegeStage = "assault";
+    }
+
     // Plunder the enemy stockpile!
     if (enemySettlement.stockpile) {
-      const stolenFood = Math.min(10, Math.floor((enemySettlement.stockpile.food || 0) * 0.4));
-      const stolenWood = Math.min(8, Math.floor((enemySettlement.stockpile.wood || 0) * 0.4));
-      const stolenOre = Math.min(6, Math.floor((enemySettlement.stockpile.ore || 0) * 0.4));
+      const stolenFood = Math.min(15, Math.floor((enemySettlement.stockpile.food || 0) * 0.4));
+      const stolenWood = Math.min(12, Math.floor((enemySettlement.stockpile.wood || 0) * 0.4));
+      const stolenOre = Math.min(10, Math.floor((enemySettlement.stockpile.ore || 0) * 0.4));
 
-      enemySettlement.stockpile.food -= stolenFood;
-      enemySettlement.stockpile.wood -= stolenWood;
-      enemySettlement.stockpile.ore -= stolenOre;
+      enemySettlement.stockpile.food = Math.max(0, (enemySettlement.stockpile.food || 0) - stolenFood);
+      enemySettlement.stockpile.wood = Math.max(0, (enemySettlement.stockpile.wood || 0) - stolenWood);
+      enemySettlement.stockpile.ore = Math.max(0, (enemySettlement.stockpile.ore || 0) - stolenOre);
 
-      warband.plunderCargo.food += stolenFood;
-      warband.plunderCargo.wood += stolenWood;
-      warband.plunderCargo.ore += stolenOre;
+      // Phase 3b Step 4: plunder cargo is carried by the warband on wagons and
+      // unloaded only when safely returning to home territory.
+      warband.plunderCargo.food = (warband.plunderCargo.food || 0) + stolenFood;
+      warband.plunderCargo.wood = (warband.plunderCargo.wood || 0) + stolenWood;
+      warband.plunderCargo.ore = (warband.plunderCargo.ore || 0) + stolenOre;
 
-      // Transfer to home settlement
-      const home = this.sim.settlementSystem.settlements.get(warband.settlementId);
-      if (home && home.stockpile) {
-        home.stockpile.food += stolenFood;
-        home.stockpile.wood += stolenWood;
-        home.stockpile.ore += stolenOre;
+      // Retaliatory casus belli / resource grievance: plundered town remembers the sack
+      if (this.sim.diplomacySystem) {
+        this.sim.diplomacySystem.addGrievance(enemySettlement.id, warband.settlementId, "Stockpile Sacked & Plundered", 18);
       }
 
       if (this.sim.eventBus) {
@@ -669,7 +783,7 @@ export class WarfareSystem {
       if (world.startFire) {
         let burned = 0;
         for (const b of this.sim.buildings) {
-          if (!b.complete || b.health !== undefined && b.health <= 0) continue;
+          if (!b.complete || (b.health !== undefined && b.health <= 0)) continue;
           const d = Math.hypot(b.x - enemySettlement.center.x, b.y - enemySettlement.center.y);
           if (d < 12 && burned < 4) {
             b.health = (b.health ?? 100) - 40;
@@ -690,9 +804,84 @@ export class WarfareSystem {
         });
       }
 
-      // Check unconditional surrender
-      if (this.sim.diplomacySystem) {
-        this.sim.diplomacySystem.signPeace(warband.settlementId, enemySettlement.id, warband.settlementId);
+      // Phase 3b Step 6 & 7: weariness from sacking + Holy War temple desecration
+      const war = this.sim.diplomacySystem?.activeWars?.find(w => 
+        (w.attackerId === warband.settlementId && w.defenderId === enemySettlement.id) ||
+        (w.defenderId === warband.settlementId && w.attackerId === enemySettlement.id)
+      );
+
+      if (war) {
+        war.weariness = war.weariness || {};
+        war.weariness[enemySettlement.id] = (war.weariness[enemySettlement.id] || 0) + 18;
+      }
+
+      // Holy War temple desecration
+      if (warband.isHolyWar) {
+        for (const b of this.sim.buildings) {
+          if (b.complete && b.buildingType === "temple" && (b.health === undefined || b.health > 0)) {
+            const d = Math.hypot(b.x - enemySettlement.center.x, b.y - enemySettlement.center.y);
+            if (d < 15) {
+              b.health = 0;
+              world.startFire(Math.floor(b.x), Math.floor(b.y), 80);
+              if (this.sim.eventBus) {
+                this.sim.eventBus.emit("TEMPLE_DESECRATED", {
+                  settlementId: enemySettlement.id,
+                  templeId: b.id,
+                  desecrator: warband.settlementName
+                });
+              }
+              if (this.sim.chronicleSystem?.addEntry) {
+                this.sim.chronicleSystem.addEntry(
+                  "TEMPLE_DESECRATED",
+                  `🔥 The sacred Temple of ${enemySettlement.name} was desecrated and destroyed by holy crusaders from ${warband.settlementName}!`
+                );
+              }
+              if (enemySettlement.agentIds) {
+                for (const aid of enemySettlement.agentIds) {
+                  const a = this.sim._agentById(aid);
+                  if (a && a.alive && a.religion) {
+                    a.religion.faith = Math.max(0, a.religion.faith - 25);
+                    if (a.needs?.morale) a.needs.morale = Math.max(0, a.needs.morale - 20);
+                  }
+                }
+              }
+              break;
+            }
+          }
+        }
+      }
+
+      let defenderPop = 0;
+      if (enemySettlement.agentIds) {
+        for (const id of enemySettlement.agentIds) {
+          const a = this.sim._agentById(id);
+          if (a && a.alive) defenderPop++;
+        }
+      }
+
+      if (this.sim.eventBus) {
+        this.sim.eventBus.emit("TOWN_CAPITULATED", {
+          attackerName: warband.settlementName,
+          defenderName: enemySettlement.name,
+          settlementId: enemySettlement.id
+        });
+      }
+
+      const isConquest = (war?.casusBelli && war.casusBelli.includes("Conquest")) || defenderPop <= 3;
+      if (isConquest) {
+        this.annexSettlement(warband.settlementId, enemySettlement.id);
+        if (this.sim.diplomacySystem) {
+          this.sim.diplomacySystem.signPeace(warband.settlementId, enemySettlement.id, warband.settlementId, this.sim.clock.tick, "Conquest & Annexation");
+        }
+      } else if (war?.isHolyWar) {
+        if (this.sim.diplomacySystem) {
+          this.sim.diplomacySystem.signPeace(warband.settlementId, enemySettlement.id, warband.settlementId, this.sim.clock.tick, "Religious Conversion Concordat");
+        }
+      } else {
+        this.makeTributary(warband.settlementId, enemySettlement.id);
+        if (this.sim.diplomacySystem) {
+          this.sim.diplomacySystem.signPeace(warband.settlementId, enemySettlement.id, warband.settlementId, this.sim.clock.tick, "Tributary Vassalage");
+        }
       }
 
       warband.state = "retreating";
@@ -705,13 +894,106 @@ export class WarfareSystem {
 
     const distToHome = Math.hypot(commander.x - home.center.x, commander.y - home.center.y);
     if (distToHome < 4.0) {
-      // Safely returned home: disband warband
+      // Safely returned home with plunder cargo: unload into home stockpile
+      if (home.stockpile && warband.plunderCargo) {
+        const pFood = warband.plunderCargo.food || 0;
+        const pWood = warband.plunderCargo.wood || 0;
+        const pOre = warband.plunderCargo.ore || 0;
+        if (pFood > 0 || pWood > 0 || pOre > 0) {
+          home.stockpile.food = (home.stockpile.food || 0) + pFood;
+          home.stockpile.wood = (home.stockpile.wood || 0) + pWood;
+          home.stockpile.ore = (home.stockpile.ore || 0) + pOre;
+          if (this.sim.eventBus) {
+            this.sim.eventBus.emit("VICTORY_PLUNDER_UNLOADED", {
+              warbandId: warband.id,
+              settlementId: home.id,
+              settlementName: home.name,
+              food: pFood,
+              wood: pWood,
+              ore: pOre
+            });
+          }
+          warband.plunderCargo = { food: 0, wood: 0, ore: 0 };
+        }
+      }
       this.demobilizeSettlement(warband.settlementId);
       return;
     }
 
     commander.moveToward(home.center, this.sim.world);
     this.keepSquadInFormation(warband, commander);
+  }
+
+  annexSettlement(victorId, defeatedId) {
+    const victor = this.sim.settlementSystem?.settlements.get(victorId);
+    const defeated = this.sim.settlementSystem?.settlements.get(defeatedId);
+    if (!victor || !defeated) return;
+
+    defeated.overlordId = victorId;
+    defeated.vassalOf = victorId;
+    defeated.status = "annexed";
+    defeated.bannerColor = victor.bannerColor || "#ef4444";
+
+    // Appoint governor from victor settlement
+    const firstAgentId = victor.agentIds ? victor.agentIds.values().next().value : null;
+    const commander = this.sim._agentById(firstAgentId);
+    if (commander) {
+      defeated.governorId = commander.id;
+      defeated.governorName = commander.name;
+    }
+
+    // Citizens remember conquest
+    if (defeated.agentIds) {
+      for (const aId of defeated.agentIds) {
+        const citizen = this.sim._agentById(aId);
+        if (citizen && citizen.alive && typeof citizen.remember === "function") {
+          citizen.remember("REALM_CONQUERED", this.sim.clock.tick, { overlordId: victorId });
+        }
+      }
+    }
+
+    if (this.sim.chronicleSystem?.addEntry) {
+      this.sim.chronicleSystem.addEntry(
+        "CONQUEST",
+        `🏛️ ${defeated.name} has been annexed into the sovereign realm of ${victor.name}! Governor ${defeated.governorName || 'appointed magistrate'} has taken administration.`
+      );
+    }
+
+    if (this.sim.eventBus) {
+      this.sim.eventBus.emit("SETTLEMENT_ANNEXED", {
+        victorId,
+        victorName: victor.name,
+        defeatedId,
+        defeatedName: defeated.name,
+        governorName: defeated.governorName
+      });
+    }
+  }
+
+  makeTributary(victorId, defeatedId) {
+    const victor = this.sim.settlementSystem?.settlements.get(victorId);
+    const defeated = this.sim.settlementSystem?.settlements.get(defeatedId);
+    if (!victor || !defeated) return;
+
+    defeated.tributeTo = victorId;
+    defeated.tributeRate = 0.15;
+
+    if (this.sim.chronicleSystem?.addEntry) {
+      this.sim.chronicleSystem.addEntry(
+        "TRIBUTARY_VASSALAGE",
+        `📜 ${defeated.name} sued for peace and pledged 15% seasonal tribute to ${victor.name}.`
+      );
+    }
+
+    if (this.sim.eventBus) {
+      this.sim.eventBus.emit("TRIBUTARY_ESTABLISHED", {
+        overlordId: victorId,
+        overlordName: victor.name,
+        vassalId: defeatedId,
+        vassalName: defeated.name,
+        rate: 0.15
+      });
+    }
   }
 
   keepSquadInFormation(warband, commander) {

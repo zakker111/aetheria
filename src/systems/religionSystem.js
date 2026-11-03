@@ -7,21 +7,104 @@ import { ENTITY_TYPES, JOB_TYPES } from '../core/constants.js';
 import { distance } from '../utils/math.js';
 import { RNG } from '../core/rng.js';
 
+export const BELIEF_CREEDS = {
+  solar_creed: {
+    id: "solar_creed",
+    name: "Solar Creed",
+    icon: "☀️",
+    tenet: "Light & Prosperity",
+    color: "#f59e0b"
+  },
+  grove_communion: {
+    id: "grove_communion",
+    name: "Grove Communion",
+    icon: "🌿",
+    tenet: "Harmony with Nature",
+    color: "#10b981"
+  },
+  forge_doctrine: {
+    id: "forge_doctrine",
+    name: "Forge Doctrine",
+    icon: "⚒️",
+    tenet: "Iron & Resolve",
+    color: "#ef4444"
+  },
+  ancestral_pact: {
+    id: "ancestral_pact",
+    name: "Ancestral Pact",
+    icon: "📜",
+    tenet: "Ancient Wisdom",
+    color: "#a855f7"
+  }
+};
+
 export class ReligionSystem {
-    constructor(worldState) {
+    constructor(worldState, simulation = null) {
         this.worldState = worldState;
+        this.simulation = simulation;
         this.priests = new Set();
         this.activeRituals = new Map(); // templeId -> ritual data
         this.faithDecayRate = 0.05; // Faith lost per tick without temple
         this._fallbackRng = null;
     }
 
-    // Seeded RNG accessor. Falls back to a lazily-created fixed-seed stream
-    // (never Math.random) so standalone usage stays deterministic.
+    // Seeded RNG accessor. Always routes through the shared simulation RNG
+    // stream for 100% determinism.
     _rng() {
+        if (this.simulation && typeof this.simulation._rng === 'function') {
+            return this.simulation._rng();
+        }
         if (this.worldState && this.worldState.rng) return this.worldState.rng;
         if (!this._fallbackRng) this._fallbackRng = new RNG(0);
         return this._fallbackRng;
+    }
+
+    /**
+     * Initialize religion and creeds across founded settlements and citizens
+     * without consuming any RNG draws (deterministic modular assignment).
+     */
+    initWorldBeliefs() {
+        if (!this.simulation?.settlementSystem) return;
+        const creeds = Object.keys(BELIEF_CREEDS);
+        for (const s of this.simulation.settlementSystem.settlements.values()) {
+            if (!s.culture) s.culture = {};
+            if (!s.culture.beliefId) {
+                s.culture.beliefId = creeds[(s.id - 1) % creeds.length];
+            }
+            if (s.agentIds) {
+                for (const aid of s.agentIds) {
+                    const a = this.simulation._agentById(aid);
+                    if (a) {
+                        this.initReligionEntity(a);
+                        a.religion.beliefId = s.culture.beliefId;
+                        a.religion.faith = 65;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Get dominant faith for a settlement
+     */
+    getDominantFaith(settlement) {
+        if (!this.simulation) return settlement?.culture?.beliefId || 'solar_creed';
+        const counts = new Map();
+        if (settlement.agentIds) {
+            for (const aid of settlement.agentIds) {
+                const a = this.simulation._agentById(aid);
+                if (!a || !a.alive) continue;
+                const b = a.religion?.beliefId;
+                if (!b) continue;
+                counts.set(b, (counts.get(b) || 0) + 1);
+            }
+        }
+        let best = settlement?.culture?.beliefId || 'solar_creed';
+        let bestN = 0;
+        for (const [b, n] of counts) {
+            if (n > bestN) { best = b; bestN = n; }
+        }
+        return best;
     }
 
     /**
@@ -39,6 +122,14 @@ export class ReligionSystem {
             };
         }
         
+        // Inherit settlement belief if available
+        if (!agent.religion.beliefId && agent.settlementId && this.simulation?.settlementSystem) {
+            const s = this.simulation.settlementSystem.settlements.get(agent.settlementId);
+            if (s && s.culture?.beliefId) {
+                agent.religion.beliefId = s.culture.beliefId;
+            }
+        }
+
         // Inherit faction belief if none set
         if (!agent.religion.beliefId && agent.factionId) {
             const faction = (this.worldState.factions || new Map()).get(agent.factionId);
@@ -247,31 +338,185 @@ export class ReligionSystem {
     }
 
     /**
+     * Missionary conversion & Heresy spread (Phase 3b Step 6):
+     * Devout priests and missionaries visit neighboring towns of differing faiths,
+     * converting citizens, sparking theological friction and religious schisms.
+     */
+    checkMissionariesAndHeresy(tick = 0) {
+        if (!this.simulation || !this.simulation.settlementSystem) return;
+        if (tick % 100 !== 0) return;
+
+        const settlements = Array.from(this.simulation.settlementSystem.settlements.values());
+        if (settlements.length < 2) return;
+
+        for (const s of settlements) {
+            if (s.ruined) continue;
+            const domFaith = this.getDominantFaith(s);
+
+            // Find an eligible devout missionary or priest
+            let missionary = null;
+            if (s.agentIds) {
+                for (const aid of s.agentIds) {
+                    const a = this.simulation._agentById(aid);
+                    if (a && a.alive && (a.religion?.isPriest || a.job === 'priest' || (a.religion?.faith ?? 0) >= 75)) {
+                        missionary = a;
+                        break;
+                    }
+                }
+            }
+            if (!missionary) continue;
+
+            // Pick a rival/neighboring town with a different dominant faith
+            const rivals = settlements.filter(other => other.id !== s.id && !other.ruined && this.getDominantFaith(other) !== domFaith);
+            if (rivals.length === 0) continue;
+
+            // Deterministic pick: nearest rival
+            let targetTown = null;
+            let minDist = Infinity;
+            for (const r of rivals) {
+                const d = Math.hypot(s.center.x - r.center.x, s.center.y - r.center.y);
+                if (d < minDist) { minDist = d; targetTown = r; }
+            }
+            if (!targetTown) continue;
+
+            // Missionary converts a citizen in target town
+            let targetCitizen = null;
+            if (targetTown.agentIds) {
+                for (const aid of targetTown.agentIds) {
+                    const c = this.simulation._agentById(aid);
+                    if (c && c.alive && c.religion?.beliefId !== domFaith && !c.religion?.isPriest) {
+                        targetCitizen = c;
+                        break;
+                    }
+                }
+            }
+            if (!targetCitizen) continue;
+
+            // Conversion!
+            this.initReligionEntity(targetCitizen);
+            const prevFaith = targetCitizen.religion.beliefId;
+            targetCitizen.religion.beliefId = domFaith;
+            targetCitizen.religion.faith = 60;
+
+            if (this.simulation.eventBus) {
+                this.simulation.eventBus.emit("HERESY_SPREAD", {
+                    missionaryId: missionary.id,
+                    missionaryHomeId: s.id,
+                    targetSettlementId: targetTown.id,
+                    convertedAgentId: targetCitizen.id,
+                    beliefId: domFaith
+                });
+            }
+
+            // Grievance in target town against the proselytizing settlement
+            if (this.simulation.diplomacySystem) {
+                this.simulation.diplomacySystem.addGrievance(targetTown.id, s.id, "Heretical Infiltration & Conversion", 18);
+            }
+
+            // Check if religious schism threshold reached (>= 2 heretics in town)
+            let hereticCount = 0;
+            if (targetTown.agentIds) {
+                for (const aid of targetTown.agentIds) {
+                    const a = this.simulation._agentById(aid);
+                    if (a && a.alive && a.religion?.beliefId === domFaith) {
+                        hereticCount++;
+                    }
+                }
+            }
+
+            if (hereticCount >= 2 && !targetTown._schismReported) {
+                targetTown._schismReported = true;
+                if (this.simulation.eventBus) {
+                    this.simulation.eventBus.emit("RELIGIOUS_SCHISM", {
+                        settlementId: targetTown.id,
+                        dominantFaith: prevFaith,
+                        hereticFaith: domFaith
+                    });
+                }
+                if (this.simulation.chronicleSystem?.addEntry) {
+                    const creedName = BELIEF_CREEDS[domFaith]?.name || domFaith;
+                    this.simulation.chronicleSystem.addEntry(
+                        "RELIGIOUS_SCHISM",
+                        `🔥 Religious Schism in ${targetTown.name}! Foreign missionaries from ${s.name} have converted citizens to the ${creedName}.`
+                    );
+                }
+            }
+        }
+    }
+
+    /**
+     * Inquisitor actions (Phase 3b Step 6):
+     * Priests and defenders root out foreign heresies within their settlement,
+     * re-converting heretics to state orthodoxy.
+     */
+    checkInquisitions(tick = 0) {
+        if (!this.simulation || !this.simulation.settlementSystem) return;
+        if (tick % 80 !== 0) return;
+
+        for (const s of this.simulation.settlementSystem.settlements.values()) {
+            if (s.ruined) continue;
+            const domFaith = this.getDominantFaith(s);
+
+            let inquisitor = null;
+            if (s.agentIds) {
+                for (const aid of s.agentIds) {
+                    const a = this.simulation._agentById(aid);
+                    if (a && a.alive && (a.religion?.isPriest || a.job === 'priest' || a.job === 'soldier')) {
+                        inquisitor = a;
+                        break;
+                    }
+                }
+            }
+            if (!inquisitor) continue;
+
+            if (s.agentIds) {
+                for (const aid of s.agentIds) {
+                    const a = this.simulation._agentById(aid);
+                    if (a && a.alive && a.religion?.beliefId && a.religion.beliefId !== domFaith) {
+                        const hereticFaith = a.religion.beliefId;
+                        a.religion.beliefId = domFaith;
+                        a.religion.faith = 40;
+
+                        if (this.simulation.eventBus) {
+                            this.simulation.eventBus.emit("HERETIC_CLEANSED", {
+                                inquisitorId: inquisitor.id,
+                                hereticId: a.id,
+                                settlementId: s.id,
+                                cleansedFaith: hereticFaith,
+                                stateFaith: domFaith
+                            });
+                        }
+
+                        if (this.simulation.chronicleSystem?.addEntry) {
+                            this.simulation.chronicleSystem.addEntry(
+                                "INQUISITION",
+                                `⚖️ The Inquisition in ${s.name} cleansed foreign heresy, reconverting ${a.name} to the true faith.`
+                            );
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * Handle holy war tensions between different beliefs
      */
     checkHolyWars() {
-        const factions = Array.from((this.worldState.factions || new Map()).values());
-        
-        for (let i = 0; i < factions.length; i++) {
-            for (let j = i + 1; j < factions.length; j++) {
-                const f1 = factions[i];
-                const f2 = factions[j];
-                
-                // Get dominant beliefs
-                const belief1 = f1.beliefs && f1.beliefs[0];
-                const belief2 = f2.beliefs && f2.beliefs[0];
-                
-                if (!belief1 || !belief2 || belief1 === belief2) continue;
-                
-                // Different beliefs increase tension
-                const currentRelation = f1.getRelation(f2.id);
-                if (currentRelation > -50) {
-                    // Gradually decrease relations between different faiths
-                    f1.adjustRelation(f2.id, -0.1);
-                    
-                    // Chance of holy war declaration if relations very bad
-                    if (currentRelation < -80 && this._rng().next() < 0.001) {
-                        this.declareHolyWar(f1, f2);
+        if (!this.simulation || !this.simulation.diplomacySystem) return;
+        const settlements = Array.from(this.simulation.settlementSystem.settlements.values());
+        for (let i = 0; i < settlements.length; i++) {
+            for (let j = i + 1; j < settlements.length; j++) {
+                const s1 = settlements[i];
+                const s2 = settlements[j];
+                const f1 = this.getDominantFaith(s1);
+                const f2 = this.getDominantFaith(s2);
+                if (f1 && f2 && f1 !== f2) {
+                    const rel = this.simulation.diplomacySystem.getRelation(s1.id, s2.id);
+                    if (rel && rel.status === "tension") {
+                        this.simulation.diplomacySystem.addGrievance(s1.id, s2.id, "Zealous Crusade Grievance", 12);
+                        this.simulation.diplomacySystem.addGrievance(s2.id, s1.id, "Zealous Crusade Grievance", 12);
                     }
                 }
             }
@@ -302,45 +547,19 @@ export class ReligionSystem {
     }
 
     /**
-     * Get faith-based modifiers for an agent
-     */
-    getFaithModifiers(agent) {
-        if (!agent.religion) return {};
-        
-        const modifiers = {};
-        
-        // High faith bonuses
-        if (agent.religion.faith >= 80) {
-            modifiers.morale = 1.2; // +20% morale gain
-            modifiers.social = 1.1; // +10% relationship gain
-        }
-        
-        // Low faith penalties
-        if (agent.religion.faith <= 20) {
-            modifiers.morale = 0.8; // -20% morale gain
-            modifiers.productivity = 0.9; // -10% work efficiency
-        }
-        
-        // Priest bonus
-        if (agent.religion.isPriest) {
-            modifiers.faithGeneration = 2.0; // Double faith generation for others
-        }
-        
-        return modifiers;
-    }
-
-    /**
      * Main update loop
      */
     update() {
+        const tick = this.simulation?.clock?.tick ?? 0;
         this.updateFaith();
         this.updatePriests();
+        this.checkMissionariesAndHeresy(tick);
+        this.checkInquisitions(tick);
         this.checkHolyWars();
         
-        // Cleanup old rituals (measured in sim ticks so behavior survives save/load)
-        const now = this.world?.simulation?.clock?.tick ?? Date.now();
+        // Cleanup old rituals
         for (const [templeId, ritual] of this.activeRituals.entries()) {
-            if (now - ritual.startTime > ritual.duration) {
+            if (tick - ritual.startTime > ritual.duration) {
                 this.activeRituals.delete(templeId);
             }
         }

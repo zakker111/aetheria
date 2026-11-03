@@ -491,6 +491,14 @@ export class CanvasRenderer {
     const minY = Math.max(0, Math.floor(Math.min(minScreen.y, maxScreen.y, cornerTR.y, cornerBL.y) - margin));
     const maxY = Math.min(world.height - 1, Math.ceil(Math.max(minScreen.y, maxScreen.y, cornerTR.y, cornerBL.y) + margin));
 
+    // Keep simulation informed of current camera viewport for Spatial LOD classification
+    if (this.simulation) {
+      if (typeof this.simulation.setViewportBounds === "function") {
+        this.simulation.setViewportBounds({ minX, maxX, minY, maxY, zoom: this.camera.zoom });
+      }
+      this.simulation.selectedEntityId = this.selectedEntity ? this.selectedEntity.id : null;
+    }
+
     // A. Render 2.5D Isometric Terrain Blocks with Heights & Cliffs
     this.render25DTerrain(minX, maxX, minY, maxY);
 
@@ -2204,6 +2212,13 @@ export class CanvasRenderer {
     const startY = Math.max(0, Math.floor(this.camera.y - this.canvas.height / 2 / zoom));
     const endX = Math.min(world.width, Math.ceil(this.camera.x + this.canvas.width / 2 / zoom));
     const endY = Math.min(world.height, Math.ceil(this.camera.y + this.canvas.height / 2 / zoom));
+
+    if (this.simulation) {
+      if (typeof this.simulation.setViewportBounds === "function") {
+        this.simulation.setViewportBounds({ minX: startX, maxX: endX, minY: startY, maxY: endY, zoom });
+      }
+      this.simulation.selectedEntityId = this.selectedEntity ? this.selectedEntity.id : null;
+    }
 
     for (let y = startY; y < endY; y++) {
       for (let x = startX; x < endX; x++) {

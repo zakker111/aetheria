@@ -1,119 +1,100 @@
-# Aetheria: Civilization Ages, Dynamic Weather & Spectator Radar
+# Civilization Dynasties, Warfare Sieges & Diplomacy System
 
-A major feature expansion that transforms Aetheria into an immersive, drama-filled spectator simulation with multi-tier civilization ages, monumental wonders, living weather systems with wildfires, and an interactive mini-map radar with territory and population heatmaps.
-
----
-
-## User Review & Critical Decisions
-
-> [!IMPORTANT]
-> The following core directions were confirmed through our interactive planning consultation:
-> 
-> - **Confirmed Feature Direction**: Deeper civilization ages, technology progression, and monumental wonder construction.
-> - **Confirmed Spectator Feature**: Interactive Mini-Map Radar with live camera viewport rect, settlement territory overlays, and switchable heatmaps (Population density, Resource wealth, Diplomatic tension).
-> - **Confirmed Weather & Environment**: Full dynamic weather cycles (Rain, Lightning strikes, Wildfire ignition & spread, Droughts) that physically interact with biomes, crops, and wooden structures.
+## Overview & Objectives
+This plan outlines the architecture and execution for expanding civilization systems in **Aetheria** with:
+1. **Ruling Dynasties & Lineage Trees**: Noble houses, succession laws (Primogeniture, Elective, Royal Marriages), royal legitimacy, and genealogy tracking.
+2. **Deepened Warfare & Siege Mechanics**: Multi-phase town sieges (encirclement, wall breaches, town hall storming), dynamic War Score (-100 to +100), siege equipment (rams/catapults), and formalized Peace Conferences (hostage exchange, reparations, territorial cession, dynastic pacts).
+3. **Full-Screen Interactive Civilization Modal (`CivilizationModal.tsx`)**:
+   - **Dynasty Tree Viewer**: Interactive SVG tree showing royal family lineages, living monarchs, pretenders, and marriages.
+   - **Diplomatic Realpolitik Graph**: Force-directed SVG network map showing realms, alliances, treaties, rivalries, and trade pacts.
+   - **War Room & Siege Tracker**: Live active wars, siege progress bars, battle casualties, and peace negotiation treaty terms.
+   - **Treaty & Demilitarization Ledger**: Signed pacts, tribute payments, and demilitarized buffer zones.
+4. **Strict Determinism & Test Coverage**: Fully serialized in save/load with 100% deterministic replayability and comprehensive automated test suites.
 
 ---
 
-## 1. Overview & Core Concept
-
-### What It Delivers
-1. **Civilization Ages & Wonder Monuments**:
-   - Settlements advance through distinct historical epochs: **Tribal Era** → **Bronze Age** → **Classical Era** → **Imperial Age**.
-   - Each Age unlocks specialized architectures, clothing tints, cultural traditions, and grand **Monumental Wonders** (e.g., *Great Pyramidal Shrine*, *Colosseum of Champions*, *Grand Citadel*, *Astronomical Monolith*).
-   - Citizens rally to construct wonders that project spiritual dominance, boost harvest yields, or deter enemy aggression.
-
-2. **Interactive Mini-Map Radar & Heatmaps**:
-   - A sleek, floating mini-radar in the bottom-left corner providing an instant 128×128 tactical overview.
-   - Click or drag on the mini-map to instantly pan the main 2.5D camera.
-   - Switchable overlay modes: **Territory Borders**, **Population Density Heatmap**, **Resource Wealth Heatmap**, and **War/Tension Danger Heatmap**.
-
-3. **Dynamic Weather Systems & Cataclysms**:
-   - Ambient weather states: **Clear Skies**, **Gentle Rain** (speeds crop growth, replenishes dry springs), **Thunderstorm** (lightning flashes with procedural thunder audio effects, striking trees and flammable buildings), **Drought** (parches farmland, dries wells), and **Wildfire Outbreak** (flames propagate across dry forest tiles, requiring fire-fighting or divine dousing).
-   - New divine miracle tools in the dock: **Raincloud**, **Lightning Strike**, and **Douse Fire**.
-
----
-
-## 2. User Experience & Visual Design
-
-### Key User Flows
-- **The Ages Progression Flow**:
-  - As a settlement's population grows, stockpiles accumulate, and buildings thrive, its council initiates an **Age Advancement**.
-  - A celebration chronicle banner announces the advancement (e.g., *"Oakwood Town has entered the Classical Era!"*).
-  - A Monument blueprint is automatically surveyed and placed at the town center; builders and citizens gather stone and wood to construct it tile-by-tile.
-- **The Mini-Map Radar Flow**:
-  - The player sees a radar display in the bottom-left corner with glowing realm crests, active warband dots, and the camera's trapezoidal viewport bounding box.
-  - Tapping **Density**, **Wealth**, or **Conflict** toggles color-coded canvas heat overlays across the mini-radar.
-  - Clicking any spot on the mini-radar glides the main camera directly to that location.
-- **The Weather & Disaster Flow**:
-  - Clouds darken during thunderstorms; rain particles streak across the 2.5D viewport with ambient wind motion.
-  - Lightning strikes hit an ungrounded tree or workshop, sparking an amber-orange flame tile that spreads based on wind and timber density.
-  - Citizens sound the alarm and rush with water buckets from town wells to extinguish the blaze, or the player intervenes with a Rain miracle.
-
-### Visual Identity & Theme
-- **Color Palette & Discipline**:
-  - Background Canvas: Slate black (`#0f172a`) with blurred backdrop filters (`rgba(15, 23, 42, 0.88)`).
-  - Age Colors: Tribal (Earth Ochre `#b45309`), Bronze (Copper Bronze `#d97706`), Classical (Imperial Azure `#38bdf8`), Imperial (Regal Gold `#eab308`).
-  - Weather Visuals: Soft rain streaks (`rgba(186, 230, 253, 0.65)`), lightning flashes (`#ffffff` frame illumination), and burning embers (`#f97316` and `#ef4444`).
-- **Typography & Clean Metadata**:
-  - Strict anti-slop rules: No unnecessary pills, clean unboxed text metadata with `·` separators, tabular numbers for all resource and age countdowns.
-
----
-
-## 3. Key Product Decisions & Trade-Offs
-
-- **Decision 1: Organic Civilization Ages vs. Hardcoded Timers**
-  - *Chosen Approach*: Age progression is earned through settlement milestones (minimum population, diverse completed structures, and granary stockpile thresholds).
-  - *Why*: Makes watching the world rewarding—prosperous trading kingdoms advance to the Classical Era while war-torn tribes remain struggling in the Bronze Age.
-- **Decision 2: High-Performance Canvas Mini-Map vs. DOM Grid**
-  - *Chosen Approach*: Offscreen canvas buffer rendering the mini-map at 128×128 resolution, drawn smoothly to an interactive radar widget with zero DOM overhead.
-  - *Why*: Keeps 60 FPS performance even during massive battles and weather simulations.
-- **Decision 3: Non-Destructive Wildfire Containment**
-  - *Chosen Approach*: Wildfires consume vegetation and cause structure damage, but citizens can fetch well water to extinguish them, and burnt land regenerates fertile ash soil after 150 ticks.
-  - *Why*: Adds high-stakes drama and visual excitement without destroying the player's world irreversibly.
-
----
-
-## 4. Technical Architecture & Data Strategy
+## Architectural Breakdown
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                              Aetheria App                              │
-│                                                                        │
-│  ┌────────────────────┐   ┌───────────────────┐   ┌─────────────────┐  │
-│  │ TopBar & Telemetry │   │ ControlsHeader    │   │ SidePanels      │  │
-│  │ (Ages, Epochs, HUD)│   │ (Weather, Ages)   │   │ (Societies, War)│  │
-│  └─────────┬──────────┘   └─────────┬─────────┘   └────────┬────────┘  │
-│            │                        │                      │           │
-│  ┌─────────┴────────────────────────┴──────────────────────┴────────┐  │
-│  │                   Simulation Orchestrator                        │  │
-│  │  - CivilizationAgeSystem (Tech trees, Ages, Monument tracking)    │  │
-│  │  - WeatherSystem (Rain, Thunder, Drought, Wildfire grid)         │  │
-│  │  - SettlementSystem & DiplomacySystem                           │  │
-│  │  - Spatial Grid & Deterministic RNG                             │  │
-│  └──────────────────────────┬───────────────────────────────────────┘  │
-│                             │                                          │
-│         ┌───────────────────┴───────────────────┐                      │
-│         ▼                                       ▼                      │
-│  ┌─────────────────────────────┐   ┌────────────────────────────────┐  │
-│  │ Main 2.5D / 2D Canvas View  │   │ MiniMapRadar Component         │  │
-│  │ - Weather particle overlays │   │ - Interactive click-to-pan     │  │
-│  │ - Monuments 3D rendering    │   │ - Territory borders & heatmaps │  │
-│  │ - Lightning & fire shaders  │   │ - Active warband blips         │  │
-│  └─────────────────────────────┘   └────────────────────────────────┘  │
-└────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                             Simulation Engine                               │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       │
+       ┌───────────────────────────────┼───────────────────────────────┐
+       ▼                               ▼                               ▼
+[DynastySystem]                [WarfareSystem]               [DiplomacySystem]
+- House Banners & Names        - Multi-phase Sieges           - War Score (-100..+100)
+- Royal Marriages              - Wall breaches & storming     - Peace Conferences
+- Succession Laws              - Siege engines (rams)         - Hostage/Heir exchanges
+- Legitimacy & Pretenders      - Casus Belli escalation       - Demilitarized zones
+       │                               │                               │
+       └───────────────────────────────┼───────────────────────────────┘
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        CivilizationModal Component                          │
+│  (Full-Screen Modal with Tabs, Interactive SVG Lineage & Realpolitik Graph) │
+├──────────────────────────────┬──────────────────────────────┬───────────────┤
+│    [Dynasties Tab]           │       [Diplomacy Tab]        │  [War Room]   │
+│ - Interactive SVG Tree       │ - Force-Directed Realm Graph │ - Siege Status│
+│ - Monarch details & traits   │ - Treaty & Tribute Ledger    │ - War Scores  │
+│ - Succession list & claims   │ - Casus Belli list           │ - Peace Terms │
+└──────────────────────────────┴──────────────────────────────┴───────────────┘
 ```
 
-### New & Modified Modules
-1. `src/systems/civilizationAgeSystem.ts`:
-   - Tracks settlement epoch: `Tribal`, `Bronze`, `Classical`, `Imperial`.
-   - Age thresholds, unlocked perks, and monument blueprints.
-2. `src/systems/weatherSystem.ts`:
-   - Manages ambient weather state (`clear`, `rain`, `storm`, `drought`).
-   - Fire simulation grid (`fireGrid: Uint8Array`) with deterministic burn spread, rain quenching, and ash regeneration.
-3. `src/components/MiniMapRadar.tsx`:
-   - Dedicated 140×140 canvas displaying world terrain, settlement boundaries, camera viewport box, and selectable heatmap overlays.
-4. `src/presentation/renderer.js`:
-   - Extended to render 2.5D Monument models, falling rain streaks, lightning ambient flashes, and flame particles.
-5. `src/components/Dock.tsx`:
-   - Expanded with weather miracles: `rain`, `lightning`, and `douse`.
+---
+
+## Proposed Changes & Phased Execution
+
+### Phase 1: Dynastic Lineages & Royal Houses (`src/systems/dynastySystem.js`)
+- **Noble Houses**:
+  - Each settlement founds or pledges allegiance to a Royal House (House Name, Sigil, Motto, Primary Colors).
+  - Track sovereign rulers (King/Queen/Chieftain) and heirs.
+- **Genealogy & Succession**:
+  - Link parent-child lineages across generations via agent relationship and genealogy records.
+  - Implement Succession Laws: Primogeniture (eldest child inherits), Elective (nobles choose highest-prestige warrior), or Agnation.
+  - Royal Marriages: Diplomatic unions between rival settlements to forge 500-tick non-aggression pacts.
+- **Determinism & Persistence**:
+  - Add full `serialize()` and `deserialize()` with zero random seed deviation.
+
+### Phase 2: Multi-Stage Sieges & Dynamic Peace Treaties (`src/systems/warfareSystem.js` & `diplomacySystem.js`)
+- **Multi-Stage Town Sieges**:
+  - **Stage 1: Encirclement**: Warband surrounds enemy town center, cutting off food caravans and trade routes.
+  - **Stage 2: Breach**: Siege rams attack town gates and defensive structures (`health` depletion and fire ignition).
+  - **Stage 3: Storming & Surrender**: Warbands duel defending garrison at Town Hall. If garrison falls or morale breaks, town capitulates.
+- **War Score & Peace Conferences**:
+  - Track War Score (-100 to +100) based on casualty ratio, successful raids, and besieged structures.
+  - When War Score exceeds threshold or War Weariness maxes out, parties convene a Peace Conference:
+    - **Treaty Options**: Gold/food reparations, vassalage tribute, dynastic royal marriage, demilitarized buffer zone cooldown, or prisoner exchange.
+- **Event Bus Integration**:
+  - Emit rich events: `SIEGE_BEGUN`, `GATE_BREACHED`, `TOWN_CAPITULATED`, `PEACE_CONFERENCE_CONCLUDED`, `ROYAL_WEDDING`.
+
+### Phase 3: Full-Screen Civilization Modal (`src/components/CivilizationModal.tsx`)
+- **Presentation & UX**:
+  - Full-screen modal accessed via high-visibility HUD button or shortcut key (`C` or crown icon).
+  - Dark-slate architectural aesthetic with crisp typographic hierarchy (`Fraunces` / `Cinzel` serif headers, clean tabular numerals).
+- **Tab 1: Dynasties & Lineages**:
+  - Interactive SVG family tree rendering ancestry nodes, current monarchs, spouses, children, and claimants.
+  - Click any royal agent to view their age, combat stats, legitimacy rating, and current location on the map.
+- **Tab 2: Realpolitik & Diplomacy Network**:
+  - Interactive SVG force-directed realm graph: nodes represent settlements sized by population/wealth; links indicate Alliances (cyan), Wars (crimson), Vassalage (gold), and Neutrality (dashed gray).
+  - Dynamic tooltip showing mutual grievances, casus belli, and trade volumes.
+- **Tab 3: War Room & Active Campaigns**:
+  - Tactical card view of all active conflicts with live War Score progress bars, siege status indicators, commander portraits, and casualty tolls.
+  - Treaty history archive documenting historic peace agreements and past conquered territories.
+
+### Phase 4: Verification, Automated Testing & Visual Polish
+- **Automated Test Suite (`tests/dynasty_warfare.mjs`)**:
+  - Royal house creation and hereditary succession test on ruler death.
+  - Royal marriage non-aggression verification.
+  - Multi-stage siege execution from encirclement to town capitulation.
+  - War score calculation and peace treaty enforcement.
+  - Determinism verification: save/load state matches uninterrupted simulation run.
+- **Integration with Existing Tests**:
+  - Ensure `npm test` runs all existing 8 tests (`soak`, `determinism`, `gossip`, `supplychain`, `warvisible`, `scenario_warring`, `stress_population`, `war_phase3b`) plus the new suite without failures.
+- **Build & Lint Verification**:
+  - Run `compile_applet` and `lint_applet` to guarantee clean TypeScript compilation and zero warnings.
+
+---
+
+## User Review & Approval
+Please review this implementation plan. Click **Proceed** to begin execution of the dynasty lineages, siege warfare mechanics, and the interactive civilization modal.

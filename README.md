@@ -49,19 +49,29 @@ npm run lint
 # Build production assets (outputs to dist/ with relative paths)
 npm run build
 
-# Run all 6 automated test suites
+# Run all 7 automated test suites
 npm test
 ```
 
 ### Automated Test Suites
 
-The test suite thoroughly verifies engine mechanics, economy, and deterministic reproducibility:
-1. `tests/determinism.mjs`: Verifies identical tick-by-tick RNG and simulation state progression from identical seeds.
+The test suite thoroughly verifies engine mechanics, economy, performance, and deterministic reproducibility:
+1. `tests/determinism.mjs`: Verifies identical tick-by-tick RNG and simulation state progression from identical seeds and save/load resume.
 2. `tests/gossip.mjs`: Verifies full save/load round-trip determinism (fresh vs resumed simulation equivalence).
 3. `tests/supplychain.mjs`: Validates 9-phase supply chain loop (harvesting, workshop queues, bread/plank distribution, trade routes, and caravans).
 4. `tests/warvisible.mjs`: Validates grievance ledger decay, casus belli triggers, war declarations, and warband formation.
 5. `tests/scenario_warring.mjs`: Validates default Warring Kingdoms initialization, accelerated rivalry, and combat events.
 6. `tests/soak.mjs`: Long-run soak test (1000+ ticks) ensuring 0 crashes, 0 NaN anomalies, stable demographics, and active settlements.
+7. `tests/stress_population.mjs`: High-agent stress benchmark verifying 1,500–2,500 agents simulate stably with Spatial LOD and time-sliced tick budgeting.
+
+## ⚡ High-Agent Scaling Architecture (1,000–2,500 Agents)
+
+Aetheria implements a deterministic Spatial Level-of-Detail (LOD) and time-sliced tick scheduling architecture:
+- **Tier 0 (Focus & Combat)**: Viewport-visible citizens and active combatants update at full 60Hz cognitive fidelity and micro-steering every tick.
+- **Tier 1 (Periphery Transition)**: Citizens in the immediate buffer surrounding the camera update every 3 ticks (`(agent.id + tick) % 3 === 0`).
+- **Tier 2 (Off-Camera Macro)**: Distant settlements and wilderness wanderers update every 12 ticks (`(agent.id + tick) % 12 === 0`) via lightweight macro simulation (direct needs decay, stockpile contribution, and vector waypoint travel).
+- **O(1) Spatial Partitioning**: Settlement clustering and perception scans utilize spatial cell hashing, eliminating $O(N^2)$ checks across high agent populations.
+- **Live Performance Telemetry**: In-game HUD monitors simulation tick duration (ms) and live Tier 0/1/2 agent distributions.
 
 ## 🚀 GitHub Push & GitHub Pages Deployment
 

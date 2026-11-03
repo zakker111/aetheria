@@ -10,6 +10,7 @@ import { DiplomacyPanel } from './components/DiplomacyPanel';
 import { InspectorPanel } from './components/InspectorPanel';
 import { ChroniclePanel } from './components/ChroniclePanel';
 import { GuideModal } from './components/GuideModal';
+import { CivilizationModal } from './components/CivilizationModal';
 import { NotificationToast } from './components/NotificationToast';
 import { MiniMapRadar } from './components/MiniMapRadar';
 import { soundManager } from './systems/audio';
@@ -48,6 +49,7 @@ export const App: React.FC = () => {
   const [agentCount, setAgentCount] = useState(0);
   const [births, setBirths] = useState(0);
   const [deaths, setDeaths] = useState(0);
+  const [lodStats, setLodStats] = useState<{ tier0: number; tier1: number; tier2: number; avgTickMs: number } | null>(null);
   const [resources, setResources] = useState<ResourceSummary>({
     food: 0,
     wood: 0,
@@ -63,6 +65,7 @@ export const App: React.FC = () => {
 
   const [societiesOpen, setSocietiesOpen] = useState(true);
   const [diplomacyOpen, setDiplomacyOpen] = useState(false);
+  const [civilizationOpen, setCivilizationOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [currentWeather, setCurrentWeather] = useState<{
     name: string;
@@ -245,6 +248,27 @@ export const App: React.FC = () => {
         setSpeed(sim.clock.speed);
         setIsPaused(sim.clock.speed === 0);
 
+        if (sim.lodStats) {
+          setLodStats((prev) => {
+            const ls = sim.lodStats;
+            if (
+              prev &&
+              prev.tier0 === ls.tier0 &&
+              prev.tier1 === ls.tier1 &&
+              prev.tier2 === ls.tier2 &&
+              Math.abs(prev.avgTickMs - (ls.avgTickMs || 0)) < 0.2
+            ) {
+              return prev;
+            }
+            return {
+              tier0: ls.tier0,
+              tier1: ls.tier1,
+              tier2: ls.tier2,
+              avgTickMs: ls.avgTickMs || 0,
+            };
+          });
+        }
+
         if (sim.weatherSystem) {
           const wInfo = sim.weatherSystem.getWeatherInfo();
           setCurrentWeather((prev) => (prev && prev.name === wInfo.name ? prev : wInfo));
@@ -420,6 +444,11 @@ export const App: React.FC = () => {
         handleTogglePause();
       } else if (e.key === 'w' || e.key === 'W') {
         setDiplomacyOpen((prev) => !prev);
+      } else if (e.key === 'c' || e.key === 'C') {
+        setCivilizationOpen((prev) => !prev);
+      } else if (e.key === 'Escape') {
+        setCivilizationOpen(false);
+        setHelpOpen(false);
       } else {
         const keyMap: { [k: string]: ToolType } = {
           '1': 'inspect',
@@ -691,6 +720,7 @@ export const App: React.FC = () => {
           is25D={is25D}
           weather={currentWeather || undefined}
           dominantAge={dominantAge || undefined}
+          lodStats={lodStats || undefined}
         />
 
         <ControlsHeader
@@ -706,11 +736,13 @@ export const App: React.FC = () => {
           onSpawnResources={handleSpawnResources}
           onToggleSocieties={() => setSocietiesOpen((prev) => !prev)}
           onToggleDiplomacy={() => setDiplomacyOpen((prev) => !prev)}
+          onToggleCivilization={() => setCivilizationOpen((prev) => !prev)}
           onSave={handleSave}
           onLoad={handleLoad}
           onToggleHelp={() => setHelpOpen((prev) => !prev)}
           societiesOpen={societiesOpen}
           diplomacyOpen={diplomacyOpen}
+          civilizationOpen={civilizationOpen}
           isMuted={isMuted}
           onToggleMute={handleToggleMute}
         />
@@ -778,6 +810,14 @@ export const App: React.FC = () => {
 
       {/* Divine Guide Modal */}
       <GuideModal isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
+
+      {/* Full-Screen Civilization, Dynasties & War Room Modal */}
+      <CivilizationModal
+        isOpen={civilizationOpen}
+        onClose={() => setCivilizationOpen(false)}
+        simulation={simInstance || simRef.current}
+        onPanTo={handlePanTo}
+      />
 
       {/* Notification Toast */}
       <NotificationToast message={notification} />

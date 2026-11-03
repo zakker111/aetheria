@@ -410,6 +410,7 @@ export class DiplomacySystem {
     const sD = this.sim.settlementSystem.settlements.get(defenderId);
     if (!sA || !sD) return;
 
+    const isHolyWar = casusBelli.includes("Holy War");
     const war = {
       id: this.nextWarId++,
       attackerId,
@@ -418,6 +419,8 @@ export class DiplomacySystem {
       defenderName: sD.name,
       startTick: tick || this.sim.clock.tick,
       casusBelli,
+      isHolyWar,
+      weariness: { [attackerId]: 0, [defenderId]: 0 },
       battles: [],
       casualties: { [attackerId]: 0, [defenderId]: 0 },
       plundered: { food: 0, wood: 0, ore: 0 },
@@ -435,6 +438,13 @@ export class DiplomacySystem {
     // Trigger warfare system mobilization
     if (this.sim.warfareSystem) {
       this.sim.warfareSystem.onWarDeclared(war);
+    }
+
+    if (isHolyWar && this.sim.chronicleSystem?.addEntry) {
+      this.sim.chronicleSystem.addEntry(
+        "HOLY_WAR",
+        `⚔️🔥 HOLY CRUSADE: ${sA.name} launched a sacred crusade against ${sD.name} (${casusBelli})!`
+      );
     }
 
     this.emitDiplomacyEvent(sA, sD, `⚔️ War Declared!`, `${sA.name} has declared war on ${sD.name} (${casusBelli})!`);
@@ -483,7 +493,92 @@ export class DiplomacySystem {
     this.emitDiplomacyEvent(s1, s2, "🤝 Alliance Forged!", `${s1.name} and ${s2.name} signed a Grand Defensive Alliance!`);
   }
 
-  signPeace(id1, id2, victorId = null, tick = 0) {
+  /**
+   * Calculates dynamic War Score (-100 to +100).
+   * Positive favors attacker, negative favors defender.
+   */
+  calculateWarScore(war) {
+    if (!war) return 0;
+    let score = 0;
+    const attCas = war.casualties?.[war.attackerId] || 0;
+    const defCas = war.casualties?.[war.defenderId] || 0;
+    score += (defCas - attCas) * 8; // casualties inflicted advantage
+
+    // Plunder impact
+    if (war.plundered) {
+      const attPlunder = war.plundered[war.attackerId] || 0;
+      const defPlunder = war.plundered[war.defenderId] || 0;
+      score += Math.min(30, (attPlunder - defPlunder) * 2);
+    }
+
+    // Weariness impact
+    const attWear = war.weariness?.[war.attackerId] || 0;
+    const defWear = war.weariness?.[war.defenderId] || 0;
+    score += Math.min(30, (defWear - attWear) * 0.5);
+
+    return Math.max(-100, Math.min(100, Math.round(score)));
+  }
+
+  /**
+   * Convenes a formal Peace Conference to negotiate terms.
+   */
+  convenePeaceConference(id1, id2, victorId = null, reason = "War Weariness") {
+    const war = this.activeWars.find(w => 
+      (w.attackerId === id1 && w.defenderId === id2) || (w.attackerId === id2 && w.defenderId === id1)
+    );
+    const score = war ? this.calculateWarScore(war) : 0;
+
+    let determinedVictorId = victorId;
+    if (!determinedVictorId && war) {
+      if (score >= 15) determinedVictorId = war.attackerId;
+      else if (score <= -15) determinedVictorId = war.defenderId;
+    }
+
+    let terms = null;
+
+    // Check if a Royal Marriage peace treaty can be arranged between ruling dynasties
+    const dynA = this.sim.dynastySystem?.settlementDynastyMap?.get(id1);
+    const dynB = this.sim.dynastySystem?.settlementDynastyMap?.get(id2);
+    if (dynA && dynB && Math.abs(score) < 35 && (!war?.casusBelli || !war.casusBelli.includes("Conquest"))) {
+      const marriage = this.sim.dynastySystem.arrangeRoyalMarriage(dynA, dynB);
+      if (marriage) {
+        terms = "Dynastic Royal Marriage Concordat";
+      }
+    }
+
+    if (!terms) {
+      if (war?.isHolyWar && determinedVictorId) {
+        terms = "Religious Conversion Concordat";
+      } else if (determinedVictorId && (Math.abs(score) >= 60 || war?.casusBelli?.includes("Conquest"))) {
+        terms = "Conquest & Annexation";
+      } else if (determinedVictorId && (Math.abs(score) >= 30 || war?.casusBelli?.includes("Resource"))) {
+        terms = "Tributary Vassalage";
+      } else if (determinedVictorId) {
+        terms = "Forced Demilitarization";
+      } else {
+        terms = "White Peace Concordat";
+      }
+    }
+
+    const conferenceReport = {
+      settlement1Id: id1,
+      settlement2Id: id2,
+      victorId: determinedVictorId,
+      warScore: score,
+      reason,
+      terms,
+      tick: this.sim.clock.tick
+    };
+
+    if (this.sim.eventBus) {
+      this.sim.eventBus.emit("PEACE_CONFERENCE_CONCLUDED", conferenceReport);
+    }
+
+    this.signPeace(id1, id2, determinedVictorId, this.sim.clock.tick, terms);
+    return conferenceReport;
+  }
+
+  signPeace(id1, id2, victorId = null, tick = 0, terms = null) {
     const rel = this.getRelation(id1, id2);
     if (!rel) return;
 
@@ -500,13 +595,108 @@ export class DiplomacySystem {
       (w.attackerId === id1 && w.defenderId === id2) || (w.attackerId === id2 && w.defenderId === id1)
     );
 
+    let war = null;
     if (warIdx !== -1) {
-      const war = this.activeWars.splice(warIdx, 1)[0];
+      war = this.activeWars.splice(warIdx, 1)[0];
       war.active = false;
       war.endTick = tick || this.sim.clock.tick;
       war.winnerId = victorId;
+
+      // Determine treaty terms dynamically if not specified
+      if (!terms) {
+        if (war.isHolyWar && victorId) {
+          terms = "Religious Conversion Concordat";
+        } else if (war.casusBelli.includes("Conquest") && victorId) {
+          terms = "Conquest & Annexation";
+        } else if (war.casusBelli.includes("Resource") && victorId) {
+          terms = "Tributary Vassalage";
+        } else if (victorId) {
+          terms = "Forced Demilitarization";
+        } else {
+          terms = "White Peace Concordat";
+        }
+      }
+
+      war.terms = terms;
       this.warHistory.unshift(war);
       if (this.warHistory.length > 20) this.warHistory.pop();
+    } else if (!terms) {
+      terms = "White Peace Concordat";
+    }
+
+    // Execute concrete treaty terms
+    const victor = victorId ? this.sim.settlementSystem.settlements.get(victorId) : null;
+    const defeatedId = victorId ? (victorId === id1 ? id2 : id1) : null;
+    const defeated = defeatedId ? this.sim.settlementSystem.settlements.get(defeatedId) : null;
+
+    if (terms === "Religious Conversion Concordat" && victor && defeated) {
+      const victorFaith = this.dominantFaith(victor);
+      if (victorFaith) {
+        defeated.culture.beliefId = victorFaith;
+        if (defeated.agentIds) {
+          for (const aid of defeated.agentIds) {
+            const a = this.sim._agentById(aid);
+            if (a && a.alive) {
+              if (!a.religion) this.sim.religionSystem?.initReligionEntity(a);
+              if (a.religion) {
+                a.religion.beliefId = victorFaith;
+                a.religion.faith = 55;
+              }
+            }
+          }
+        }
+        if (this.sim.chronicleSystem?.addEntry) {
+          this.sim.chronicleSystem.addEntry(
+            "FAITH_CONCORDAT",
+            `📜 Peace of Faith: ${defeated.name} renounced their creed and converted to ${victorFaith}.`
+          );
+        }
+      }
+    } else if (terms === "Forced Demilitarization" && defeated) {
+      defeated.demilitarizedUntil = (tick || this.sim.clock.tick) + 400;
+      if (this.sim.chronicleSystem?.addEntry) {
+        this.sim.chronicleSystem.addEntry(
+          "DEMILITARIZATION",
+          `🛡️ Disarmament Pact: ${defeated.name} was disarmed and forbidden from raising warbands for 400 days.`
+        );
+      }
+    }
+
+    // Process Prisoners of War (POWs)
+    const captorId = victorId || id1;
+    const captiveVictimId = victorId ? (victorId === id1 ? id2 : id1) : id2;
+    const sCaptor = this.sim.settlementSystem.settlements.get(captorId);
+    const sVictim = this.sim.settlementSystem.settlements.get(captiveVictimId);
+    const belligerence = sCaptor?.culture?.values?.belligerence ?? 0.3;
+
+    if (this.sim.agents) {
+      for (const a of this.sim.agents) {
+        if (!a.alive || !a.captive) continue;
+        if (a.prisonerOf === id1 || a.prisonerOf === id2) {
+          if (belligerence >= 0.85) {
+            a.alive = false;
+            this.sim.deathsThisSession++;
+            this.addGrievance(a.settlementId, a.prisonerOf, "Execution of War Prisoners", 25);
+            if (this.sim.eventBus) {
+              this.sim.eventBus.emit("PRISONER_EXECUTED", { agentId: a.id, executorId: a.prisonerOf });
+            }
+            if (this.sim.chronicleSystem?.addEntry) {
+              this.sim.chronicleSystem.addEntry("PRISONER_EXECUTED", `☠️ Prisoners of war were executed in ${sCaptor?.name}, deepening border feuds!`);
+            }
+          } else {
+            a.captive = false;
+            a.prisonerOf = null;
+            a.health = 70;
+            if (sVictim?.stockpile && sCaptor?.stockpile) {
+              sVictim.stockpile.food = Math.max(0, (sVictim.stockpile.food || 0) - 10);
+              sCaptor.stockpile.food = (sCaptor.stockpile.food || 0) + 10;
+            }
+            if (this.sim.eventBus) {
+              this.sim.eventBus.emit("PRISONERS_RANSOMED", { agentId: a.id, captorId: captorId, homeId: a.settlementId });
+            }
+          }
+        }
+      }
     }
 
     // Demobilize warbands
@@ -515,8 +705,8 @@ export class DiplomacySystem {
       this.sim.warfareSystem.demobilizeSettlement(id2);
     }
 
-    const victorName = victorId ? this.sim.settlementSystem.settlements.get(victorId)?.name : null;
-    const details = victorName ? `Victory secured by ${victorName}. A binding peace treaty has been signed.` : "Both realms laid down arms and signed a peace concordat.";
+    const victorName = victor ? victor.name : null;
+    const details = victorName ? `Victory secured by ${victorName} (${terms}). A binding treaty has been concluded.` : "Both realms laid down arms and signed a peace concordat.";
     this.emitDiplomacyEvent(s1, s2, "🕊️ Peace Treaty Signed", details);
   }
 
@@ -527,15 +717,25 @@ export class DiplomacySystem {
     if (!war) return;
 
     const warAge = tick - war.startTick;
-    // After 250 ticks or high casualties, negotiate peace
+    const s1Weariness = war.weariness?.[s1.id] || 0;
+    const s2Weariness = war.weariness?.[s2.id] || 0;
     const totalCasualties = (war.casualties[s1.id] || 0) + (war.casualties[s2.id] || 0);
 
-    if (warAge > 350 || totalCasualties >= 4) {
-      const s1Losses = war.casualties[s1.id] || 0;
-      const s2Losses = war.casualties[s2.id] || 0;
+    // Weariness threshold >= 100, long duration, or high casualties
+    if (s1Weariness >= 100 || s2Weariness >= 100 || warAge > 350 || totalCasualties >= 4) {
       let victorId = null;
-      if (s1Losses < s2Losses) victorId = s1.id;
-      else if (s2Losses < s1Losses) victorId = s2.id;
+
+      if (s1Weariness > s2Weariness + 15) {
+        victorId = s2.id;
+      } else if (s2Weariness > s1Weariness + 15) {
+        victorId = s1.id;
+      } else {
+        const s1Losses = war.casualties[s1.id] || 0;
+        const s2Losses = war.casualties[s2.id] || 0;
+        if (s1Losses < s2Losses) victorId = s1.id;
+        else if (s2Losses < s1Losses) victorId = s2.id;
+      }
+
       this.signPeace(s1.id, s2.id, victorId, tick);
     }
   }

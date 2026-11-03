@@ -119,28 +119,50 @@ export class SettlementSystem {
     return settlement;
   }
   
-  // Check if unassigned agents form new clusters
+  // Check if unassigned agents form new clusters (optimized with spatial lookup)
   detectSettlements(agents, world) {
     const visited = new Set();
     const clusters = [];
     
-    // Group agents that are close to each other
-    for (const agent of agents) {
+    // Only unassigned wandering agents need to be checked for founding new clusters.
+    // Settled agents already belong to their established communities.
+    for (let i = 0; i < agents.length; i++) {
+      const agent = agents[i];
       if (!agent.alive || visited.has(agent.id)) continue;
+      if (agent.settlementId != null && this.settlements.has(agent.settlementId)) continue;
       
       const cluster = [agent];
       visited.add(agent.id);
       
-      for (const other of agents) {
-        if (!other.alive || visited.has(other.id)) continue;
-        
-        const dx = other.x - agent.x;
-        const dy = other.y - agent.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        
-        if (dist < 18) {
-          cluster.push(other);
-          visited.add(other.id);
+      // Use spatial index for fast O(1) neighbor query instead of O(N^2) full roster scan
+      const nearby = (world && typeof world.getNearbyAgents === 'function')
+        ? world.getNearbyAgents(agent.x, agent.y, 18)
+        : null;
+      
+      if (nearby) {
+        for (let j = 0; j < nearby.length; j++) {
+          const other = nearby[j];
+          if (!other.alive || visited.has(other.id)) continue;
+          if (other.settlementId != null && this.settlements.has(other.settlementId)) continue;
+          const dx = other.x - agent.x;
+          const dy = other.y - agent.y;
+          if (dx * dx + dy * dy < 324) { // 18^2 = 324
+            cluster.push(other);
+            visited.add(other.id);
+          }
+        }
+      } else {
+        // Fallback linear scan for headless runs without spatial grid
+        for (let j = i + 1; j < agents.length; j++) {
+          const other = agents[j];
+          if (!other.alive || visited.has(other.id)) continue;
+          if (other.settlementId != null && this.settlements.has(other.settlementId)) continue;
+          const dx = other.x - agent.x;
+          const dy = other.y - agent.y;
+          if (dx * dx + dy * dy < 324) {
+            cluster.push(other);
+            visited.add(other.id);
+          }
         }
       }
       

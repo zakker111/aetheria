@@ -90,7 +90,7 @@ class CraftingSystem {
             // Smeltery-style recipes still demand a specialized subtype.
         });
 
-        // Military gear: bronze spears are the standard warband weapon.
+        // Military gear: forged spears, broadswords, shields, and warbows.
         // Weapon quality feeds directly into battle damage (Step 3), so a
         // settlement that invests in smithing fights visibly better — and
         // dead soldiers drop their gear as scavengable loot.
@@ -105,6 +105,43 @@ class CraftingSystem {
             time: 70,
             skill: 'smithing',
             tool: 'anvil'
+        });
+
+        this.addRecipe('ingot_plus_handle_to_sword', {
+            id: 'ingot_plus_handle_to_sword',
+            name: 'Forge Broadsword',
+            input: [
+                { type: 'iron_ingot', amount: 2 },
+                { type: 'tool_handle', amount: 1 }
+            ],
+            output: { type: 'weapon_sword', amount: 1 },
+            time: 90,
+            skill: 'smithing',
+            tool: 'anvil',
+            requiresSkill: { smithing: 2 }
+        });
+
+        this.addRecipe('plank_plus_ingot_to_shield', {
+            id: 'plank_plus_ingot_to_shield',
+            name: 'Craft Iron Shield',
+            input: [
+                { type: 'plank', amount: 2 },
+                { type: 'iron_ingot', amount: 1 }
+            ],
+            output: { type: 'armor_shield', amount: 1 },
+            time: 60,
+            skill: 'carpentry',
+            tool: 'hammer'
+        });
+
+        this.addRecipe('plank_to_bow', {
+            id: 'plank_to_bow',
+            name: 'Fletch Warbow',
+            input: { type: 'plank', amount: 2 },
+            output: { type: 'weapon_bow', amount: 1 },
+            time: 55,
+            skill: 'carpentry',
+            tool: 'knife'
         });
 
         // Rare-goods lapidary: cut raw gems into polished jewels. Gems only

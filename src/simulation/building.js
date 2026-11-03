@@ -41,6 +41,7 @@ export class Building {
       buildingType: this.buildingType,
       constructionProgress: this.constructionProgress,
       complete: this.complete,
+      isComplete: this.isComplete ?? (this.complete || (this.constructionProgress >= 100)),
       ownerId: this.ownerId,
       settlementId: this.settlementId,
       factionId: this.factionId,
@@ -57,6 +58,7 @@ export class Building {
     building.id = data.id;
     building.constructionProgress = data.constructionProgress;
     building.complete = data.complete;
+    building.isComplete = data.isComplete ?? (data.complete || (data.constructionProgress >= 100));
     building.ownerId = data.ownerId;
     if (data.capacity != null) building.capacity = data.capacity;
     if (data.health != null) building.health = data.health;

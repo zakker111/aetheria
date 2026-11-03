@@ -216,7 +216,8 @@ export class Agent {
   }
 
   // Update needs over time (doc 03A: update urgent needs)
-  updateNeeds() {
+  // dt: delta ticks for time-sliced LOD updates (defaults to 1 tick).
+  updateNeeds(dt = 1) {
     // Life-stage-scaled drains (Phase 2): children burn needs slower, elders
     // tire faster and metabolize food/water quicker.
     const stage = this.lifeStage;
@@ -225,15 +226,15 @@ export class Agent {
 
     // Slower drains so agents have time to actually find food/water instead
     // of cascading into starvation deaths.
-    this.needs.food = Math.max(0, this.needs.food - 0.10 * drainMul);
-    this.needs.water = Math.max(0, this.needs.water - 0.12 * drainMul);
-    this.needs.rest = Math.max(0, this.needs.rest - 0.05 * restMul);
-    this.needs.social = Math.max(0, this.needs.social - 0.04);
+    this.needs.food = Math.max(0, this.needs.food - 0.10 * drainMul * dt);
+    this.needs.water = Math.max(0, this.needs.water - 0.12 * drainMul * dt);
+    this.needs.rest = Math.max(0, this.needs.rest - 0.05 * restMul * dt);
+    this.needs.social = Math.max(0, this.needs.social - 0.04 * dt);
     
     // Aging: 100 ticks = 1 year of life
-    this.age += 0.01;
+    this.age += 0.01 * dt;
     if (this.reproduceCooldown > 0) {
-      this.reproduceCooldown--;
+      this.reproduceCooldown = Math.max(0, this.reproduceCooldown - dt);
     }
     
     // Life stage transitions
@@ -254,8 +255,8 @@ export class Agent {
     
     // Starvation / Dehydration resistance
     if (this.needs.food <= 0 || this.needs.water <= 0) {
-      this.starvationTicks = (this.starvationTicks || 0) + 1;
-      this.health = Math.max(0, this.health - 2);
+      this.starvationTicks = (this.starvationTicks || 0) + dt;
+      this.health = Math.max(0, this.health - 2 * dt);
       if (this.starvationTicks > 40 || this.health <= 0) {
         this.alive = false;
         this.deathCause = this.needs.food <= 0 ? "starvation" : "dehydration";
@@ -271,7 +272,7 @@ export class Agent {
       const inBattle = this.militaryDuty && this.warbandId != null &&
         this.sim?.warfareSystem?.warbands?.get(this.warbandId)?.state === 'engaging';
       if (!inBattle && this.health < this.maxHealth) {
-        this.health = Math.min(this.maxHealth, this.health + 0.5);
+        this.health = Math.min(this.maxHealth, this.health + 0.5 * dt);
       }
     }
 
@@ -279,6 +280,94 @@ export class Agent {
     // warfareSystem (needs.health) and legacy code paths (agent.health) agree.
     this.needs.health = this.health;
     if (this.combat) this.combat.health = this.health;
+  }
+
+  // Simplified macro simulation tick for distant/hinterland agents (LOD Tier 2).
+  // Advances needs, handles emergency feeding, macro movement toward home/workplace,
+  // and stockpile production contributions without expensive micro-perceptions or steering trees.
+  executeMacroTick(simulation, dt = 12, moved = null, births = null) {
+    this.updateNeeds(dt);
+    if (!this.alive) return;
+
+    // 1. Emergency self-sustenance: consume personal inventory or community stockpile
+    if (this.needs.food < 45) {
+      if ((this.inventory.bread || 0) > 0) {
+        this.inventory.bread--;
+        this.needs.food = Math.min(100, this.needs.food + 45);
+      } else if ((this.inventory.wheat || 0) > 0) {
+        this.inventory.wheat--;
+        this.needs.food = Math.min(100, this.needs.food + 25);
+      } else if (this.settlementId && simulation?.settlementSystem) {
+        const set = simulation.settlementSystem.settlements.get(this.settlementId);
+        if (set && set.stockpile && (set.stockpile.food || 0) > 0) {
+          set.stockpile.food = Math.max(0, set.stockpile.food - 1);
+          this.needs.food = Math.min(100, this.needs.food + 50);
+        }
+      }
+    }
+
+    if (this.needs.water < 45 && this.settlementId && simulation?.settlementSystem) {
+      const set = simulation.settlementSystem.settlements.get(this.settlementId);
+      if (set && set.stockpile && (set.stockpile.water || 0) > 0) {
+        set.stockpile.water = Math.max(0, set.stockpile.water - 1);
+        this.needs.water = Math.min(100, this.needs.water + 55);
+      }
+    }
+
+    // 2. Macro production contribution for rural workers
+    if (this.settlementId && simulation?.settlementSystem) {
+      const set = simulation.settlementSystem.settlements.get(this.settlementId);
+      if (set && set.stockpile) {
+        if (this.job === 'farmer' || this.job === 'gatherer') {
+          set.stockpile.food = (set.stockpile.food || 0) + 1;
+        } else if (this.job === 'lumberjack') {
+          set.stockpile.wood = (set.stockpile.wood || 0) + 1;
+        } else if (this.job === 'miner') {
+          set.stockpile.ore = (set.stockpile.ore || 0) + 1;
+        }
+      }
+    }
+
+    // 3. Simplified macro waypoint stepping toward anchor point (workplace/home/settlement)
+    let destX = this.x;
+    let destY = this.y;
+    if (this.workplace && simulation?.craftingSystem?.workshops?.has(this.workplace)) {
+      const ws = simulation.craftingSystem.workshops.get(this.workplace);
+      destX = ws.x; destY = ws.y;
+    } else if (this.settlementId && simulation?.settlementSystem) {
+      const set = simulation.settlementSystem.settlements.get(this.settlementId);
+      if (set && set.center) {
+        destX = set.center.x; destY = set.center.y;
+      }
+    }
+
+    const dx = destX - this.x;
+    const dy = destY - this.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > 2.0 && simulation.world) {
+      const step = Math.min(dist - 1.0, this.speed * dt * 0.7);
+      const nx = Math.max(1, Math.min(simulation.world.width - 2, this.x + (dx / dist) * step));
+      const ny = Math.max(1, Math.min(simulation.world.height - 2, this.y + (dy / dist) * step));
+      if (simulation.world.isWalkable(Math.floor(nx), Math.floor(ny))) {
+        this.x = nx;
+        this.y = ny;
+        if (moved) moved.push(this);
+      }
+    }
+
+    // 4. Macro reproduction in background hinterland settlements
+    const totalPop = simulation ? simulation.agents.length : 0;
+    if (totalPop < 2500 && this.lifeStage === 'adult' && this.needs.food > 75 && this.needs.water > 75 &&
+        this.reproduceCooldown <= 0 && this.partnerId && births && simulation) {
+      if ((this.id * 31 + simulation.clock.tick) % 350 === 0) {
+        const partner = simulation._agentById(this.partnerId);
+        if (partner && partner.alive && partner.reproduceCooldown <= 0) {
+          this.reproduceCooldown = 450;
+          partner.reproduceCooldown = 450;
+          births.push({ x: this.x, y: this.y, parentId1: this.id, parentId2: partner.id });
+        }
+      }
+    }
   }
 
   // Ensure the reusable perception object exists (empty; items untouched if
@@ -649,11 +738,14 @@ export class Agent {
     }
     
     // 5. Reproduction & Family Life (Adults in prime age with decent needs)
-    if (this.lifeStage === "adult" &&
+    const currentPop = simulation ? simulation.agents.length : 0;
+    const minFoodWater = currentPop > 800 ? 65 : 45;
+    if (currentPop < 2500 &&
+        this.lifeStage === "adult" &&
         this.age >= 18 && this.age <= this.maxAge - 15 && 
         (!this.reproduceCooldown || this.reproduceCooldown <= 0) &&
-        this.needs.food > 45 && this.needs.water > 45 && 
-        this.children < 5) {
+        this.needs.food > minFoodWater && this.needs.water > minFoodWater && 
+        this.children < (currentPop > 1000 ? 3 : 5)) {
       this.goals.push({ type: "reproduce", priority: 58 });
     }
     
@@ -3019,7 +3111,10 @@ export class Agent {
       combat: this.combat ? { ...this.combat } : null,
       // Religion component: faith decays incrementally per tick — without
       // persisting it, priests lose their status and faith on load.
-      religion: this.religion ? { ...this.religion } : null
+      religion: this.religion ? { ...this.religion } : null,
+      // Phase 3b Step 7: prisoner of war status
+      captive: this.captive === true,
+      prisonerOf: this.prisonerOf ?? null
     };
   }
 
@@ -3106,9 +3201,13 @@ export class Agent {
     // from an uninterrupted run within ~10 ticks). Ids absent from the
     // registry keep their coordinate snapshots — identical to the old
     // behavior, and safe for systems that only read x/y.
-    const relinkTarget = (t) => {
+    const relinkTarget = (t, goalType) => {
       if (!t || typeof t !== 'object') return t ?? null;
-      if (t.id != null && world && typeof world.getEntityById === 'function') {
+      if (goalType === 'fetch_town_water' && sim && sim.settlementSystem) {
+        const s = sim.settlementSystem.settlements.get(t.id);
+        if (s) return s;
+      }
+      if (goalType !== 'fetch_town_water' && t.id != null && world && typeof world.getEntityById === 'function') {
         const ent = world.getEntityById(t.id);
         if (ent) return ent;
       }
@@ -3121,7 +3220,7 @@ export class Agent {
     // would serialize back as deep objects and desync resume determinism.
     agent.currentAction = data.currentAction ?? null;
     agent.goals = Array.isArray(data.goals) ? data.goals.map(g => {
-      if (g && g.target) return { ...g, target: relinkTarget(g.target) };
+      if (g && g.target) return { ...g, target: relinkTarget(g.target, g.type) };
       return g;
     }) : [];
     agent.path = Array.isArray(data.path) ? data.path.map(p => ({ x: p.x, y: p.y })) : null;
@@ -3171,6 +3270,8 @@ export class Agent {
     // Religion component: faith decays incrementally per tick — without this,
     // priests lose status/faith on load and demote/promote at wrong times.
     agent.religion = data.religion ? { ...data.religion } : null;
+    agent.captive = data.captive === true;
+    agent.prisonerOf = data.prisonerOf ?? null;
     return agent;
   }
 }

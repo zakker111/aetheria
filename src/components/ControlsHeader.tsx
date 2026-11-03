@@ -18,6 +18,8 @@ interface ControlsHeaderProps {
   onToggleHelp: () => void;
   societiesOpen: boolean;
   diplomacyOpen: boolean;
+  civilizationOpen?: boolean;
+  onToggleCivilization?: () => void;
   isMuted?: boolean;
   onToggleMute?: () => void;
 }
@@ -40,6 +42,8 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
   onToggleHelp,
   societiesOpen,
   diplomacyOpen,
+  civilizationOpen = false,
+  onToggleCivilization,
   isMuted = false,
   onToggleMute,
 }) => {
@@ -139,6 +143,21 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
       >
         ⚔️ Diplomacy
       </button>
+
+      {onToggleCivilization && (
+        <button
+          style={{
+            ...buttonStyle,
+            background: civilizationOpen ? 'rgba(245, 158, 11, 0.25)' : '#1e293b',
+            borderColor: civilizationOpen ? '#f59e0b' : 'rgba(245, 158, 11, 0.4)',
+            color: '#fbbf24',
+          }}
+          onClick={onToggleCivilization}
+          title="Open Full-Screen Civilization, Dynasties & War Room (C)"
+        >
+          👑 Dynasties & War
+        </button>
+      )}
 
       <button style={buttonStyle} onClick={onSave} title="Save world state to local storage">
         💾 Save
