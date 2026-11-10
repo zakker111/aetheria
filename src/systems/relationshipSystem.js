@@ -3,6 +3,8 @@
 
 import { IDGenerator } from "../core/idGen.js";
 
+const EMPTY_FAMILY = Object.freeze({ parents: [], children: [], siblings: [], spouse: null });
+
 export class RelationshipSystem {
   constructor(sim = null) {
     this.sim = sim;
@@ -327,17 +329,9 @@ export class RelationshipSystem {
     }
   }
   
-  // Get all relatives of an agent
+  // Get all relatives of an agent (zero-allocation)
   getRelatives(agentId) {
-    const family = this.familyTrees.get(agentId);
-    if (!family) return { parents: [], children: [], siblings: [], spouse: null };
-    
-    return {
-      parents: family.parents,
-      children: family.children,
-      siblings: family.siblings,
-      spouse: family.spouse
-    };
+    return this.familyTrees.get(agentId) || EMPTY_FAMILY;
   }
   
   // Calculate compatibility between agents for romance/friendship

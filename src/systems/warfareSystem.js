@@ -338,9 +338,12 @@ export class WarfareSystem {
     // getAllNearbyEnemies() call of this tick rebuilds it.
     this._enemySnapshot = null;
 
-    // 2. Update active warbands
-    for (const warband of this.warbands.values()) {
-      if (!warband.active) continue;
+    // 2. Update active warbands and prune inactive/disbanded entries
+    for (const [wbId, warband] of this.warbands.entries()) {
+      if (!warband.active) {
+        this.warbands.delete(wbId);
+        continue;
+      }
       this.updateWarband(warband);
     }
 
@@ -471,6 +474,21 @@ export class WarfareSystem {
               }
             }
           }
+        }
+      }
+    }
+
+    // Military supplies consumption: active warband consumes home rations on campaign
+    if (this.sim.clock && (this.sim.clock.tick % 15 === 0) &&
+        (warband.state === "marching" || warband.state === "engaging" || warband.state === "sieging")) {
+      const homeSettlement = this.sim.settlementSystem?.settlements?.get(warband.settlementId);
+      if (homeSettlement && homeSettlement.stockpile) {
+        const foodCost = Math.max(1, Math.floor(warband.soldiers.length * 0.2));
+        if (homeSettlement.stockpile.food >= foodCost) {
+          homeSettlement.stockpile.food -= foodCost;
+        } else {
+          homeSettlement.stockpile.food = 0;
+          warband.morale = Math.max(20, (warband.morale ?? 100) - 2);
         }
       }
     }
@@ -674,7 +692,24 @@ export class WarfareSystem {
 
     if (defender.needs.health <= 0) {
       defender.alive = false;
-      this.sim.deathsThisSession++;
+      defender.deathCause = "combat";
+
+      // Slayer tracking & epic epithets
+      attacker.kills = (attacker.kills || 0) + 1;
+      attacker.battlesFought = (attacker.battlesFought || 0) + 1;
+      defender.battlesFought = (defender.battlesFought || 0) + 1;
+
+      if (!attacker.epithet) {
+        if (attacker.kills >= 5) {
+          attacker.epithet = "the Dreaded";
+        } else if (attacker.kills >= 3) {
+          attacker.epithet = "the Slayer";
+        } else if (attacker.kills >= 2) {
+          attacker.epithet = "the Fierce";
+        } else {
+          attacker.epithet = "the Blooded";
+        }
+      }
 
       // Step 3: war casualties leave scavengable gear behind — weapons, tools,
       // and carried goods drop as a ground loot pile via dropInventoryOnGround.
@@ -687,6 +722,7 @@ export class WarfareSystem {
       if (victimBand) victimBand.morale = Math.max(0, victimBand.morale - 6);
       
       // Record war casualty & weariness
+      let battleName = "the Front Line";
       if (this.sim.diplomacySystem) {
         const defenderSettlementId = this.sim.settlementSystem.getAgentSettlement(defender.id)?.id;
         const war = this.sim.diplomacySystem.activeWars.find(w => 
@@ -701,7 +737,11 @@ export class WarfareSystem {
           // offer "jump to front line". Deterministic (derived from sim
           // state only); saved with the war record via serialize().
           war.frontLine = { x: defender.x, y: defender.y, tick: this.sim.clock.tick };
+          const defSet = this.sim.settlementSystem.settlements.get(defenderSettlementId);
+          const attSet = this.sim.settlementSystem.settlements.get(warband.settlementId);
+          battleName = this.generateBattleName(defSet, attSet, defender.x, defender.y, war.battles.length);
           war.battles.push({
+            name: battleName,
             tick: this.sim.clock.tick,
             x: defender.x,
             y: defender.y,
@@ -709,6 +749,20 @@ export class WarfareSystem {
           });
           if (war.battles.length > 50) war.battles.splice(0, war.battles.length - 50);
         }
+      }
+
+      if (this.sim.eventBus) {
+        this.sim.eventBus.emit("COMBAT_KILL", {
+          killerId: attacker.id,
+          killerName: attacker.name,
+          killerEpithet: attacker.epithet,
+          victimId: defender.id,
+          victimName: defender.name,
+          victimSettlementId: this.sim.settlementSystem.getAgentSettlement(defender.id)?.id,
+          battleName: battleName,
+          x: defender.x,
+          y: defender.y
+        });
       }
 
       this.combatEffects.push({
@@ -776,26 +830,44 @@ export class WarfareSystem {
         });
       }
 
-      // Pillaging: raiders torch the settlement — set buildings ablaze and
-      // light the surrounding ground on fire. Fires then spread/decay via
-      // world.updateFires() in the environment tick. Deterministic.
+      // Pillaging: raiders torch the settlement — set buildings ablaze, scorch earth, and
+      // reduce damaged buildings to ruins. Fires spread/decay via world.updateFires().
       const world = this.sim.world;
       if (world.startFire) {
         let burned = 0;
         for (const b of this.sim.buildings) {
-          if (!b.complete || (b.health !== undefined && b.health <= 0)) continue;
+          if (!b.complete || b.isRuined || (b.health !== undefined && b.health <= 0)) continue;
           const d = Math.hypot(b.x - enemySettlement.center.x, b.y - enemySettlement.center.y);
-          if (d < 12 && burned < 4) {
-            b.health = (b.health ?? 100) - 40;
-            world.startFire(Math.floor(b.x), Math.floor(b.y), 70);
+          if (d < 14 && burned < 5) {
+            b.health = Math.max(0, (b.health ?? 100) - 45);
+            world.startFire(Math.floor(b.x), Math.floor(b.y), 75);
+            if (world.scorchTile) world.scorchTile(Math.floor(b.x), Math.floor(b.y), 240);
+            if (b.health <= 0) {
+              b.isRuined = true;
+              b.health = 0;
+              b.ruinedAtTick = this.sim.clock.tick;
+              if (this.sim.eventBus) {
+                this.sim.eventBus.emit("BUILDING_PILLAGED", {
+                  settlementId: enemySettlement.id,
+                  buildingId: b.id,
+                  buildingType: b.buildingType,
+                  attacker: warband.settlementName
+                });
+              }
+            }
             burned++;
           }
         }
-        // Ground fires around the center as well
+        // Ground fires and scorched earth around the center as well
         const ccx = Math.floor(enemySettlement.center.x);
         const ccy = Math.floor(enemySettlement.center.y);
-        world.startFire(ccx + 1, ccy, 50);
-        world.startFire(ccx, ccy + 1, 50);
+        world.startFire(ccx + 1, ccy, 60);
+        world.startFire(ccx, ccy + 1, 60);
+        if (world.scorchTile) {
+          world.scorchTile(ccx, ccy, 220);
+          world.scorchTile(ccx + 1, ccy, 200);
+          world.scorchTile(ccx, ccy + 1, 200);
+        }
       }
       if (this.sim.eventBus) {
         this.sim.eventBus.emit("SETTLEMENT_BURNED", {
@@ -814,6 +886,7 @@ export class WarfareSystem {
         war.weariness = war.weariness || {};
         war.weariness[enemySettlement.id] = (war.weariness[enemySettlement.id] || 0) + 18;
       }
+      const isConquest = Boolean(war?.goal === "conquest" || war?.isConquest || warband.isConquest);
 
       // Holy War temple desecration
       if (warband.isHolyWar) {
@@ -867,8 +940,65 @@ export class WarfareSystem {
         });
       }
 
-      const isConquest = (war?.casusBelli && war.casusBelli.includes("Conquest")) || defenderPop <= 3;
-      if (isConquest) {
+      if (defenderPop === 0) {
+        // Total War: entire village or city wiped out into desolate ruins!
+        enemySettlement.ruined = true;
+        enemySettlement.tier = "Ruins";
+        enemySettlement.tierIcon = "🏚️";
+        enemySettlement.status = "ruined";
+        enemySettlement.name = "Ruins of " + enemySettlement.name.replace(/^Ruins of /, "");
+        enemySettlement.abandonedTicks = 120;
+        enemySettlement.leadership = null;
+
+        // Destroy all buildings in the settlement into ruins
+        if (this.sim.buildings) {
+          for (const b of this.sim.buildings) {
+            const d = Math.hypot(b.x - enemySettlement.center.x, b.y - enemySettlement.center.y);
+            if (d <= 18) {
+              b.health = 0;
+              b.isRuined = true;
+              b.ruinedAtTick = this.sim.clock.tick;
+              if (world.scorchTile) world.scorchTile(Math.floor(b.x), Math.floor(b.y), 255);
+              if (world.startFire) world.startFire(Math.floor(b.x), Math.floor(b.y), 80);
+            }
+          }
+        }
+
+        // Remaining resources plundered & incinerated
+        if (enemySettlement.stockpile) {
+          enemySettlement.stockpile.food = 0;
+          enemySettlement.stockpile.wood = 0;
+          enemySettlement.stockpile.ore = 0;
+        }
+
+        // Scorch the entire settlement ground
+        const ccx = Math.floor(enemySettlement.center.x);
+        const ccy = Math.floor(enemySettlement.center.y);
+        for (let dy = -6; dy <= 6; dy++) {
+          for (let dx = -6; dx <= 6; dx++) {
+            if (dx * dx + dy * dy <= 36 && world.scorchTile) {
+              world.scorchTile(ccx + dx, ccy + dy, 200);
+            }
+          }
+        }
+
+        if (this.sim.eventBus) {
+          this.sim.eventBus.emit("SETTLEMENT_RAZED", {
+            settlementId: enemySettlement.id,
+            name: enemySettlement.name,
+            razer: warband.settlementName
+          });
+        }
+        if (this.sim.chronicleSystem?.addEntry) {
+          this.sim.chronicleSystem.addEntry(
+            "SETTLEMENT_RAZED",
+            `🔥 The city of ${enemySettlement.name} was wiped out and razed to ruins by ${warband.settlementName}! Its citizens have fallen and only smoking ruins and scorched earth remain.`
+          );
+        }
+        if (this.sim.diplomacySystem) {
+          this.sim.diplomacySystem.signPeace(warband.settlementId, enemySettlement.id, warband.settlementId, this.sim.clock.tick, "Total Annihilation & City Razed");
+        }
+      } else if (isConquest) {
         this.annexSettlement(warband.settlementId, enemySettlement.id);
         if (this.sim.diplomacySystem) {
           this.sim.diplomacySystem.signPeace(warband.settlementId, enemySettlement.id, warband.settlementId, this.sim.clock.tick, "Conquest & Annexation");
@@ -1051,4 +1181,17 @@ export class WarfareSystem {
     out.sort((p, q) => (pos.get(p.id) ?? 0) - (pos.get(q.id) ?? 0));
     return out;
   }
+
+  generateBattleName(setA, setB, x, y, index = 0) {
+    const nameA = setA?.name || "The Frontier";
+    const nameB = setB?.name || "The Border";
+    const prefixes = ["Battle of", "Clash of", "The Slaughter at", "Siege of", "Assault upon", "The Bloodied Stand at", "The Field of"];
+    const terrains = ["Ridge", "Hills", "Fields", "Gates", "Crossing", "Plains", "Ford", "Valley", "Redoubt"];
+    const hash = Math.abs((Math.floor(x) * 31 + Math.floor(y) * 17 + index * 13) | 0);
+    const prefix = prefixes[hash % prefixes.length];
+    const terrain = terrains[(hash >> 2) % terrains.length];
+    const chosenName = (hash % 2 === 0) ? nameA : nameB;
+    return `${prefix} ${chosenName} ${terrain}`;
+  }
 }
+

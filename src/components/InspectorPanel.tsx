@@ -115,7 +115,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
         }}
       >
         <span>
-          {data.kind === 'agent' && `👤 Citizen: ${e.name}`}
+          {data.kind === 'agent' && `👤 Citizen: ${e.name}${e.epithet ? ` "${e.epithet}"` : ''}`}
           {data.kind === 'settlement' && `${e.tierIcon || '🏡'} ${e.name} (${e.tier || 'Village'})`}
           {data.kind === 'building' && `🏛️ Building: ${e.buildingType || e.type}`}
           {data.kind === 'resource' &&
@@ -156,20 +156,24 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   fontWeight: 600,
                   textTransform: 'uppercase',
                   background:
-                    e.lifeStage === 'elder'
-                      ? '#7c2d12'
-                      : e.lifeStage === 'child'
-                        ? '#0369a1'
-                        : '#15803d',
+                    e.alive === false
+                      ? '#450a0a'
+                      : e.lifeStage === 'elder'
+                        ? '#7c2d12'
+                        : e.lifeStage === 'child'
+                          ? '#0369a1'
+                          : '#15803d',
                   color:
-                    e.lifeStage === 'elder'
-                      ? '#fed7aa'
-                      : e.lifeStage === 'child'
-                        ? '#bae6fd'
-                        : '#bbf7d0',
+                    e.alive === false
+                      ? '#fca5a5'
+                      : e.lifeStage === 'elder'
+                        ? '#fed7aa'
+                        : e.lifeStage === 'child'
+                          ? '#bae6fd'
+                          : '#bbf7d0',
                 }}
               >
-                {e.lifeStage} (Age {Math.floor(e.age)})
+                {e.alive === false ? `Deceased (${e.deathCause === 'combat' ? 'Fallen in Battle' : (e.deathCause || 'Natural')})` : `${e.lifeStage} (Age ${Math.floor(e.age)})`}
               </span>
               <span style={{ color: '#fbbf24', fontWeight: 600 }}>Job: {e.job || 'Civilian'}</span>
             </div>
@@ -201,6 +205,11 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 🎒 Inventory: 🌲 {e.inventory?.wood_log || 0} | ⛏️ {e.inventory?.ore_iron || 0} | 🌾{' '}
                 {e.inventory?.wheat || 0}
               </div>
+              {(e.kills > 0 || e.battlesFought > 0 || e.militaryDuty) && (
+                <div style={{ marginTop: '4px', color: '#f87171', fontWeight: 600 }}>
+                  ⚔️ Warfare: {e.kills || 0} Kills | 🛡️ {e.battlesFought || 0} Battles {e.wounded ? ' | 🩸 Wounded' : ''}
+                </div>
+              )}
               <div style={{ marginTop: '4px', fontWeight: 600, color: '#38bdf8' }}>
                 🧠{' '}
                 {actionDescriptions[e.currentAction?.type] ||
@@ -415,7 +424,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
         {data.kind === 'resource' && (
           <div>
-            <div style={{ marginBottom: '8px' }}>
+            <div style={{ marginBottom: '8px', display: 'flex', gap: '6px', alignItems: 'center' }}>
               <span
                 style={{
                   display: 'inline-block',
@@ -424,19 +433,33 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   fontSize: '10px',
                   fontWeight: 600,
                   textTransform: 'uppercase',
-                  background: '#15803d',
-                  color: '#bbf7d0',
+                  background: (e.depleted || (e.amount || 0) <= 0) ? '#7f1d1d' : '#15803d',
+                  color: (e.depleted || (e.amount || 0) <= 0) ? '#fecaca' : '#bbf7d0',
                 }}
               >
-                {e.resourceType?.toUpperCase()} DEPOSIT
+                {(e.depleted || (e.amount || 0) <= 0) ? 'DEPLETED' : `${e.resourceType?.toUpperCase()} DEPOSIT`}
               </span>
+              {e.label && (
+                <span style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>
+                  {e.label}
+                </span>
+              )}
             </div>
-            {renderNeedBar('Harvestable Reserve', ((e.amount || 0) / (e.maxAmount || 40)) * 100)}
+            {renderNeedBar(
+              `Harvestable Reserve (${Math.round(e.amount || 0)} / ${e.maxAmount || 40})`,
+              ((e.amount || 0) / (e.maxAmount || 40)) * 100
+            )}
             <div style={{ marginTop: '8px', fontSize: '11px', color: '#cbd5e1', lineHeight: 1.6 }}>
               <div>
                 📍 Location: ({Math.floor(e.x)}, {Math.floor(e.y)})
               </div>
-              <div>🌱 Regrowth: Natural ecological replenishment</div>
+              {(e.depleted || (e.amount || 0) <= 0) ? (
+                <div style={{ color: '#f59e0b', fontWeight: 500 }}>
+                  ⏳ Ecological Recovery: Regrowing in {e.recoveryTicks || 0} ticks
+                </div>
+              ) : (
+                <div>🌱 Regrowth: Natural ecological replenishment</div>
+              )}
             </div>
           </div>
         )}

@@ -103,3 +103,14 @@ Every core subsystem should support a small headless test scenario with no rende
 - a settlement emerges;
 - a god action changes terrain;
 - witnesses remember it.
+
+## Spatial LOD & Continuous Sub-Frame Interpolation
+To scale to thousands of living agents while preserving visual smoothness:
+- **Three-Tier Spatial LOD**:
+  - *Tier 0 (Focus)*: Agents within or adjacent to the camera viewport update every tick with full micro-steering, pathing, and collision.
+  - *Tier 1 (Periphery)*: Agents in the near buffer update once every 3 ticks (`(agent.id + tick) % 3 === 0`).
+  - *Tier 2 (Macro)*: Far wilderness wanderers update once every 12 ticks with lightweight vector progression and background needs consumption.
+- **Continuous Coordinate Smoothing**:
+  - The renderer decouples from the 350ms simulation tick rate using velocity-aware linear glide and exponential smoothing on `_rx`, `_ry`.
+  - In-place coordinate buffers (`entity._renderCoords`) eliminate per-frame object allocation, guaranteeing 60FPS fluid motion with zero GC pauses.
+

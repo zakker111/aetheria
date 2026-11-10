@@ -114,9 +114,27 @@ export class ChronicleSystem {
     bus.on('SETTLEMENT_BURNED', (d) => {
       this.add('fire', `${d.defenderName || 'A town'} was set ablaze by ${d.attackerName || 'raiders'}. Flames spread across the rooftops.`);
     });
+    bus.on('SETTLEMENT_RAZED', (d) => {
+      this.add('ruin', `🔥 The city of ${d.name || 'a settlement'} was utterly razed to ruins by ${d.razer || 'conquerors'}. Only ashes and scorched earth remain.`);
+    });
+    bus.on('BUILDING_PILLAGED', (d) => {
+      this.add('ruin', `A ${d.buildingType || 'building'} was battered and pillaged by ${d.attacker || 'invaders'}, leaving behind broken ruins.`);
+    });
     // Phase 3b Step 3: combat-depth chronicle entries (rout / wounds).
     bus.on('WARBAND_ROUTED', (d) => {
       this.add('war', `🏳️ ${d.settlementName || 'A warband'} broke and routed from the field.`);
+    });
+    bus.on('COMBAT_KILL', (d) => {
+      const killerStr = d.killerName ? `${d.killerName}${d.killerEpithet ? ` "${d.killerEpithet}"` : ''}` : 'A warrior';
+      const victimStr = d.victimName || 'an enemy';
+      const locus = d.battleName ? `in the ${d.battleName}` : 'in mortal combat';
+      this.add('war', `⚔️ ${killerStr} struck down ${victimStr} ${locus}.`, {
+        icon: '⚔️',
+        killerId: d.killerId,
+        victimId: d.victimId,
+        x: d.x,
+        y: d.y
+      });
     });
     bus.on('SOLDIER_WOUNDED', () => {
       // Wounds are common — record them in aggregate only, so the chronicle

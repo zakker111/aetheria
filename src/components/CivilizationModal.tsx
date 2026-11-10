@@ -106,12 +106,20 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
             >
               Imperial Chancellery & Realm Chronicles
             </h1>
-            <div style={{ fontSize: '12px', color: '#94a3b8', display: 'flex', gap: '8px' }}>
+            <div style={{ fontSize: '12px', color: '#94a3b8', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               <span>{settlements.length} Sovereign Settlements</span>
               <span aria-hidden="true">·</span>
               <span>{dynasties.length} Ruling Dynasties</span>
               <span aria-hidden="true">·</span>
               <span>{wars.length} Active Wars</span>
+              {sim.mortalityStats && sim.mortalityStats.totalDeaths > 0 && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span style={{ color: '#cbd5e1' }}>
+                    💀 Avg Death Age: <strong style={{ color: '#fbbf24' }}>{sim.mortalityStats.averageAgeAtDeath.toFixed(1)}y</strong> ({sim.mortalityStats.totalDeaths} deaths)
+                  </span>
+                </>
+              )}
             </div>
           </div>
         </div>

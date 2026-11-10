@@ -31,10 +31,13 @@ export class WorldState {
     this.footTraffic = new Uint16Array(width * height);
     // Persistent fire ground layer: per-tile remaining burn ticks (0 = no fire)
     this.fireTiles = new Uint16Array(width * height);
+    // Scorched earth layer: per-tile charring intensity (0 = pristine, 255 = charred ash)
+    this.scorchedTiles = new Uint8Array(width * height);
     this.bridgeTiles = new Uint8Array(width * height); // 1 = bridge deck (walkable over water)
 
     // Spatial index for fast queries (doc 02: spatial indexes)
     this.spatialIndex = new Map();
+    this.spatialGrid = new Array(width * height);
     // Shared per-tick perception scan cache (see _getScan). Never serialized;
     // always empty at tick boundaries because updateAgents() clears it.
     // Perf: epoch-stamped instead of clear-on-mutate. Mutating the spatial
@@ -533,9 +536,25 @@ export class WorldState {
     if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
     const idx = y * this.width + x;
     this.fireTiles[idx] = Math.max(this.fireTiles[idx], duration);
+    if (this.scorchedTiles) {
+      this.scorchedTiles[idx] = Math.min(255, (this.scorchedTiles[idx] || 0) + 120);
+    }
     // Perf: wake the fire tick loop in Simulation.updateEnvironment()
     if (this.simulation) this.simulation._fireActive = true;
     return true;
+  }
+
+  isScorched(x, y) {
+    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
+    return this.scorchedTiles ? this.scorchedTiles[y * this.width + x] > 0 : false;
+  }
+
+  scorchTile(x, y, amount = 100) {
+    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return;
+    const idx = y * this.width + x;
+    if (this.scorchedTiles) {
+      this.scorchedTiles[idx] = Math.min(255, (this.scorchedTiles[idx] || 0) + amount);
+    }
   }
 
   /**
@@ -547,6 +566,7 @@ export class WorldState {
   updateFires(tick) {
     const w = this.width, h = this.height;
     const ft = this.fireTiles;
+    const st = this.scorchedTiles;
     let burning = 0;
     // Perf: reuse scratch buffers instead of allocating arrays/objects per tick.
     if (!this._fireScratch || this._fireScratchCap !== ft.length) {
@@ -556,6 +576,7 @@ export class WorldState {
     const cand = this._fireScratch;
     let candCount = 0;
     const spread = (tick & 1) === 0; // spread every other tick to slow propagation
+    const weatherTick = (tick & 31) === 0;
     // Global cap so fires creep instead of consuming the map / tanking perf.
     const MAX_BURNING = 512;
     for (let y = 0; y < h; y++) {
@@ -563,9 +584,17 @@ export class WorldState {
       for (let x = 0; x < w; x++) {
         const idx = row + x;
         const burn = ft[idx];
-        if (burn <= 0) continue;
+        if (burn <= 0) {
+          if (weatherTick && st && st[idx] > 0) {
+            st[idx]--;
+          }
+          continue;
+        }
         burning++;
         ft[idx] = burn - 1;
+        if (st) {
+          st[idx] = Math.min(255, st[idx] + 2);
+        }
         if (spread && burning < MAX_BURNING) {
           // Inline 4-neighbor check (no array-of-pairs allocation)
           if (x > 0) {
@@ -601,7 +630,11 @@ export class WorldState {
     }
     for (let i = 0; i < candCount && burning < MAX_BURNING; i++) {
       const nidx = cand[i];
-      if (ft[nidx] <= 0) { ft[nidx] = 40; burning++; } // fresh flame, shorter life than source
+      if (ft[nidx] <= 0) {
+        ft[nidx] = 40;
+        if (st) st[nidx] = Math.min(255, (st[nidx] || 0) + 90);
+        burning++;
+      }
     }
     return burning;
   }
@@ -675,26 +708,34 @@ export class WorldState {
   // floors was harmless but moveToward's per-step remove/add pair made
   // spatial maintenance ~3% of total CPU.)
   addToSpatialIndex(x, y, entity) {
-    const key = this._cellKey(Math.floor(x), Math.floor(y));
-    let cell = this.spatialIndex.get(key);
+    const fx = Math.floor(x);
+    const fy = Math.floor(y);
+    if (fx < 0 || fy < 0 || fx >= this.width || fy >= this.height) return;
+    const key = fy * this.width + fx;
+    let cell = this.spatialGrid[key];
     if (!cell) {
       cell = [];
+      this.spatialGrid[key] = cell;
       this.spatialIndex.set(key, cell);
     }
     cell.push(entity);
+    cell._sorted = false;
     // Track registration cell so updateMovedAgents() can relocate the entry
     // without scanning. Must stay in sync with every add/remove path.
     if (entity) {
-      entity._sx = Math.floor(x);
-      entity._sy = Math.floor(y);
+      entity._sx = fx;
+      entity._sy = fy;
     }
     // Scan cache holds raw cell lists — any mutation invalidates it all.
     this.invalidateScanCache();
   }
 
   removeFromSpatialIndex(x, y, entity) {
-    const key = this._cellKey(Math.floor(x), Math.floor(y));
-    const cell = this.spatialIndex.get(key);
+    const fx = Math.floor(x);
+    const fy = Math.floor(y);
+    if (fx < 0 || fy < 0 || fx >= this.width || fy >= this.height) return;
+    const key = fy * this.width + fx;
+    const cell = this.spatialGrid[key];
     if (!cell) return;
     const idx = cell.indexOf(entity);
     if (idx >= 0) {
@@ -704,7 +745,10 @@ export class WorldState {
       cell.splice(idx, 1);
       cell._sorted = false; // conservative: removal invalidates stamped order
     }
-    if (cell.length === 0) this.spatialIndex.delete(key);
+    if (cell.length === 0) {
+      this.spatialGrid[key] = undefined;
+      this.spatialIndex.delete(key);
+    }
     if (entity) {
       entity._sx = undefined;
       entity._sy = undefined;
@@ -745,6 +789,7 @@ export class WorldState {
   // this corrects stale cells and prunes dead/removed entities.
   rebuildSpatialIndex(agents, resources, buildings, animals = []) {
     this.spatialIndex.clear();
+    this.spatialGrid.fill(undefined);
     for (const agent of agents) {
       if (agent.alive !== false) this.addToSpatialIndex(Math.floor(agent.x), Math.floor(agent.y), agent);
     }
@@ -763,8 +808,9 @@ export class WorldState {
   }
 
   getEntitiesAt(x, y) {
-    const cell = this.spatialIndex.get(this._cellKey(x, y));
-    if (!cell) return EMPTY_CELL;
+    if (x < 0 || y < 0 || x >= this.width || y >= this.height) return EMPTY_CELL;
+    const cell = this.spatialGrid[y * this.width + x];
+    if (!cell || cell.length === 0) return EMPTY_CELL;
     // Determinism: the index is maintained incrementally (swap-remove in
     // removeFromSpatialIndex, batch relocation in updateMovedAgents), so cell
     // insertion order can differ between a fresh run and a save/load resume.
@@ -786,13 +832,22 @@ export class WorldState {
     const minX = Math.max(0, x - r), maxX = Math.min(this.width - 1, x + r);
     const minY = Math.max(0, y - r), maxY = Math.min(this.height - 1, y + r);
     const rSq = radius * radius;
+    const w = this.width;
+    const grid = this.spatialGrid;
     for (let cy = minY; cy <= maxY; cy++) {
       const dy = cy - y;
+      const rowOffset = cy * w;
       for (let cx = minX; cx <= maxX; cx++) {
         const dx = cx - x;
         if (dx * dx + dy * dy > rSq) continue;
-        const cell = this.getEntitiesAt(cx, cy); // canonical id order per cell
-        if (cell !== EMPTY_CELL) for (const e of cell) entities.push(e);
+        const cell = grid[rowOffset + cx];
+        if (cell && cell.length > 0) {
+          if (cell.length > 1 && !cell._sorted) {
+            cell.sort((a, b) => a.id - b.id);
+            cell._sorted = true;
+          }
+          for (let i = 0; i < cell.length; i++) entities.push(cell[i]);
+        }
       }
     }
     return entities;
@@ -813,7 +868,7 @@ export class WorldState {
   //  * Results are bit-identical to a fresh getEntitiesNear() call: same
   //    cells, same insertion order, no RNG involved. Determinism preserved.
   _getScan(x, y, r) {
-    const key = x + ',' + y + ',' + r;
+    const key = ((y * this.width + x) << 6) | (r & 63);
     let pair = this._scanCache.get(key);
     if (pair !== undefined) return pair;
     const list = this.getEntitiesNear(x, y, r);
@@ -859,6 +914,7 @@ export class WorldState {
       roadTiles: Array.from(this.roadTiles),
       footTraffic: Array.from(this.footTraffic),
       fireTiles: Array.from(this.fireTiles),
+      scorchedTiles: Array.from(this.scorchedTiles),
       bridgeTiles: Array.from(this.bridgeTiles)
     };
   }
@@ -882,6 +938,7 @@ export class WorldState {
     world.roadTiles = new Uint8Array(data.roadTiles || new Uint8Array(data.width * data.height));
     world.footTraffic = new Uint16Array(data.footTraffic || new Uint16Array(data.width * data.height));
     world.fireTiles = new Uint16Array(data.fireTiles || new Uint16Array(data.width * data.height));
+    world.scorchedTiles = new Uint8Array(data.scorchedTiles || new Uint8Array(data.width * data.height));
     world.bridgeTiles = new Uint8Array(data.bridgeTiles || new Uint8Array(data.width * data.height));
     return world;
   }

@@ -16,6 +16,10 @@ export class Building {
     // ore/water they can keep — warehouses expand this (see STORAGE_CAPACITY).
     this.capacity = 0;
     this.health = 100;
+    this.maxHealth = 100;
+    this.isRuined = false;
+    this.ruinedAtTick = null;
+    this.originalType = buildingType;
     // Apply storage capacity for the building type (drives warehouse demand)
     const cap = STORAGE_CAPACITY[buildingType];
     if (cap) this.capacity = cap;
@@ -39,14 +43,18 @@ export class Building {
       x: this.x,
       y: this.y,
       buildingType: this.buildingType,
+      originalType: this.originalType || this.buildingType,
       constructionProgress: this.constructionProgress,
       complete: this.complete,
       isComplete: this.isComplete ?? (this.complete || (this.constructionProgress >= 100)),
+      isRuined: Boolean(this.isRuined || (this.health !== undefined && this.health <= 0)),
+      ruinedAtTick: this.ruinedAtTick,
       ownerId: this.ownerId,
       settlementId: this.settlementId,
       factionId: this.factionId,
       capacity: this.capacity,
       health: this.health,
+      maxHealth: this.maxHealth || 100,
       storage: { ...this.storage }
     };
   }
@@ -56,12 +64,16 @@ export class Building {
     const building = new Building(data.x, data.y, data.buildingType, { next: () => -1 },
       data.settlementId ?? null, data.factionId ?? null);
     building.id = data.id;
+    building.originalType = data.originalType || data.buildingType;
     building.constructionProgress = data.constructionProgress;
     building.complete = data.complete;
     building.isComplete = data.isComplete ?? (data.complete || (data.constructionProgress >= 100));
+    building.isRuined = Boolean(data.isRuined || (data.health !== undefined && data.health <= 0));
+    building.ruinedAtTick = data.ruinedAtTick ?? null;
     building.ownerId = data.ownerId;
     if (data.capacity != null) building.capacity = data.capacity;
     if (data.health != null) building.health = data.health;
+    if (data.maxHealth != null) building.maxHealth = data.maxHealth;
     building.storage = { ...data.storage };
     return building;
   }

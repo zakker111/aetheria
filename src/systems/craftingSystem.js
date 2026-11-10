@@ -298,7 +298,7 @@ class CraftingSystem {
         if (!sim || !Array.isArray(sim.buildings)) return;
         const seen = new Set();
         for (const b of sim.buildings) {
-            if (b.buildingType !== 'workshop' || !b.complete) continue;
+            if (b.buildingType !== 'workshop' || !b.complete || b.isRuined) continue;
             const key = CraftingSystem.buildingKey(b);
             seen.add(key);
             if (this.workshops.has(key)) continue;

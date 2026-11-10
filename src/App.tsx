@@ -49,6 +49,7 @@ export const App: React.FC = () => {
   const [agentCount, setAgentCount] = useState(0);
   const [births, setBirths] = useState(0);
   const [deaths, setDeaths] = useState(0);
+  const [avgDeathAge, setAvgDeathAge] = useState(0);
   const [lodStats, setLodStats] = useState<{ tier0: number; tier1: number; tier2: number; avgTickMs: number } | null>(null);
   const [resources, setResources] = useState<ResourceSummary>({
     food: 0,
@@ -59,12 +60,17 @@ export const App: React.FC = () => {
   });
 
   const [societies, setSocieties] = useState<SettlementSummary[]>([]);
+  const [societiesCount, setSocietiesCount] = useState(0);
   const [wars, setWars] = useState<WarSummary[]>([]);
   const [treaties, setTreaties] = useState<TreatySummary[]>([]);
   const [relations, setRelations] = useState<RelationSummary[]>([]);
 
   const [societiesOpen, setSocietiesOpen] = useState(true);
   const [diplomacyOpen, setDiplomacyOpen] = useState(false);
+  const societiesOpenRef = useRef(societiesOpen);
+  societiesOpenRef.current = societiesOpen;
+  const diplomacyOpenRef = useRef(diplomacyOpen);
+  diplomacyOpenRef.current = diplomacyOpen;
   const [civilizationOpen, setCivilizationOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [currentWeather, setCurrentWeather] = useState<{
@@ -124,9 +130,7 @@ export const App: React.FC = () => {
     setRendererInstance(renderer);
 
     if (sim.agents.length > 0) {
-      renderer.camera.x = sim.agents[0].x;
-      renderer.camera.y = sim.agents[0].y;
-      renderer.camera.zoom = 14;
+      renderer.centerOn(sim.agents[0].x, sim.agents[0].y, 14, true);
     }
 
     // Set initial tool
@@ -245,6 +249,7 @@ export const App: React.FC = () => {
         setAgentCount(sim.agents.length);
         setBirths(sim.birthsThisSession || 0);
         setDeaths(sim.deathsThisSession || 0);
+        setAvgDeathAge(sim.mortalityStats?.averageAgeAtDeath || 0);
         setSpeed(sim.clock.speed);
         setIsPaused(sim.clock.speed === 0);
 
@@ -300,34 +305,39 @@ export const App: React.FC = () => {
         // Settlements
         const settlementMap = sim.settlementSystem?.settlements;
         if (settlementMap) {
-          const sArr: SettlementSummary[] = [];
-          for (const s of settlementMap.values()) {
-            sArr.push({
-              id: s.id,
-              name: s.name,
-              tier: s.tier || 'Village',
-              tierIcon: s.tierIcon || '🏡',
-              population: s.population || (s.agentIds ? s.agentIds.size : 0),
-              center: { x: s.center?.x || 0, y: s.center?.y || 0 },
-              stockpile: {
-                food: s.stockpile?.food || 0,
-                wood: s.stockpile?.wood || 0,
-                ore: s.stockpile?.ore || 0,
-                stone: s.stockpile?.stone || 0,
-              },
-              leadership: s.leadership,
-              leadershipTitle: s.leadershipTitle,
-              buildingsCount: s.buildings ? s.buildings.length : 0,
-              age: sim.civilizationAgeSystem?.getSettlementAgeSummary(s.id),
-              culture: s.culture,
-              growthTrend: s.growthTrend,
-            });
-          }
-          setSocieties(sArr);
+          const sCount = settlementMap.size;
+          setSocietiesCount((prev) => (prev === sCount ? prev : sCount));
 
-          // Diplomacy data
+          if (societiesOpenRef.current) {
+            const sArr: SettlementSummary[] = [];
+            for (const s of settlementMap.values()) {
+              sArr.push({
+                id: s.id,
+                name: s.name,
+                tier: s.tier || 'Village',
+                tierIcon: s.tierIcon || '🏡',
+                population: s.population || (s.agentIds ? s.agentIds.size : 0),
+                center: { x: s.center?.x || 0, y: s.center?.y || 0 },
+                stockpile: {
+                  food: s.stockpile?.food || 0,
+                  wood: s.stockpile?.wood || 0,
+                  ore: s.stockpile?.ore || 0,
+                  stone: s.stockpile?.stone || 0,
+                },
+                leadership: s.leadership,
+                leadershipTitle: s.leadershipTitle,
+                buildingsCount: s.buildings ? s.buildings.length : 0,
+                age: sim.civilizationAgeSystem?.getSettlementAgeSummary(s.id),
+                culture: s.culture,
+                growthTrend: s.growthTrend,
+              });
+            }
+            setSocieties(sArr);
+          }
+
+          // Diplomacy data — only compute when the panel is actually opened
           const diplomacy = sim.diplomacySystem;
-          if (diplomacy) {
+          if (diplomacy && diplomacyOpenRef.current) {
             setWars(
               (diplomacy.activeWars || []).map((w: any) => ({
                 attackerId: w.attackerId,
@@ -714,8 +724,9 @@ export const App: React.FC = () => {
           agentCount={agentCount}
           births={births}
           deaths={deaths}
+          avgDeathAge={avgDeathAge}
           resources={resources}
-          societiesCount={societies.length}
+          societiesCount={societiesCount || societies.length}
           speed={speed}
           is25D={is25D}
           weather={currentWeather || undefined}

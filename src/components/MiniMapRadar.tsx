@@ -124,7 +124,20 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
         ctx.drawImage(tCanvas, 0, 0);
       }
 
-      // 2. Burning Fires overlay
+      // 2a. Scorched Earth overlay
+      if (world.scorchedTiles) {
+        ctx.fillStyle = 'rgba(28, 25, 23, 0.75)';
+        for (let y = 0; y < H; y += 2) {
+          for (let x = 0; x < W; x += 2) {
+            const idx = y * W + x;
+            if (world.scorchedTiles[idx] > 0) {
+              ctx.fillRect(x * scaleX, y * scaleY, scaleX * 2, scaleY * 2);
+            }
+          }
+        }
+      }
+
+      // 2b. Burning Fires overlay
       if (world.fireTiles) {
         ctx.fillStyle = '#f97316';
         for (let y = 0; y < H; y += 2) {

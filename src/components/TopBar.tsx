@@ -7,6 +7,7 @@ interface TopBarProps {
   agentCount: number;
   births: number;
   deaths: number;
+  avgDeathAge?: number;
   resources: ResourceSummary;
   societiesCount: number;
   speed: number;
@@ -21,6 +22,7 @@ const TopBarComponent: React.FC<TopBarProps> = ({
   agentCount,
   births,
   deaths,
+  avgDeathAge,
   resources,
   societiesCount,
   speed,
@@ -130,6 +132,11 @@ const TopBarComponent: React.FC<TopBarProps> = ({
           <span style={{ fontWeight: 600 }}>
             <span style={{ color: '#22c55e' }}>{births}</span> /{' '}
             <span style={{ color: '#f43f5e' }}>{deaths}</span>
+            {avgDeathAge !== undefined && avgDeathAge > 0 ? (
+              <span style={{ color: '#94a3b8', fontSize: '11px', marginLeft: '4px' }} title="Average age at death">
+                (avg {avgDeathAge.toFixed(1)}y)
+              </span>
+            ) : null}
           </span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>

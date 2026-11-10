@@ -12,7 +12,7 @@ export class EventBus {
     }
     this.listeners = new Map();
     this.history = [];
-    this.maxHistory = 500; // cap to prevent unbounded memory growth
+    this.maxHistory = 50; // Lean ring buffer prevents memory bloat
     if (!options.isolated) {
       instance = this;
     }
@@ -41,13 +41,19 @@ export class EventBus {
 
   emit(eventType, data = {}) {
     const event = { type: eventType, ...data, timestamp: Date.now() };
-    this.history.push(event);
-    if (this.history.length > this.maxHistory) {
-      this.history.splice(0, this.history.length - this.maxHistory);
+    if (this.maxHistory > 0) {
+      this.history.push(event);
+      if (this.history.length > this.maxHistory) {
+        this.history.splice(0, this.history.length - this.maxHistory);
+      }
     }
     
-    const callbacks = this.listeners.get(eventType) || [];
-    callbacks.forEach(cb => cb(event));
+    const callbacks = this.listeners.get(eventType);
+    if (callbacks && callbacks.length > 0) {
+      for (let i = 0; i < callbacks.length; i++) {
+        callbacks[i](event);
+      }
+    }
   }
 
   getHistory() {

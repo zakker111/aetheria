@@ -146,14 +146,12 @@ export class ReligionSystem {
         if (!agent.religion) this.initReligionEntity(agent);
         if (agent.religion.isPriest) return;
         
-        // Priest requirements
-        const hasTemple = this.hasNearbyTemple(agent);
-        const highFaith = agent.religion.faith >= 80;
-        // Agent personality stores social as 0..1 (no charisma field existed -> priests never emerged)
-        const highCharisma = (agent.personality.social ?? 0) >= 0.7;
-        const idle = !agent.currentJob || agent.job === JOB_TYPES.IDLE;
+        // Fast-fail priest requirements before expensive spatial building scan
+        if (agent.religion.faith < 80) return;
+        if ((agent.personality.social ?? 0) < 0.7) return;
+        if (agent.currentJob && agent.job !== JOB_TYPES.IDLE) return;
         
-        if (hasTemple && highFaith && highCharisma && idle) {
+        if (this.hasNearbyTemple(agent)) {
             this.promoteToPriest(agent);
         }
     }
@@ -226,6 +224,16 @@ export class ReligionSystem {
      * Update faith levels for all agents
      */
     updateFaith() {
+        const buildings = this.worldState.buildings || [];
+        const temples = [];
+        for (let i = 0; i < buildings.length; i++) {
+            const b = buildings[i];
+            if (b.buildingType === 'temple' && b.isComplete) {
+                temples.push(b);
+            }
+        }
+        const hasTemples = temples.length > 0;
+
         for (const agent of (this.worldState.agents || [])) {
             if (agent.dead) continue;
             
@@ -234,12 +242,16 @@ export class ReligionSystem {
             // Natural faith decay
             agent.religion.faith -= this.faithDecayRate;
             
-            // Bonus if near temple
-            const temple = this.getNearestTemple(agent);
-            if (temple) {
-                const dist = distance(agent.x, agent.y, temple.x, temple.y);
-                if (dist <= 5) {
-                    agent.religion.faith += 0.1; // Temple bonus
+            // Bonus if near temple (squared distance check, no square roots)
+            if (hasTemples) {
+                for (let i = 0; i < temples.length; i++) {
+                    const t = temples[i];
+                    const dx = agent.x - t.x;
+                    const dy = agent.y - t.y;
+                    if (dx * dx + dy * dy <= 25) { // dist <= 5
+                        agent.religion.faith += 0.1; // Temple bonus
+                        break;
+                    }
                 }
             }
             

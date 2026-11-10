@@ -16,10 +16,15 @@ export class CanvasRenderer {
     this.simulation = simulation;
     
     // Camera state
+    const initX = world ? world.width / 2 : 64;
+    const initY = world ? world.height / 2 : 64;
     this.camera = {
-      x: world ? world.width / 2 : 64,
-      y: world ? world.height / 2 : 64,
+      x: initX,
+      y: initY,
+      targetX: initX,
+      targetY: initY,
       zoom: 12,
+      targetZoom: 12,
       is25D: true,        // 2.5D Isometric Mode enabled by default!
       heightScale: 0.38,  // Vertical terrain elevation accentuation factor
       tilt: 0.52          // Isometric tilt ratio (y compression)
@@ -167,6 +172,8 @@ export class CanvasRenderer {
         // Clamp camera center to world margins
         this.camera.x = Math.max(-5, Math.min(this.world.width + 5, this.camera.x));
         this.camera.y = Math.max(-5, Math.min(this.world.height + 5, this.camera.y));
+        this.camera.targetX = this.camera.x;
+        this.camera.targetY = this.camera.y;
         lastX = e.clientX;
         lastY = e.clientY;
       }
@@ -181,12 +188,12 @@ export class CanvasRenderer {
       isDragging = false;
     });
     
-    // Zoom with wheel
+    // Smooth zoom with wheel
     this.canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
       const zoomFactor = e.deltaY > 0 ? 0.88 : 1.14;
-      this.camera.zoom *= zoomFactor;
-      this.camera.zoom = Math.max(3.5, Math.min(36, this.camera.zoom));
+      const baseZoom = this.camera.targetZoom ?? this.camera.zoom;
+      this.camera.targetZoom = Math.max(3.5, Math.min(36, baseZoom * zoomFactor));
     }, { passive: false });
     
     // Click to use god powers or inspect
@@ -269,6 +276,8 @@ export class CanvasRenderer {
 
         this.camera.x = Math.max(-5, Math.min(this.world.width + 5, this.camera.x));
         this.camera.y = Math.max(-5, Math.min(this.world.height + 5, this.camera.y));
+        this.camera.targetX = this.camera.x;
+        this.camera.targetY = this.camera.y;
         lastX = cx;
         lastY = cy;
       }
@@ -373,6 +382,33 @@ export class CanvasRenderer {
   }
 
   /**
+   * Fast, zero-allocation coordinate projection for high-frequency render loops.
+   */
+  worldToScreenFast(worldX, worldY, worldZ, out) {
+    const centerX = this.canvas.width * 0.5;
+    const centerY = this.canvas.height * 0.5;
+
+    if (!this.camera.is25D) {
+      out.x = centerX + (worldX - this.camera.x) * this.camera.zoom;
+      out.y = centerY + (worldY - this.camera.y) * this.camera.zoom;
+      return out;
+    }
+
+    const zoom = this.camera.zoom;
+    const tileW = zoom * 2.8;
+    const tileH = tileW * this.camera.tilt;
+    const hScale = this.camera.heightScale;
+
+    const elev = worldZ !== null ? worldZ : this.getInterpolatedElevation(worldX, worldY);
+    const dx = worldX - this.camera.x;
+    const dy = worldY - this.camera.y;
+
+    out.x = centerX + (dx - dy) * (tileW * 0.5);
+    out.y = centerY + (dx + dy) * (tileH * 0.5) - (elev - 20) * zoom * hScale * 0.22;
+    return out;
+  }
+
+  /**
    * Converts screen pixel clicks into exact world coordinates by solving ray intersection with terrain heights
    */
   screenToWorld(screenX, screenY) {
@@ -413,9 +449,92 @@ export class CanvasRenderer {
   }
 
   /**
+   * Smooth 60 FPS Camera Damping
+   * Smoothly eases camera position and zoom towards target coordinates
+   */
+  updateCameraSmoothly() {
+    if (this.camera.targetX === undefined) this.camera.targetX = this.camera.x;
+    if (this.camera.targetY === undefined) this.camera.targetY = this.camera.y;
+    if (this.camera.targetZoom === undefined) this.camera.targetZoom = this.camera.zoom;
+
+    const camEase = 0.14;
+    const zoomEase = 0.16;
+
+    const dx = this.camera.targetX - this.camera.x;
+    const dy = this.camera.targetY - this.camera.y;
+    const dz = this.camera.targetZoom - this.camera.zoom;
+
+    if (Math.abs(dx) > 0.0005) this.camera.x += dx * camEase;
+    else this.camera.x = this.camera.targetX;
+
+    if (Math.abs(dy) > 0.0005) this.camera.y += dy * camEase;
+    else this.camera.y = this.camera.targetY;
+
+    if (Math.abs(dz) > 0.001) this.camera.zoom += dz * zoomEase;
+    else this.camera.zoom = this.camera.targetZoom;
+  }
+
+  /**
+   * Continuous Sub-Frame Entity Coordinate Interpolation (60 FPS visual smoothing)
+   * Prevents jerky stepped hopping between 10Hz/350ms simulation ticks without mutating simulation logic.
+   */
+  getEntityRenderCoords(entity) {
+    if (!entity) return { x: 0, y: 0 };
+    const tx = entity.x !== undefined ? entity.x : entity.centroidX;
+    const ty = entity.y !== undefined ? entity.y : entity.centroidY;
+    if (tx === undefined || ty === undefined) return { x: 0, y: 0 };
+
+    if (!entity._renderCoords) {
+      entity._renderCoords = { x: tx, y: ty };
+    }
+
+    if (entity._rx === undefined || entity._ry === undefined) {
+      entity._rx = tx;
+      entity._ry = ty;
+      entity._renderCoords.x = tx;
+      entity._renderCoords.y = ty;
+      return entity._renderCoords;
+    }
+
+    const dx = tx - entity._rx;
+    const dy = ty - entity._ry;
+    const dist = Math.hypot(dx, dy);
+
+    // Instant snap for spawning or long-distance teleports
+    if (dist > 3.5) {
+      entity._rx = tx;
+      entity._ry = ty;
+      entity._renderCoords.x = tx;
+      entity._renderCoords.y = ty;
+      return entity._renderCoords;
+    }
+
+    // Adaptive smooth interpolation:
+    // Blend a responsive exponential approach with a minimum linear glide speed
+    // so agents walk smoothly into their destination without slowing to a crawl.
+    if (dist > 0.001) {
+      const step = Math.min(dist, Math.max(dist * 0.18, 0.016));
+      entity._rx += (dx / dist) * step;
+      entity._ry += (dy / dist) * step;
+    }
+
+    if (dist <= 0.004) {
+      entity._rx = tx;
+      entity._ry = ty;
+    }
+
+    entity._renderCoords.x = entity._rx;
+    entity._renderCoords.y = entity._ry;
+    return entity._renderCoords;
+  }
+
+  /**
    * Main Render Pipeline
    */
   render() {
+    // 0. Smooth Camera Interpolation
+    this.updateCameraSmoothly();
+
     // 1. Sky & Atmospheric Backdrop
     this.renderSkyAndBackdrop();
 
@@ -439,31 +558,38 @@ export class CanvasRenderer {
     this.renderUI();
   }
 
+  _lerpColor(c1, c2, t) {
+    const r = Math.round(c1[0] + (c2[0] - c1[0]) * t);
+    const g = Math.round(c1[1] + (c2[1] - c1[1]) * t);
+    const b = Math.round(c1[2] + (c2[2] - c1[2]) * t);
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+
   renderSkyAndBackdrop() {
     const time = this.simulation?.clock?.getTime() || { hours: 12 };
     const h = time.hours;
     
-    // Ambient sky palette shifting through dawn, noon, dusk, and starry night
-    let topColor = "#0f172a";
-    let btmColor = "#1e293b";
+    // Four sky keyframe palettes across 24 hours (Midnight, Dawn, Noon, Dusk)
+    const palettes = [
+      { h: 0,  top: [2, 6, 23],    btm: [15, 23, 42] },   // Deep Midnight
+      { h: 6,  top: [49, 16, 63],   btm: [120, 53, 15] },  // Dawn Amber-Rose
+      { h: 12, top: [2, 132, 199],  btm: [56, 189, 248] }, // Midday Cerulean
+      { h: 18, top: [30, 27, 75],   btm: [154, 52, 18] },  // Sunset Flame-Violet
+      { h: 24, top: [2, 6, 23],    btm: [15, 23, 42] }    // Midnight Wrap
+    ];
 
-    if (h >= 5 && h < 8) {
-      // Dawn rose & amber
-      topColor = "#31103f";
-      btmColor = "#78350f";
-    } else if (h >= 8 && h < 17) {
-      // Daylight cerulean blue
-      topColor = "#0284c7";
-      btmColor = "#38bdf8";
-    } else if (h >= 17 && h < 20) {
-      // Twilight orange & purple
-      topColor = "#1e1b4b";
-      btmColor = "#9a3412";
-    } else {
-      // Night deep cosmic navy
-      topColor = "#020617";
-      btmColor = "#0f172a";
+    let k = 0;
+    while (k < palettes.length - 1 && h >= palettes[k + 1].h) {
+      k++;
     }
+    const p1 = palettes[k];
+    const p2 = palettes[k + 1] || palettes[k];
+    const span = p2.h - p1.h;
+    const rawT = span > 0 ? (h - p1.h) / span : 0;
+    const t = rawT * rawT * (3 - 2 * rawT); // Smoothstep curve
+
+    const topColor = this._lerpColor(p1.top, p2.top, t);
+    const btmColor = this._lerpColor(p1.btm, p2.btm, t);
 
     const grad = this.ctx.createLinearGradient(0, 0, 0, this.canvas.height);
     grad.addColorStop(0, topColor);
@@ -649,6 +775,14 @@ export class CanvasRenderer {
     const zoom = this.camera.zoom;
     const now = Date.now();
     const w = world.width;
+    const centerX = this.canvas.width * 0.5;
+    const centerY = this.canvas.height * 0.5;
+    const tileW = zoom * 2.8;
+    const halfW = tileW * 0.5;
+    const halfH = halfW * this.camera.tilt;
+    const hFactor = zoom * this.camera.heightScale * 0.22;
+    const camX = this.camera.x;
+    const camY = this.camera.y;
 
     for (let y = minY; y <= maxY; y++) {
       for (let x = minX; x <= maxX; x++) {
@@ -661,16 +795,24 @@ export class CanvasRenderer {
         if (!isOceanLake && !hasRiver) continue;
 
         const elev = isOceanLake ? 14 : this.getTileElevation(x, y);
-        const pN = this.worldToScreen(x, y, elev);
-        const pE = this.worldToScreen(x + 1, y, elev);
-        const pS = this.worldToScreen(x + 1, y + 1, elev);
-        const pW = this.worldToScreen(x, y + 1, elev);
+        const dropElev = (elev - 20) * hFactor;
+        const dx0 = x - camX, dy0 = y - camY;
+        const dx1 = dx0 + 1, dy1 = dy0 + 1;
+
+        const pNx = centerX + (dx0 - dy0) * halfW;
+        const pNy = centerY + (dx0 + dy0) * halfH - dropElev;
+        const pEx = centerX + (dx1 - dy0) * halfW;
+        const pEy = centerY + (dx1 + dy0) * halfH - dropElev;
+        const pSx = centerX + (dx1 - dy1) * halfW;
+        const pSy = centerY + (dx1 + dy1) * halfH - dropElev;
+        const pWx = centerX + (dx0 - dy1) * halfW;
+        const pWy = centerY + (dx0 + dy1) * halfH - dropElev;
 
         ctx.beginPath();
-        ctx.moveTo(pN.x, pN.y);
-        ctx.lineTo(pE.x, pE.y);
-        ctx.lineTo(pS.x, pS.y);
-        ctx.lineTo(pW.x, pW.y);
+        ctx.moveTo(pNx, pNy);
+        ctx.lineTo(pEx, pEy);
+        ctx.lineTo(pSx, pSy);
+        ctx.lineTo(pWx, pWy);
         ctx.closePath();
 
         // Shimmering animated water surface
@@ -684,8 +826,8 @@ export class CanvasRenderer {
             ctx.strokeStyle = `rgba(255, 255, 255, ${0.28 * shimmer})`;
             ctx.lineWidth = 1;
             ctx.beginPath();
-            ctx.moveTo((pN.x + pW.x) * 0.5, (pN.y + pW.y) * 0.5);
-            ctx.lineTo((pE.x + pS.x) * 0.5, (pE.y + pS.y) * 0.5);
+            ctx.moveTo((pNx + pWx) * 0.5, (pNy + pWy) * 0.5);
+            ctx.lineTo((pEx + pSx) * 0.5, (pEy + pSy) * 0.5);
             ctx.stroke();
           }
         } else if (hasRiver) {
@@ -697,8 +839,8 @@ export class CanvasRenderer {
             ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
             ctx.lineWidth = Math.max(1, zoom * 0.12);
             ctx.beginPath();
-            ctx.moveTo((pN.x + pS.x) * 0.5 - 2, (pN.y + pS.y) * 0.5);
-            ctx.lineTo((pN.x + pS.x) * 0.5 + 2, (pN.y + pS.y) * 0.5);
+            ctx.moveTo((pNx + pSx) * 0.5 - 2, (pNy + pSy) * 0.5);
+            ctx.lineTo((pNx + pSx) * 0.5 + 2, (pNy + pSy) * 0.5);
             ctx.stroke();
           }
         }
@@ -723,9 +865,28 @@ export class CanvasRenderer {
         const isBridge = Boolean(world.bridgeTiles && world.bridgeTiles[idx]);
         const isRoad = Boolean(world.roadTiles && world.roadTiles[idx]);
         const isFire = Boolean(world.fireTiles && world.fireTiles[idx] > 0);
-        if (!isBridge && !isRoad && !isFire) continue;
+        const isScorched = Boolean(world.scorchedTiles && world.scorchedTiles[idx] > 0);
+        if (!isBridge && !isRoad && !isFire && !isScorched) continue;
 
         const elev = this.getTileElevation(x, y);
+
+        // Scorched Earth in 2.5D
+        if (world.scorchedTiles && world.scorchedTiles[idx] > 0) {
+          const pN = this.worldToScreen(x, y, elev);
+          const pE = this.worldToScreen(x + 1, y, elev);
+          const pS = this.worldToScreen(x + 1, y + 1, elev);
+          const pW = this.worldToScreen(x, y + 1, elev);
+
+          const scorchAlpha = Math.min(0.85, (world.scorchedTiles[idx] / 255) * 0.75 + 0.15);
+          ctx.fillStyle = `rgba(28, 25, 23, ${scorchAlpha})`;
+          ctx.beginPath();
+          ctx.moveTo(pN.x, pN.y);
+          ctx.lineTo(pE.x, pE.y);
+          ctx.lineTo(pS.x, pS.y);
+          ctx.lineTo(pW.x, pW.y);
+          ctx.closePath();
+          ctx.fill();
+        }
 
         // Bridges spanning water
         if (world.bridgeTiles && world.bridgeTiles[idx]) {
@@ -889,28 +1050,38 @@ export class CanvasRenderer {
       }
     }
 
-    // 3. Wildlife / Animals
+    // 3. Wildlife / Animals (Smooth 60 FPS interpolated motion with viewport culling)
     const animals = this.simulation.animalSystem?.animals;
     if (animals) {
       const aLen = animals.length;
       for (let i = 0; i < aLen; i++) {
         const a = animals[i];
         if (a.alive === false) continue;
-        if (a.x >= minX - 1 && a.x <= maxX + 1 && a.y >= minY - 1 && a.y <= maxY + 1) {
-          list.push(this.getRenderItem("animal", a, a.x, a.y, a.x + a.y + 0.2));
+        if (a.x < minX - 3 || a.x > maxX + 3 || a.y < minY - 3 || a.y > maxY + 3) {
+          if (a._rx !== undefined) { a._rx = a.x; a._ry = a.y; }
+          continue;
+        }
+        const coords = this.getEntityRenderCoords(a);
+        if (coords.x >= minX - 1 && coords.x <= maxX + 1 && coords.y >= minY - 1 && coords.y <= maxY + 1) {
+          list.push(this.getRenderItem("animal", a, coords.x, coords.y, coords.x + coords.y + 0.2));
         }
       }
     }
 
-    // 4. Autonomous Agents / Citizens
+    // 4. Autonomous Agents / Citizens (Smooth 60 FPS interpolated motion with viewport culling)
     const agents = this.simulation.agents;
     if (agents) {
       const agLen = agents.length;
       for (let i = 0; i < agLen; i++) {
         const ag = agents[i];
         if (!ag.alive) continue;
-        if (ag.x >= minX - 1 && ag.x <= maxX + 1 && ag.y >= minY - 1 && ag.y <= maxY + 1) {
-          list.push(this.getRenderItem("agent", ag, ag.x, ag.y, ag.x + ag.y + 0.3));
+        if (ag.x < minX - 3 || ag.x > maxX + 3 || ag.y < minY - 3 || ag.y > maxY + 3) {
+          if (ag._rx !== undefined) { ag._rx = ag.x; ag._ry = ag.y; }
+          continue;
+        }
+        const coords = this.getEntityRenderCoords(ag);
+        if (coords.x >= minX - 1 && coords.x <= maxX + 1 && coords.y >= minY - 1 && coords.y <= maxY + 1) {
+          list.push(this.getRenderItem("agent", ag, coords.x, coords.y, coords.x + coords.y + 0.3));
         }
       }
     }
@@ -920,10 +1091,11 @@ export class CanvasRenderer {
 
     // Render sorted list
     const len = list.length;
+    const screen = this._renderScreenBuf || (this._renderScreenBuf = { x: 0, y: 0 });
     for (let i = 0; i < len; i++) {
       const item = list[i];
       const elev = this.getInterpolatedElevation(item.x, item.y);
-      const screen = this.worldToScreen(item.x, item.y, elev);
+      this.worldToScreenFast(item.x, item.y, elev, screen);
 
       switch (item.kind) {
         case "resource":
@@ -993,110 +1165,205 @@ export class CanvasRenderer {
     const ctx = this.ctx;
     const zoom = this.camera.zoom;
     const type = res.resourceType;
-    const isDepleted = res.amount <= 0;
+    const isDepleted = res.depleted || res.amount <= 0;
+    const fullness = Math.max(0, Math.min(1, (res.amount || 0) / (res.maxAmount || 40)));
     const s = Math.max(3, zoom * 0.7);
 
     ctx.save();
 
     // Soft drop shadow at ground height
-    ctx.fillStyle = "rgba(0, 0, 0, 0.26)";
+    ctx.fillStyle = isDepleted ? "rgba(0, 0, 0, 0.16)" : "rgba(0, 0, 0, 0.26)";
     ctx.beginPath();
     ctx.ellipse(screen.x, screen.y + 2, s * 0.65, s * 0.3, 0, 0, Math.PI * 2);
     ctx.fill();
 
     if (type === "wood") {
-      // 2.5D Tree with 3D Trunk & Volumetric Foliage Canopy
+      // 2.5D Tree with 3D Trunk & Volumetric Foliage Canopy / Stumps
       if (isDepleted) {
-        // Cut stump
+        // Cut timber stump with growth rings & fallen chips
         ctx.fillStyle = "#5c2c16";
-        ctx.fillRect(screen.x - s * 0.2, screen.y - s * 0.3, s * 0.4, s * 0.3);
-        ctx.fillStyle = "#854d0e";
+        ctx.fillRect(screen.x - s * 0.22, screen.y - s * 0.3, s * 0.44, s * 0.3);
+        ctx.fillStyle = "#a16207";
         ctx.beginPath();
-        ctx.ellipse(screen.x, screen.y - s * 0.3, s * 0.22, s * 0.1, 0, 0, Math.PI * 2);
+        ctx.ellipse(screen.x, screen.y - s * 0.3, s * 0.24, s * 0.11, 0, 0, Math.PI * 2);
         ctx.fill();
+        // Inner stump rings
+        ctx.strokeStyle = "#713f12";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.ellipse(screen.x, screen.y - s * 0.3, s * 0.14, s * 0.06, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        // Wood chips on ground
+        ctx.fillStyle = "#ca8a04";
+        ctx.fillRect(screen.x + s * 0.25, screen.y - s * 0.05, s * 0.08, s * 0.05);
+        ctx.fillRect(screen.x - s * 0.32, screen.y + s * 0.05, s * 0.07, s * 0.04);
       } else {
         // Wooden Trunk with bark shading
         ctx.fillStyle = "#5c2c16";
         ctx.fillRect(screen.x - s * 0.15, screen.y - s * 0.6, s * 0.3, s * 0.65);
 
+        // Scale canopy fullness with remaining harvestable wood (0.45 min to 1.0 full)
+        const canopyScale = 0.45 + 0.55 * fullness;
+
         // Lower Canopy Shadow
         ctx.fillStyle = "#14532d";
         ctx.beginPath();
-        ctx.arc(screen.x, screen.y - s * 0.8, s * 0.7, 0, Math.PI * 2);
+        ctx.arc(screen.x, screen.y - s * 0.8 * canopyScale, s * 0.7 * canopyScale, 0, Math.PI * 2);
         ctx.fill();
 
         // Upper Canopy Lush Green
         ctx.fillStyle = "#16a34a";
         ctx.beginPath();
-        ctx.arc(screen.x, screen.y - s * 1.15, s * 0.58, 0, Math.PI * 2);
+        ctx.arc(screen.x, screen.y - s * 1.15 * canopyScale, s * 0.58 * canopyScale, 0, Math.PI * 2);
         ctx.fill();
 
         // Sunlit Leaf Highlight
         ctx.fillStyle = "#4ade80";
         ctx.beginPath();
-        ctx.arc(screen.x - s * 0.2, screen.y - s * 1.3, s * 0.26, 0, Math.PI * 2);
+        ctx.arc(screen.x - s * 0.2 * canopyScale, screen.y - s * 1.3 * canopyScale, s * 0.26 * canopyScale, 0, Math.PI * 2);
         ctx.fill();
       }
     } else if (type === "food") {
-      // 2.5D Berry Bush / Fruit Orchard
-      ctx.fillStyle = "#3f6212";
-      ctx.beginPath();
-      ctx.arc(screen.x, screen.y - s * 0.35, s * 0.55, 0, Math.PI * 2);
-      ctx.fill();
+      // 2.5D Berry Bush / Fruit Orchard / Fallow Patch
+      if (isDepleted) {
+        // Fallow barren patch: dry brown twigs and withered stems
+        ctx.fillStyle = "#451a03";
+        ctx.beginPath();
+        ctx.ellipse(screen.x, screen.y - s * 0.1, s * 0.4, s * 0.18, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#78350f";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(screen.x - s * 0.25, screen.y);
+        ctx.lineTo(screen.x - s * 0.1, screen.y - s * 0.25);
+        ctx.moveTo(screen.x, screen.y + s * 0.05);
+        ctx.lineTo(screen.x + s * 0.15, screen.y - s * 0.28);
+        ctx.moveTo(screen.x - s * 0.05, screen.y);
+        ctx.lineTo(screen.x + s * 0.05, screen.y - s * 0.35);
+        ctx.stroke();
+      } else {
+        const bushScale = 0.5 + 0.5 * fullness;
+        ctx.fillStyle = "#3f6212";
+        ctx.beginPath();
+        ctx.arc(screen.x, screen.y - s * 0.35 * bushScale, s * 0.55 * bushScale, 0, Math.PI * 2);
+        ctx.fill();
 
-      ctx.fillStyle = "#65a30d";
-      ctx.beginPath();
-      ctx.arc(screen.x - s * 0.12, screen.y - s * 0.45, s * 0.38, 0, Math.PI * 2);
-      ctx.fill();
+        ctx.fillStyle = "#65a30d";
+        ctx.beginPath();
+        ctx.arc(screen.x - s * 0.12 * bushScale, screen.y - s * 0.45 * bushScale, s * 0.38 * bushScale, 0, Math.PI * 2);
+        ctx.fill();
 
-      if (!isDepleted) {
-        // Red Berries
+        // Red Berries proportional to fullness
         ctx.fillStyle = "#ef4444";
         ctx.beginPath();
-        ctx.arc(screen.x - s * 0.2, screen.y - s * 0.3, s * 0.12, 0, Math.PI * 2);
-        ctx.arc(screen.x + s * 0.18, screen.y - s * 0.22, s * 0.12, 0, Math.PI * 2);
-        ctx.arc(screen.x, screen.y - s * 0.45, s * 0.14, 0, Math.PI * 2);
+        ctx.arc(screen.x - s * 0.2 * bushScale, screen.y - s * 0.3 * bushScale, s * 0.12 * bushScale, 0, Math.PI * 2);
+        if (fullness > 0.3) {
+          ctx.arc(screen.x + s * 0.18 * bushScale, screen.y - s * 0.22 * bushScale, s * 0.12 * bushScale, 0, Math.PI * 2);
+        }
+        if (fullness > 0.6) {
+          ctx.arc(screen.x, screen.y - s * 0.45 * bushScale, s * 0.14 * bushScale, 0, Math.PI * 2);
+        }
         ctx.fill();
       }
-    } else if (type === "ore") {
-      // 2.5D Craggy Mountain Boulder with Gold/Silver Ore Veins
-      ctx.fillStyle = "#334155";
-      ctx.beginPath();
-      ctx.moveTo(screen.x - s * 0.5, screen.y);
-      ctx.lineTo(screen.x - s * 0.35, screen.y - s * 0.6);
-      ctx.lineTo(screen.x + s * 0.15, screen.y - s * 0.7);
-      ctx.lineTo(screen.x + s * 0.55, screen.y - s * 0.2);
-      ctx.lineTo(screen.x + s * 0.3, screen.y + s * 0.1);
-      ctx.closePath();
-      ctx.fill();
+    } else if (type === "ore" || type === "gem") {
+      // 2.5D Craggy Boulder / Spent Seam / Crystal Vein
+      const isGem = type === "gem";
+      if (isDepleted) {
+        // Spent excavated seam: fractured pit and dark tailings
+        ctx.fillStyle = "#1e293b";
+        ctx.beginPath();
+        ctx.moveTo(screen.x - s * 0.45, screen.y);
+        ctx.lineTo(screen.x - s * 0.3, screen.y - s * 0.3);
+        ctx.lineTo(screen.x + s * 0.25, screen.y - s * 0.32);
+        ctx.lineTo(screen.x + s * 0.45, screen.y - s * 0.05);
+        ctx.lineTo(screen.x + s * 0.2, screen.y + s * 0.08);
+        ctx.closePath();
+        ctx.fill();
+        // Dark pit crack
+        ctx.strokeStyle = "#0f172a";
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(screen.x - s * 0.2, screen.y - s * 0.15);
+        ctx.lineTo(screen.x + s * 0.1, screen.y - s * 0.1);
+        ctx.lineTo(screen.x + s * 0.2, screen.y - s * 0.2);
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = isGem ? "#2e1065" : "#334155";
+        ctx.beginPath();
+        ctx.moveTo(screen.x - s * 0.5, screen.y);
+        ctx.lineTo(screen.x - s * 0.35, screen.y - s * 0.6);
+        ctx.lineTo(screen.x + s * 0.15, screen.y - s * 0.7);
+        ctx.lineTo(screen.x + s * 0.55, screen.y - s * 0.2);
+        ctx.lineTo(screen.x + s * 0.3, screen.y + s * 0.1);
+        ctx.closePath();
+        ctx.fill();
 
-      // Rock facet light catch
-      ctx.fillStyle = "#64748b";
-      ctx.beginPath();
-      ctx.moveTo(screen.x - s * 0.35, screen.y - s * 0.6);
-      ctx.lineTo(screen.x + s * 0.15, screen.y - s * 0.7);
-      ctx.lineTo(screen.x + s * 0.05, screen.y - s * 0.25);
-      ctx.lineTo(screen.x - s * 0.25, screen.y - s * 0.15);
-      ctx.closePath();
-      ctx.fill();
+        // Rock facet light catch
+        ctx.fillStyle = isGem ? "#581c87" : "#64748b";
+        ctx.beginPath();
+        ctx.moveTo(screen.x - s * 0.35, screen.y - s * 0.6);
+        ctx.lineTo(screen.x + s * 0.15, screen.y - s * 0.7);
+        ctx.lineTo(screen.x + s * 0.05, screen.y - s * 0.25);
+        ctx.lineTo(screen.x - s * 0.25, screen.y - s * 0.15);
+        ctx.closePath();
+        ctx.fill();
 
-      if (!isDepleted) {
-        // Gold ore glints
-        ctx.fillStyle = "#fbbf24";
-        ctx.fillRect(screen.x - s * 0.15, screen.y - s * 0.4, s * 0.15, s * 0.15);
-        ctx.fillRect(screen.x + s * 0.15, screen.y - s * 0.5, s * 0.15, s * 0.15);
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(screen.x - s * 0.1, screen.y - s * 0.4, s * 0.06, s * 0.06);
+        if (isGem) {
+          // Purple/cyan gem crystals
+          ctx.fillStyle = "#c084fc";
+          ctx.fillRect(screen.x - s * 0.12, screen.y - s * 0.48, s * 0.16, s * 0.16);
+          ctx.fillStyle = "#38bdf8";
+          ctx.fillRect(screen.x + s * 0.14, screen.y - s * 0.52, s * 0.14, s * 0.14);
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(screen.x - s * 0.07, screen.y - s * 0.45, s * 0.06, s * 0.06);
+        } else {
+          // Gold / iron ore glints
+          ctx.fillStyle = "#fbbf24";
+          ctx.fillRect(screen.x - s * 0.15, screen.y - s * 0.4, s * 0.15, s * 0.15);
+          if (fullness > 0.4) {
+            ctx.fillRect(screen.x + s * 0.15, screen.y - s * 0.5, s * 0.15, s * 0.15);
+          }
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(screen.x - s * 0.1, screen.y - s * 0.4, s * 0.06, s * 0.06);
+        }
       }
     } else {
-      // Water Spring Font
-      ctx.fillStyle = "#0284c7";
-      ctx.beginPath();
-      ctx.ellipse(screen.x, screen.y - s * 0.1, s * 0.5, s * 0.25, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "#38bdf8";
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
+      // Water Spring Font / Dried Spring Bed
+      if (isDepleted) {
+        // Cracked dry mud basin
+        ctx.fillStyle = "#78350f";
+        ctx.beginPath();
+        ctx.ellipse(screen.x, screen.y - s * 0.1, s * 0.48, s * 0.22, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#451a03";
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+        // Cracked mud fissures
+        ctx.strokeStyle = "#291305";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(screen.x - s * 0.2, screen.y - s * 0.1);
+        ctx.lineTo(screen.x, screen.y - s * 0.15);
+        ctx.lineTo(screen.x + s * 0.18, screen.y - s * 0.08);
+        ctx.moveTo(screen.x - s * 0.05, screen.y - s * 0.05);
+        ctx.lineTo(screen.x + s * 0.08, screen.y - s * 0.18);
+        ctx.stroke();
+      } else {
+        // Deep blue water spring with concentric ripple rings
+        const waterR = s * (0.32 + 0.18 * fullness);
+        ctx.fillStyle = "#0284c7";
+        ctx.beginPath();
+        ctx.ellipse(screen.x, screen.y - s * 0.1, waterR, waterR * 0.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#38bdf8";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // Shimmer specular highlight
+        ctx.fillStyle = "#e0f2fe";
+        ctx.beginPath();
+        ctx.ellipse(screen.x - waterR * 0.25, screen.y - s * 0.14, waterR * 0.25, waterR * 0.12, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     ctx.restore();
@@ -1120,6 +1387,62 @@ export class CanvasRenderer {
     ctx.beginPath();
     ctx.ellipse(screen.x, screen.y + bs * 0.15, bs * 0.8, bs * 0.4, 0, 0, Math.PI * 2);
     ctx.fill();
+
+    const isRuined = Boolean(b.isRuined || (b.health !== undefined && b.health <= 0) || type === "ruin");
+
+    if (isRuined) {
+      // 2.5D Smoldering Ruin: Broken stone foundations, collapsed charred rafters, glowing embers & smoke
+      const wallH = bs * 0.45;
+
+      // Scorched foundation floor
+      ctx.fillStyle = "#1c1917";
+      ctx.beginPath();
+      ctx.moveTo(screen.x - bs * 0.55, screen.y);
+      ctx.lineTo(screen.x, screen.y + bs * 0.28);
+      ctx.lineTo(screen.x + bs * 0.55, screen.y);
+      ctx.lineTo(screen.x, screen.y - bs * 0.28);
+      ctx.closePath();
+      ctx.fill();
+
+      // Broken crumbling stone corner pillars
+      ctx.fillStyle = "#475569";
+      ctx.fillRect(screen.x - bs * 0.48, screen.y - wallH * 0.8, bs * 0.16, wallH * 0.8);
+      ctx.fillStyle = "#64748b";
+      ctx.fillRect(screen.x + bs * 0.32, screen.y - wallH * 0.5, bs * 0.16, wallH * 0.5);
+
+      // Collapsed, charred timber beam leaning across
+      ctx.strokeStyle = "#0f172a";
+      ctx.lineWidth = Math.max(2, bs * 0.12);
+      ctx.beginPath();
+      ctx.moveTo(screen.x - bs * 0.45, screen.y - wallH * 0.7);
+      ctx.lineTo(screen.x + bs * 0.2, screen.y + bs * 0.1);
+      ctx.stroke();
+
+      // Second charred diagonal rafter
+      ctx.strokeStyle = "#292524";
+      ctx.lineWidth = Math.max(1.5, bs * 0.08);
+      ctx.beginPath();
+      ctx.moveTo(screen.x - bs * 0.1, screen.y - wallH * 0.5);
+      ctx.lineTo(screen.x + bs * 0.4, screen.y - bs * 0.05);
+      ctx.stroke();
+
+      // Smoldering ember glow
+      const emberFlicker = 0.5 + 0.5 * Math.sin(now * 0.01 + (b.id || 0));
+      ctx.fillStyle = `rgba(239, 68, 68, ${0.4 + emberFlicker * 0.5})`;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - wallH * 0.1, Math.max(2, bs * 0.15), 0, Math.PI * 2);
+      ctx.fill();
+
+      // Rising faint smoke puff
+      const smokeOffset = ((now * 0.002 + (b.id || 0) * 0.3) % 1);
+      ctx.fillStyle = `rgba(100, 100, 100, ${0.35 * (1 - smokeOffset)})`;
+      ctx.beginPath();
+      ctx.arc(screen.x + Math.sin(now * 0.004) * 3, screen.y - wallH - smokeOffset * 14, 2 + smokeOffset * 5, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+      return;
+    }
 
     // 2. Specialized 2.5D Architectural Model Rendering
     if (type === "house") {
@@ -1733,7 +2056,6 @@ export class CanvasRenderer {
   render25DAnimal(a, screen, elev) {
     const ctx = this.ctx;
     const zoom = this.camera.zoom;
-    const now = Date.now();
     const s = Math.max(2, zoom * 0.42);
 
     ctx.save();
@@ -1744,7 +2066,14 @@ export class CanvasRenderer {
     ctx.ellipse(screen.x, screen.y + 1, s * 0.8, s * 0.32, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    const hop = Math.sin(now * 0.008 + (a.id || 0)) * 1.5;
+    const distMoved = Math.hypot(a.x - (a._rx ?? a.x), a.y - (a._ry ?? a.y));
+    const isAnimalMoving = distMoved > 0.003;
+    if (isAnimalMoving) {
+      a._animCycle = (a._animCycle || 0) + 0.18;
+    } else {
+      a._animCycle = (a._animCycle || 0) + 0.035;
+    }
+    const hop = isAnimalMoving ? Math.sin(a._animCycle) * 2.2 : Math.sin(a._animCycle) * 0.65;
 
     if (a.species === "deer") {
       // 2.5D Graceful Stag
@@ -1823,18 +2152,57 @@ export class CanvasRenderer {
       ctx.stroke();
     }
 
-    const isMoving = Boolean(agent.path && agent.path.length > 0);
-    const walk = isMoving ? Math.sin(now * 0.015 + agent.id * 2.1) : 0;
-    const headBob = isMoving ? Math.abs(walk) * -2 : 0;
+    const rx = agent._rx ?? agent.x;
+    const ry = agent._ry ?? agent.y;
+    const distFromTarget = Math.hypot(agent.x - rx, agent.y - ry);
+    const hasPath = Boolean(agent.path && agent.path.length > 0);
+    const actType = typeof agent.currentAction === 'string' ? agent.currentAction : agent.currentAction?.type;
+    const isActionMoving = Boolean(
+      actType === 'move' ||
+      actType === 'wander' ||
+      actType === 'patrol' ||
+      (agent.currentAction && agent.currentAction.target)
+    );
+    const isMoving = distFromTarget > 0.003 || hasPath || (isActionMoving && distFromTarget > 0.001);
 
-    // 3. Legs
+    if (distFromTarget > 0.005) {
+      const screenDx = (agent.x - rx) - (agent.y - ry);
+      if (Math.abs(screenDx) > 0.002) {
+        agent._facing = screenDx < 0 ? -1 : 1;
+      }
+    }
+
+    if (isMoving) {
+      agent._walkCycle = (agent._walkCycle || 0) + 0.20;
+    } else if (agent._walkCycle) {
+      const mod = agent._walkCycle % (Math.PI * 2);
+      if (mod > 0.15 && mod < Math.PI * 2 - 0.15) {
+        agent._walkCycle += 0.18;
+      } else {
+        agent._walkCycle = 0;
+      }
+    }
+
+    const walk = Math.sin(agent._walkCycle || 0);
+    const isWounded = Boolean(agent.wounded);
+    const limpBob = isWounded ? Math.sin(now * 0.01 + (agent.id || 0)) * 2.2 : 0;
+    const headBob = (isMoving ? Math.abs(walk) * -1.8 : 0) + limpBob;
+
+    const facing = agent._facing || 1;
+    if (facing === -1) {
+      ctx.translate(screen.x, screen.y);
+      ctx.scale(-1, 1);
+      ctx.translate(-screen.x, -screen.y);
+    }
+
+    // 3. Legs (uneven stride if wounded)
     ctx.strokeStyle = "#1e293b";
     ctx.lineWidth = Math.max(1.5, s * 0.2);
     ctx.beginPath();
     ctx.moveTo(screen.x - s * 0.25, screen.y - s * 0.5);
-    ctx.lineTo(screen.x - s * 0.25 + walk * 3, screen.y);
+    ctx.lineTo(screen.x - s * 0.25 + (isWounded ? walk * 1.5 : walk * 3), screen.y);
     ctx.moveTo(screen.x + s * 0.25, screen.y - s * 0.5);
-    ctx.lineTo(screen.x + s * 0.25 - walk * 3, screen.y);
+    ctx.lineTo(screen.x + s * 0.25 - (isWounded ? walk * 0.5 : walk * 3), screen.y);
     ctx.stroke();
 
     // 4. Role Tunic Body
@@ -1846,6 +2214,12 @@ export class CanvasRenderer {
     else if (agent.role === "miner" || agent.job === "miner") tunicColor = "#475569";
     else if (agent.role === "farmer" || agent.job === "farmer") tunicColor = "#84cc16";
 
+    // Hit flash visual feedback
+    if (agent.visuals && agent.visuals.flashRed > 0) {
+      agent.visuals.flashRed--;
+      tunicColor = "#f87171";
+    }
+
     ctx.fillStyle = tunicColor;
     ctx.beginPath();
     ctx.roundRect(screen.x - s * 0.35, screen.y - s * 1.25 + headBob, s * 0.7, s * 0.75, 3);
@@ -1854,6 +2228,15 @@ export class CanvasRenderer {
     // Belt
     ctx.fillStyle = "#451a03";
     ctx.fillRect(screen.x - s * 0.35, screen.y - s * 0.75 + headBob, s * 0.7, 2);
+
+    // Wounded white bandage with red cross on arm
+    if (isWounded) {
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(screen.x + s * 0.1, screen.y - s * 1.05 + headBob, 4.5, 3.5);
+      ctx.fillStyle = "#ef4444";
+      ctx.fillRect(screen.x + s * 0.1 + 1.5, screen.y - s * 1.05, 1.5, 3.5);
+      ctx.fillRect(screen.x + s * 0.1, screen.y - s * 1.05 + 1, 4.5, 1.5);
+    }
 
     // 5. Head
     ctx.fillStyle = "#fed7aa"; // skin tone
@@ -1878,8 +2261,22 @@ export class CanvasRenderer {
       ctx.fill();
     }
 
+    // Overhead Combat Health Bar (smoothly rendered when damaged or in warband)
+    const curHealth = agent.combat?.health ?? agent.health ?? 100;
+    const maxHealth = agent.combat?.maxHealth ?? agent.maxHealth ?? 100;
+    if (curHealth < maxHealth || agent.militaryDuty) {
+      const barW = Math.max(12, s * 1.3);
+      const barH = 2.5;
+      const hpRatio = Math.max(0, Math.min(1, curHealth / maxHealth));
+      const barX = screen.x - barW / 2;
+      const barY = screen.y - s * 2.15 + headBob;
+      ctx.fillStyle = "rgba(15, 23, 42, 0.8)";
+      ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
+      ctx.fillStyle = hpRatio > 0.5 ? "#22c55e" : hpRatio > 0.25 ? "#f59e0b" : "#ef4444";
+      ctx.fillRect(barX, barY, barW * hpRatio, barH);
+    }
+
     // 6. Tools & Weapons in Hand
-    const actType = typeof agent.currentAction === 'string' ? agent.currentAction : agent.currentAction?.type;
     if (actType === "chop_wood") {
       // Swinging Axe
       const swing = Math.sin(now * 0.016 + agent.id);
@@ -1920,43 +2317,51 @@ export class CanvasRenderer {
 
     // 7. Thought / Emotion Bubble
     if (actType === "reproduce") {
-      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "❤️");
+      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "❤️", facing);
     } else if (actType === "gather_at_hearth") {
-      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🔥");
+      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🔥", facing);
     } else if (actType === "visit_market") {
-      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🛍️");
+      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🛍️", facing);
     } else if (actType === "pray_at_temple") {
-      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🙏");
+      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🙏", facing);
     } else if (actType === "watch_crafts") {
-      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🔨");
+      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🔨", facing);
     } else if (actType === "train_at_barracks" || actType === "patrol_settlement") {
-      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🛡️");
+      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🛡️", facing);
     } else if (actType === "play_in_town") {
-      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🪁");
+      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🪁", facing);
     } else if (actType === "fetch_town_water") {
-      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🪣");
+      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🪣", facing);
     } else if (actType === "tend_town_farm" || actType === "farm" || actType === "gather_food") {
-      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🌾");
+      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🌾", facing);
     } else if (actType === "deposit_to_stockpile") {
-      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "📦");
+      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "📦", facing);
     } else if (actType === "eat_from_stockpile" || actType === "eat_from_inventory") {
-      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🍞");
+      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "🍞", facing);
     } else if (actType === "visit_neighbor" || actType === "socialize") {
-      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "💬");
+      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "💬", facing);
     } else if (actType === "combat") {
-      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "⚔️");
+      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "⚔️", facing);
     } else if (actType === "rest" || actType === "go_home_and_rest") {
-      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "💤");
+      this.drawThoughtIcon(screen.x, screen.y - s * 2.2, "💤", facing);
     }
 
     ctx.restore();
   }
 
-  drawThoughtIcon(x, y, icon) {
+  drawThoughtIcon(x, y, icon, facing = 1) {
+    const floatBob = Math.sin(Date.now() * 0.005 + x) * 2.2;
+    this.ctx.save();
+    if (facing === -1) {
+      this.ctx.translate(x, y);
+      this.ctx.scale(-1, 1);
+      this.ctx.translate(-x, -y);
+    }
     this.ctx.font = "12px sans-serif";
     this.ctx.textAlign = "center";
     this.ctx.textBaseline = "middle";
-    this.ctx.fillText(icon, x, y);
+    this.ctx.fillText(icon, x, y + floatBob);
+    this.ctx.restore();
   }
 
   /**
@@ -2129,22 +2534,33 @@ export class CanvasRenderer {
   renderDayNightLighting() {
     const time = this.simulation?.clock?.getTime() || { hours: 12 };
     const h = time.hours;
-    let overlayColor = null;
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const height = this.canvas.height;
 
-    if (h >= 20 || h < 5) {
-      // Deep moonlit night tint
-      overlayColor = "rgba(10, 20, 50, 0.42)";
-    } else if (h >= 17 && h < 20) {
-      // Golden hour sunset glow
-      overlayColor = "rgba(234, 88, 12, 0.14)";
-    } else if (h >= 5 && h < 8) {
-      // Dawn rose tint
-      overlayColor = "rgba(192, 132, 252, 0.12)";
+    // Continuous night intensity: peak at 1 AM, 0 from 8 AM to 17 PM
+    const angle = ((h - 1) / 24) * Math.PI * 2;
+    const nightIntensity = Math.max(0, -Math.cos(angle)); // 1 at 1am, 0 by 7am
+    if (nightIntensity > 0.02) {
+      const alpha = nightIntensity * 0.42;
+      ctx.fillStyle = `rgba(10, 20, 50, ${alpha.toFixed(3)})`;
+      ctx.fillRect(0, 0, w, height);
     }
 
-    if (overlayColor) {
-      this.ctx.fillStyle = overlayColor;
-      this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    // Sunset / Dusk golden glow around 17-20
+    const duskDist = Math.abs(h - 18.5);
+    if (duskDist < 2.5) {
+      const duskAlpha = Math.max(0, (1 - duskDist / 2.5) * 0.16);
+      ctx.fillStyle = `rgba(234, 88, 12, ${duskAlpha.toFixed(3)})`;
+      ctx.fillRect(0, 0, w, height);
+    }
+
+    // Dawn rose-violet tint around 5-8
+    const dawnDist = Math.abs(h - 6.5);
+    if (dawnDist < 2.5) {
+      const dawnAlpha = Math.max(0, (1 - dawnDist / 2.5) * 0.14);
+      ctx.fillStyle = `rgba(192, 132, 252, ${dawnAlpha.toFixed(3)})`;
+      ctx.fillRect(0, 0, w, height);
     }
   }
 
@@ -2154,7 +2570,16 @@ export class CanvasRenderer {
   renderVisualEffects() {
     const now = Date.now();
     const ctx = this.ctx;
-    this.visualEffects = this.visualEffects.filter(fx => (now - fx.start) < fx.duration);
+    if (this.visualEffects.length > 0) {
+      let writeIdx = 0;
+      for (let i = 0; i < this.visualEffects.length; i++) {
+        const fx = this.visualEffects[i];
+        if (now - fx.start < fx.duration) {
+          this.visualEffects[writeIdx++] = fx;
+        }
+      }
+      this.visualEffects.length = writeIdx;
+    }
 
     for (const fx of this.visualEffects) {
       const elapsed = now - fx.start;
@@ -2220,14 +2645,75 @@ export class CanvasRenderer {
       this.simulation.selectedEntityId = this.selectedEntity ? this.selectedEntity.id : null;
     }
 
+    const now = Date.now();
     for (let y = startY; y < endY; y++) {
       for (let x = startX; x < endX; x++) {
         const idx = y * world.width + x;
         const biome = world.biome ? world.biome[idx] : 'grassland';
         const elev = world.elevation ? world.elevation[idx] : 50;
         const screen = this.worldToScreen(x, y);
+
+        // 1. Base Biome Terrain
         this.ctx.fillStyle = this.getBiomeColor(biome, elev, 1.0);
         this.ctx.fillRect(screen.x, screen.y, zoom + 0.5, zoom + 0.5);
+
+        // 2. Bridges & Roads in 2D
+        if (world.bridgeTiles && world.bridgeTiles[idx]) {
+          this.ctx.fillStyle = "#854d0e";
+          this.ctx.fillRect(screen.x, screen.y, zoom, zoom);
+        } else if (world.roadTiles && world.roadTiles[idx]) {
+          this.ctx.fillStyle = "rgba(195, 180, 155, 0.7)";
+          this.ctx.fillRect(screen.x, screen.y, zoom, zoom);
+        }
+
+        // 3. Scorched Earth in 2D
+        if (world.scorchedTiles && world.scorchedTiles[idx] > 0) {
+          const scorchAlpha = Math.min(0.88, (world.scorchedTiles[idx] / 255) * 0.8 + 0.18);
+          this.ctx.fillStyle = `rgba(24, 20, 18, ${scorchAlpha})`;
+          this.ctx.fillRect(screen.x, screen.y, zoom + 0.5, zoom + 0.5);
+        }
+
+        // 4. Active Wildfire Flames in 2D
+        if (world.fireTiles && world.fireTiles[idx] > 0) {
+          const flicker = 0.7 + 0.3 * Math.sin(now * 0.018 + x * 4.3 + y * 6.7);
+          const fs = Math.max(3, zoom * 0.85 * flicker);
+          const cx = screen.x + zoom * 0.5;
+          const cy = screen.y + zoom * 0.5;
+
+          // Ambient heat aura
+          const glowGrad = this.ctx.createRadialGradient(cx, cy, 0, cx, cy, fs * 1.6);
+          glowGrad.addColorStop(0, "rgba(249, 115, 22, 0.65)");
+          glowGrad.addColorStop(0.5, "rgba(239, 68, 68, 0.35)");
+          glowGrad.addColorStop(1, "rgba(220, 38, 38, 0)");
+          this.ctx.fillStyle = glowGrad;
+          this.ctx.beginPath();
+          this.ctx.arc(cx, cy, fs * 1.6, 0, Math.PI * 2);
+          this.ctx.fill();
+
+          // Charred base
+          this.ctx.fillStyle = "rgba(30, 10, 5, 0.8)";
+          this.ctx.beginPath();
+          this.ctx.arc(cx, cy, fs * 0.45, 0, Math.PI * 2);
+          this.ctx.fill();
+
+          // Blazing flame core
+          const flameGrad = this.ctx.createRadialGradient(cx, cy - fs * 0.25, 0, cx, cy, fs);
+          flameGrad.addColorStop(0, "#fffbeb");
+          flameGrad.addColorStop(0.3, "#f59e0b");
+          flameGrad.addColorStop(0.7, "#ea580c");
+          flameGrad.addColorStop(1, "rgba(220, 38, 38, 0.15)");
+          this.ctx.fillStyle = flameGrad;
+          this.ctx.beginPath();
+          this.ctx.arc(cx, cy - fs * 0.25, fs * 0.7, 0, Math.PI * 2);
+          this.ctx.fill();
+
+          // Rising smoke plume
+          const smokePhase = ((now * 0.003 + x * 0.7 + y * 1.3) % 1);
+          this.ctx.fillStyle = `rgba(50, 45, 45, ${0.45 * (1 - smokePhase)})`;
+          this.ctx.beginPath();
+          this.ctx.arc(cx + Math.sin(now * 0.005 + x) * 2, cy - fs * 0.7 - smokePhase * 10, 2 + smokePhase * 4, 0, Math.PI * 2);
+          this.ctx.fill();
+        }
       }
     }
 
@@ -2242,16 +2728,53 @@ export class CanvasRenderer {
     if (this.simulation.buildings) {
       for (const b of this.simulation.buildings) {
         const screen = this.worldToScreen(b.x, b.y);
-        this.render25DBuilding(b, screen, 20);
+        if (b.isRuined || (b.health !== undefined && b.health <= 0)) {
+          // 2D Ruin footprint: Charred stone foundation with collapsed timbers and smolder
+          const rSize = Math.max(8, zoom * 0.9);
+          this.ctx.fillStyle = "#1c1917";
+          this.ctx.fillRect(screen.x - rSize * 0.5, screen.y - rSize * 0.5, rSize, rSize);
+          this.ctx.strokeStyle = "#475569";
+          this.ctx.lineWidth = 1.5;
+          this.ctx.strokeRect(screen.x - rSize * 0.5, screen.y - rSize * 0.5, rSize, rSize);
+          // Crossed fallen beams
+          this.ctx.strokeStyle = "#0f172a";
+          this.ctx.lineWidth = 2;
+          this.ctx.beginPath();
+          this.ctx.moveTo(screen.x - rSize * 0.4, screen.y - rSize * 0.35);
+          this.ctx.lineTo(screen.x + rSize * 0.35, screen.y + rSize * 0.25);
+          this.ctx.moveTo(screen.x + rSize * 0.3, screen.y - rSize * 0.3);
+          this.ctx.lineTo(screen.x - rSize * 0.25, screen.y + rSize * 0.35);
+          this.ctx.stroke();
+          // Glowing smoldering ember
+          this.ctx.fillStyle = "#f97316";
+          this.ctx.fillRect(screen.x - 1, screen.y - 1, 3, 3);
+        } else {
+          this.render25DBuilding(b, screen, 20);
+        }
+      }
+    }
+    if (this.simulation.animalSystem?.animals) {
+      for (const an of this.simulation.animalSystem.animals) {
+        if (an.alive === false) continue;
+        if (an.x < startX - 2 || an.x > endX + 2 || an.y < startY - 2 || an.y > endY + 2) continue;
+        const coords = this.getEntityRenderCoords(an);
+        const screen = this.worldToScreen(coords.x, coords.y);
+        this.render25DAnimal(an, screen, 20);
       }
     }
     if (this.simulation.agents) {
       for (const a of this.simulation.agents) {
         if (!a.alive) continue;
-        const screen = this.worldToScreen(a.x, a.y);
+        if (a.x < startX - 2 || a.x > endX + 2 || a.y < startY - 2 || a.y > endY + 2) continue;
+        const coords = this.getEntityRenderCoords(a);
+        const screen = this.worldToScreen(coords.x, coords.y);
         this.render25DAgent(a, screen, 20);
       }
     }
+
+    // Active Warband markers & combat clashes in 2D
+    this.renderWarbandMarkers();
+    this.renderCombatEffects();
   }
 
   renderSettlementTerritories() {
@@ -2263,7 +2786,8 @@ export class CanvasRenderer {
       const rad = (s.radius || 8) * (this.camera.is25D ? this.camera.zoom * 1.4 : this.camera.zoom);
 
       ctx.save();
-      ctx.strokeStyle = s.factionColor || "rgba(251, 191, 36, 0.45)";
+      const isRuined = Boolean(s.ruined || s.tier === 'Ruins' || s.status === 'ruined');
+      ctx.strokeStyle = isRuined ? "rgba(148, 163, 184, 0.45)" : (s.factionColor || "rgba(251, 191, 36, 0.45)");
       ctx.lineWidth = 1.5;
       ctx.setLineDash([6, 6]);
       ctx.beginPath();
@@ -2272,15 +2796,18 @@ export class CanvasRenderer {
 
       // Settlement Name Crest
       ctx.setLineDash([]);
-      ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+      ctx.fillStyle = isRuined ? "rgba(30, 25, 25, 0.9)" : "rgba(15, 23, 42, 0.85)";
       ctx.font = "bold 11px sans-serif";
       ctx.textAlign = "center";
-      const txt = `🏰 ${s.name || "Settlement"} (Pop ${s.population || s.agents?.length || 0})`;
+      const popCount = s.population || s.agents?.length || 0;
+      const txt = isRuined
+        ? `🏚️ ${s.name || "Ruins"} (Abandoned)`
+        : `🏰 ${s.name || "Settlement"} (Pop ${popCount})`;
       const w = ctx.measureText(txt).width + 16;
       ctx.fillRect(screen.x - w / 2, screen.y - rad - 20, w, 22);
-      ctx.strokeStyle = s.factionColor || "#f59e0b";
+      ctx.strokeStyle = isRuined ? "#64748b" : (s.factionColor || "#f59e0b");
       ctx.strokeRect(screen.x - w / 2, screen.y - rad - 20, w, 22);
-      ctx.fillStyle = "#f8fafc";
+      ctx.fillStyle = isRuined ? "#cbd5e1" : "#f8fafc";
       ctx.fillText(txt, screen.x, screen.y - rad - 6);
       ctx.restore();
     }
@@ -2328,7 +2855,8 @@ export class CanvasRenderer {
 
     for (const wb of wf.warbands.values()) {
       if (!wb.active || wb.state === "destroyed") continue;
-      const cx = wb.centroidX, cy = wb.centroidY;
+      const coords = this.getEntityRenderCoords(wb);
+      const cx = coords.x, cy = coords.y;
       if (cx === undefined || cy === undefined) continue;
       // Cull to visible area (world coords)
       if (cx < -4 || cy < -4 || cx > (this.world?.width || 1e9) + 4 || cy > (this.world?.height || 1e9) + 4) {
@@ -2433,14 +2961,60 @@ export class CanvasRenderer {
   renderCombatEffects() {
     if (!this.simulation?.warfareSystem?.combatEffects) return;
     const effects = this.simulation.warfareSystem.combatEffects;
-    this.ctx.save();
+    if (effects.length === 0) return;
+    const ctx = this.ctx;
+    ctx.save();
     for (const eff of effects) {
       const screen = this.worldToScreen(eff.x, eff.y);
-      this.ctx.font = `${Math.max(12, this.camera.zoom * 1.2)}px sans-serif`;
-      this.ctx.textAlign = "center";
-      this.ctx.fillText(eff.type === "clash" ? "⚔️" : "💀", screen.x, screen.y - 10);
+      const maxDur = eff.type === "casualty" ? 25 : 15;
+      const progress = Math.max(0, Math.min(1, 1 - (eff.duration / maxDur)));
+      const alpha = Math.max(0, 1 - progress);
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+
+      if (eff.type === "shield_block") {
+        // Metallic block ring expanding outward
+        const rad = 4 + progress * 14;
+        ctx.strokeStyle = "rgba(147, 197, 253, 0.9)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(screen.x, screen.y - 6, rad, 0, Math.PI * 2);
+        ctx.stroke();
+        // Mini shield icon
+        ctx.font = `${Math.max(11, this.camera.zoom * 0.9)}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.fillText("🛡️", screen.x, screen.y - 12 - progress * 8);
+      } else if (eff.type === "casualty") {
+        // Red death impact puddle + rising skull
+        ctx.fillStyle = `rgba(185, 28, 28, ${(0.4 * alpha).toFixed(2)})`;
+        ctx.beginPath();
+        ctx.ellipse(screen.x, screen.y + 1, 8 + progress * 6, 4 + progress * 3, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.font = `${Math.max(14, this.camera.zoom * 1.3)}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.fillText("💀", screen.x, screen.y - 10 - progress * 16);
+      } else if (eff.type === "arrow") {
+        ctx.font = `${Math.max(11, this.camera.zoom * 0.9)}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.fillText("🏹", screen.x, screen.y - 8 - progress * 10);
+      } else {
+        // Clashing steel sparks
+        const sparkDist = progress * 10;
+        ctx.fillStyle = "#fef08a";
+        ctx.fillRect(screen.x + sparkDist, screen.y - 8 - sparkDist, 2.5, 2.5);
+        ctx.fillRect(screen.x - sparkDist, screen.y - 8 - sparkDist, 2.5, 2.5);
+        ctx.fillRect(screen.x + sparkDist * 0.7, screen.y - 8 + sparkDist * 0.7, 2, 2);
+        ctx.fillRect(screen.x - sparkDist * 0.7, screen.y - 8 + sparkDist * 0.7, 2, 2);
+
+        ctx.font = `${Math.max(13, this.camera.zoom * 1.1)}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.fillText("⚔️", screen.x, screen.y - 10 - progress * 10);
+      }
+      ctx.restore();
     }
-    this.ctx.restore();
+    ctx.restore();
   }
 
   renderHUD() {
@@ -2448,7 +3022,12 @@ export class CanvasRenderer {
     if (!sim) return;
     const ctx = this.ctx;
     const fires = this.world?.fireTiles ? this.world.countFires?.() || 0 : 0;
-    const pop = sim.agents ? sim.agents.filter(a => a.alive).length : 0;
+    let pop = 0;
+    if (sim.agents) {
+      for (let i = 0; i < sim.agents.length; i++) {
+        if (sim.agents[i].alive) pop++;
+      }
+    }
     const settlements = sim.settlementSystem ? sim.settlementSystem.settlements.size : 0;
     const era = sim.clock ? `Day ${Math.floor((sim.clock.tick || 0) / 100) + 1}` : "";
     const wars = sim.diplomacySystem?.wars ? sim.diplomacySystem.wars.length : 0;
@@ -2469,7 +3048,13 @@ export class CanvasRenderer {
     // Step F: W key toggles the Wars panel (active wars + peace history).
     if (this._warsPanel == null) this._warsPanel = false;
     this._warBannerRect = null;
-    const activeWar = sim.diplomacySystem?.activeWars?.find(w => w.active && w.frontLine);
+    let activeWar = null;
+    if (sim.diplomacySystem?.activeWars) {
+      for (let i = 0; i < sim.diplomacySystem.activeWars.length; i++) {
+        const w = sim.diplomacySystem.activeWars[i];
+        if (w.active && w.frontLine) { activeWar = w; break; }
+      }
+    }
     if (activeWar) {
       const fl = activeWar.frontLine;
       lines.push(`⚔️ ${activeWar.attackerName} vs ${activeWar.defenderName} — Front @ (${Math.round(fl.x)},${Math.round(fl.y)}) ▸click`);
@@ -2478,8 +3063,17 @@ export class CanvasRenderer {
     lines.push(`${this._warsPanel ? '▼' : '▶'} [W]ars — ${sim.diplomacySystem?.activeWars?.length || 0} active · ${totalWars} recorded`);
 
     if (sim.chronicleSystem?.entries?.length > 0) {
-      const recent = sim.chronicleSystem.recent(8);
-      const notable = recent.find(e => e.icon === '⚔️' || e.icon === '🕊️') || recent[0];
+      const entries = sim.chronicleSystem.entries;
+      const count = entries.length;
+      let notable = null;
+      for (let i = count - 1; i >= Math.max(0, count - 8); i--) {
+        const e = entries[i];
+        if (e.icon === '⚔️' || e.icon === '🕊️') {
+          notable = e;
+          break;
+        }
+      }
+      if (!notable) notable = entries[count - 1];
       if (notable) {
         let txt = `${notable.date}: ${notable.text}`;
         if (txt.length > 44) txt = txt.slice(0, 43) + "…";
@@ -2558,20 +3152,31 @@ export class CanvasRenderer {
   }
 
   /**
-   * Step E: jump the camera to a world position (front line, wonders…).
+   * Smoothly eases or jumps the camera to a world position (front lines, settlements, agents).
    */
-  centerOn(x, y, zoom = null) {
+  centerOn(x, y, zoom = null, immediate = false) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-    this.camera.x = Math.max(-5, Math.min(this.world.width + 5, x));
-    this.camera.y = Math.max(-5, Math.min(this.world.height + 5, y));
-    if (zoom != null) this.camera.zoom = Math.max(3.5, Math.min(36, zoom));
+    const targetX = Math.max(-5, Math.min(this.world.width + 5, x));
+    const targetY = Math.max(-5, Math.min(this.world.height + 5, y));
+    this.camera.targetX = targetX;
+    this.camera.targetY = targetY;
+    if (zoom != null) {
+      this.camera.targetZoom = Math.max(3.5, Math.min(36, zoom));
+    }
+    if (immediate) {
+      this.camera.x = targetX;
+      this.camera.y = targetY;
+      if (zoom != null) this.camera.zoom = this.camera.targetZoom;
+    }
   }
 
   renderUI() {
     if (!this.selectedEntity) return;
     const e = this.selectedEntity.entity || this.selectedEntity;
-    if (e && e.x !== undefined && e.y !== undefined) {
-      const screen = this.worldToScreen(e.x, e.y);
+    if (e && (e.x !== undefined || e.centroidX !== undefined)) {
+      const coords = this.getEntityRenderCoords(e);
+      const elev = this.getInterpolatedElevation(coords.x, coords.y);
+      const screen = this.worldToScreen(coords.x, coords.y, elev);
       this.ctx.save();
       this.ctx.strokeStyle = "#38bdf8";
       this.ctx.lineWidth = 2;

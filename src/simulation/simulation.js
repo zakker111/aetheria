@@ -145,6 +145,14 @@ export class Simulation {
     this._jobChangeCount = new Map();
     this.birthsThisSession = 0;
     this.deathsThisSession = 0;
+    this.mortalityStats = {
+      totalDeaths: 0,
+      totalAgeAtDeath: 0,
+      averageAgeAtDeath: 0,
+      minAgeAtDeath: 0,
+      maxAgeAtDeath: 0,
+      causes: {}
+    };
 
     // High-agent performance scaling & Spatial LOD (1,000-2,500 agents)
     this.viewportBounds = null;
@@ -275,6 +283,19 @@ export class Simulation {
     
     this.eventBus.on("AGENT_DIED", (data) => {
       this.deathsThisSession++;
+      if (typeof data.age === 'number' && Number.isFinite(data.age)) {
+        this.mortalityStats.totalDeaths++;
+        this.mortalityStats.totalAgeAtDeath += data.age;
+        this.mortalityStats.averageAgeAtDeath = this.mortalityStats.totalAgeAtDeath / this.mortalityStats.totalDeaths;
+        if (this.mortalityStats.minAgeAtDeath === 0 || data.age < this.mortalityStats.minAgeAtDeath) {
+          this.mortalityStats.minAgeAtDeath = data.age;
+        }
+        if (data.age > this.mortalityStats.maxAgeAtDeath) {
+          this.mortalityStats.maxAgeAtDeath = data.age;
+        }
+        const cause = data.cause || 'natural';
+        this.mortalityStats.causes[cause] = (this.mortalityStats.causes[cause] || 0) + 1;
+      }
       if (this.dynastySystem) {
         this.dynastySystem.onAgentDied({ id: data.agentId, name: data.name }, data.cause || "natural");
       }
@@ -558,6 +579,29 @@ export class Simulation {
     return false;
   }
 
+  getMortalitySummary() {
+    let livingSum = 0;
+    let children = 0, adults = 0, elders = 0;
+    for (let i = 0; i < this.agents.length; i++) {
+      const a = this.agents[i];
+      livingSum += a.age;
+      if (a.lifeStage === 'child') children++;
+      else if (a.lifeStage === 'elder') elders++;
+      else adults++;
+    }
+    const avgLivingAge = this.agents.length > 0 ? (livingSum / this.agents.length) : 0;
+    return {
+      totalDeaths: this.mortalityStats.totalDeaths,
+      averageAgeAtDeath: this.mortalityStats.averageAgeAtDeath,
+      minAgeAtDeath: this.mortalityStats.minAgeAtDeath,
+      maxAgeAtDeath: this.mortalityStats.maxAgeAtDeath,
+      causes: { ...this.mortalityStats.causes },
+      livingPopulation: this.agents.length,
+      averageLivingAge: avgLivingAge,
+      demographics: { children, adults, elders }
+    };
+  }
+
   getAgentLodTier(agent) {
     // When population is small and no viewport is configured (e.g. headless test runs with <150 agents),
     // default to Tier 0 to preserve 100% test determinism.
@@ -565,10 +609,6 @@ export class Simulation {
       return 0;
     }
     if (this.selectedEntityId != null && agent.id === this.selectedEntityId) {
-      return 0;
-    }
-    // High-priority combat engagements always run in Tier 0
-    if (agent.combatRole || agent.fleeFrom || (agent.militaryDuty && agent.warbandId != null)) {
       return 0;
     }
     // Check viewport bounds from camera
@@ -581,6 +621,10 @@ export class Simulation {
       const pad1 = 12;
       if (agent.x >= vb.minX - pad1 && agent.x <= vb.maxX + pad1 && agent.y >= vb.minY - pad1 && agent.y <= vb.maxY + pad1) {
         return 1; // Transition periphery buffer around viewport
+      }
+      // Off-camera agents in active combat or fleeing run in Tier 1 rather than forcing full Tier 0 on-camera focus
+      if (agent.fleeFrom || (agent.militaryDuty && agent.warbandId != null)) {
+        return 1;
       }
       return 2; // All off-camera and distant settlements run simplified macro simulation
     }
@@ -771,19 +815,58 @@ export class Simulation {
     this.burningTileCount = this.world.updateFires(this.clock.tick);
     if (this.burningTileCount > 0) this._fireActive = true;
     else this._fireActive = false;
-    // Fires destroy buildings on burning tiles and scatter resources
-    if (this.burningTileCount > 0 && this.buildings) {
-      for (const b of this.buildings) {
-        if (b.health > 0 && this.world.isBurning(Math.floor(b.x), Math.floor(b.y))) {
-          b.health -= 2;
-          if (b.health <= 0) {
-            this.eventBus.emit('building_destroyed', { building: b, cause: 'fire' });
-            // Memory: agents whose home burns remember the loss (ghost-quarter bias later).
-            for (const a of this.agents) {
-              if (a.alive && a.homeId === b.id && typeof a.remember === "function") {
-                a.remember("SACKED_HOME", this.clock.tick, { x: b.x, y: b.y, rep: -1 });
+    // Fires destroy buildings on burning tiles, scorch the earth, and consume resources
+    if (this.burningTileCount > 0) {
+      if (this.buildings) {
+        for (const b of this.buildings) {
+          if (!b.isRuined && b.health > 0 && this.world.isBurning(Math.floor(b.x), Math.floor(b.y))) {
+            b.health -= 2;
+            if (b.health <= 0) {
+              b.health = 0;
+              b.isRuined = true;
+              b.ruinedAtTick = this.clock.tick;
+              this.world.scorchTile(Math.floor(b.x), Math.floor(b.y), 255);
+              this.eventBus.emit('building_destroyed', { building: b, cause: 'fire' });
+              // Memory: agents whose home burns remember the loss (ghost-quarter bias later).
+              for (const a of this.agents) {
+                if (a.alive && a.homeId === b.id && typeof a.remember === "function") {
+                  a.remember("SACKED_HOME", this.clock.tick, { x: b.x, y: b.y, rep: -1 });
+                }
               }
             }
+          }
+        }
+      }
+
+      // Fires incinerate combustible resources (forests, crops, lumber piles)
+      if (this.resources) {
+        for (const res of this.resources) {
+          if (res.destroyed) continue;
+          if (res.resourceType === 'wood' || res.resourceType === 'food') {
+            const rx = Math.floor(res.x);
+            const ry = Math.floor(res.y);
+            if (this.world.isBurning(rx, ry)) {
+              res.amount = (res.amount || 10) - 2;
+              if (res.amount <= 0) {
+                res.destroyed = true;
+                this.world.scorchTile(rx, ry, 220);
+                this.eventBus.emit('resource_depleted', { resource: res, cause: 'fire' });
+              }
+            }
+          }
+        }
+      }
+
+      // Burning settlement centers/warehouses consume stockpiled supplies
+      if (this.settlementSystem?.settlements) {
+        for (const s of this.settlementSystem.settlements.values()) {
+          if (!s.center || !s.stockpile) continue;
+          const cx = Math.floor(s.center.x);
+          const cy = Math.floor(s.center.y);
+          if (this.world.isBurning(cx, cy)) {
+            if (s.stockpile.food > 0) s.stockpile.food = Math.max(0, s.stockpile.food - 0.5);
+            if (s.stockpile.wood > 0) s.stockpile.wood = Math.max(0, s.stockpile.wood - 0.5);
+            this.world.scorchTile(cx, cy, 180);
           }
         }
       }
@@ -1408,15 +1491,18 @@ export class Simulation {
   }
 
   updateAgents() {
-    const births = [];
+    const births = this._birthsBuffer || (this._birthsBuffer = []);
+    births.length = 0;
     // Agents whose position changed this tick; index repositioned
     // in one batched flush after the decision loop (see below).
-    const moved = [];
+    const moved = this._movedBuffer || (this._movedBuffer = []);
+    moved.length = 0;
 
     // Rebuild the incomplete-construction shortlist once per tick.
     if (this._incompleteBuildingsTick !== this.clock.tick) {
       this._incompleteBuildingsTick = this.clock.tick;
-      const list = [];
+      const list = this._incompleteBuildingsBuffer || (this._incompleteBuildingsBuffer = []);
+      list.length = 0;
       for (const b of this.buildings) {
         if (!b.complete && (b.constructionProgress || 0) < 100) list.push(b);
       }
@@ -1430,7 +1516,8 @@ export class Simulation {
     
     const currentTick = this.clock.tick;
     let t0Count = 0, t1Count = 0, t2Count = 0;
-    const activeAgentsThisTick = [];
+    const activeAgentsThisTick = this._activeAgentsBuffer || (this._activeAgentsBuffer = []);
+    activeAgentsThisTick.length = 0;
 
     // Pass 1: LOD classification and time-slice scheduling
     for (let i = 0; i < this.agents.length; i++) {
@@ -1502,7 +1589,10 @@ export class Simulation {
         if (!Agent.SOCIAL_ACTION_TYPES.has(a.type)) continue;
         const t = a.target;
         if (t && typeof t === "object" && t.type === "agent" && t.gossipViews?.has(agent.id)) {
-          if (!targetGossip) targetGossip = new Map();
+          if (!targetGossip) {
+            targetGossip = this._targetGossipMap || (this._targetGossipMap = new Map());
+            targetGossip.clear();
+          }
           targetGossip.set(t.id, t.gossipViews.get(agent.id));
         }
       }
@@ -1593,6 +1683,7 @@ export class Simulation {
           cause: dead.deathCause || "natural"
         });
         this.world.removeFromSpatialIndex(Math.floor(dead.x), Math.floor(dead.y), dead);
+        this.world.entityRegistry?.delete(dead.id);
         // If the agent was registered at a drifted cell (updateMovedAgents
         // tracks that in _sx/_sy), prune that entry too. removeFromSpatialIndex
         // clears the tracking stamps itself.
@@ -1656,13 +1747,20 @@ export class Simulation {
     const envBoost = (isRaining ? 1.6 : 1.0) * seasonFertility;
 
     for (const resource of this.resources) {
-      resource.update(envBoost);
+      resource.update(envBoost, this.world);
     }
 
     // Ground loot decay + cleanup (Phase 1 — Deep Economy)
     if (this.groundItems.length > 0) {
-      for (const it of this.groundItems) it.update();
-      this.groundItems = this.groundItems.filter(it => !it.destroyed && it.total() > 0);
+      let writeIdx = 0;
+      for (let i = 0; i < this.groundItems.length; i++) {
+        const it = this.groundItems[i];
+        it.update();
+        if (!it.destroyed && it.total() > 0) {
+          this.groundItems[writeIdx++] = it;
+        }
+      }
+      this.groundItems.length = writeIdx;
     }
     
     // Natural ecological replenishment: keep the world vibrant with food, wood, and ores
@@ -1799,6 +1897,7 @@ export class Simulation {
       agent.alive = false;
       this.deathsThisSession = (this.deathsThisSession || 0) + 1;
       this.world.removeFromSpatialIndex(Math.floor(agent.x), Math.floor(agent.y), agent);
+      this.world.entityRegistry?.delete(agentId);
       this.agents.splice(idx, 1);
       // Perf: splice shifts every later slot down by one — fix the id -> slot
       // map incrementally instead of leaving stale entries behind.
@@ -2001,6 +2100,14 @@ export class Simulation {
       civilizationAges: this.civilizationAgeSystem ? this.civilizationAgeSystem.serialize() : null,
       weather: this.weatherSystem ? this.weatherSystem.serialize() : null,
       dynasties: this.dynastySystem ? this.dynastySystem.serialize() : null,
+      mortalityStats: {
+        totalDeaths: this.mortalityStats.totalDeaths,
+        totalAgeAtDeath: this.mortalityStats.totalAgeAtDeath,
+        averageAgeAtDeath: this.mortalityStats.averageAgeAtDeath,
+        minAgeAtDeath: this.mortalityStats.minAgeAtDeath,
+        maxAgeAtDeath: this.mortalityStats.maxAgeAtDeath,
+        causes: { ...this.mortalityStats.causes }
+      },
       // Warfare: active warbands (march targets, morale, plunder cargo) drive
       // soldier behavior every tick — losing them desyncs a resumed run badly.
       warfare: {
@@ -2217,6 +2324,17 @@ export class Simulation {
     }
     if (data.dynasties && sim.dynastySystem) {
       sim.dynastySystem = DynastySystem.deserialize(data.dynasties, sim);
+    }
+
+    if (data.mortalityStats) {
+      sim.mortalityStats = {
+        totalDeaths: data.mortalityStats.totalDeaths || 0,
+        totalAgeAtDeath: data.mortalityStats.totalAgeAtDeath || 0,
+        averageAgeAtDeath: data.mortalityStats.averageAgeAtDeath || 0,
+        minAgeAtDeath: data.mortalityStats.minAgeAtDeath || 0,
+        maxAgeAtDeath: data.mortalityStats.maxAgeAtDeath || 0,
+        causes: { ...(data.mortalityStats.causes || {}) }
+      };
     }
 
     return sim;

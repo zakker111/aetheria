@@ -119,12 +119,13 @@ export class WeatherSystem {
       expires: Date.now() + 350,
     };
 
-    // Chance to ignite forest or wood tile
+    // Lightning scorches the impact point and ignites flammable biomes
     const fx = Math.max(0, Math.min(world.width - 1, Math.floor(x)));
     const fy = Math.max(0, Math.min(world.height - 1, Math.floor(y)));
     const idx = fy * world.width + fx;
+    if (world.scorchTile) world.scorchTile(fx, fy, 255);
     const biome = world.biome ? world.biome[idx] : 'grassland';
-    if (biome === 'forest' || biome === 'jungle' || biome === 'savanna') {
+    if (biome === 'forest' || biome === 'jungle' || biome === 'savanna' || biome === 'grassland') {
       world.startFire(fx, fy, 90);
     }
 
@@ -152,6 +153,9 @@ export class WeatherSystem {
             if (world.fireTiles[idx] > 0) {
               world.fireTiles[idx] = 0;
               doused++;
+            }
+            if (world.scorchedTiles && world.scorchedTiles[idx] > 0) {
+              world.scorchedTiles[idx] = Math.max(0, world.scorchedTiles[idx] - 70);
             }
           }
         }

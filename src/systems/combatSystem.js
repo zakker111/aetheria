@@ -42,6 +42,12 @@ export class CombatSystem {
         const actualDamage = Math.max(1, Math.floor(amount * (1 - (target.defense || 0))));
         target.combat.health -= actualDamage;
 
+        // Keep target.health and target.needs.health in sync for agents
+        if (target.health !== undefined) {
+            target.health = Math.max(0, target.combat.health);
+            if (target.needs) target.needs.health = target.health;
+        }
+
         // Memory: a victim of agent-on-agent violence remembers their
         // attacker. This seeds the gossip pipeline with negative claims and
         // colors future social decisions via _feltAbout(). No-op for
@@ -58,7 +64,7 @@ export class CombatSystem {
             target.visuals.flashRed = 5; // Flash red for 5 frames
         }
 
-        this.worldState.events.trigger('entity_damaged', {
+        this.worldState.events?.trigger?.('entity_damaged', {
             target: target,
             attacker: attacker,
             damage: actualDamage
@@ -76,14 +82,55 @@ export class CombatSystem {
      */
     handleDeath(entity, killer) {
         entity.dead = true;
+        entity.alive = false; // Lethal: agent is no longer alive in simulation
         entity.state = 'dead';
+        entity.deathCause = 'combat';
+
+        // Credit killer and assign heroic slayer epithet
+        if (killer && (killer.type === 'agent' || killer.role || killer.alive !== undefined)) {
+            killer.kills = (killer.kills || 0) + 1;
+            killer.battlesFought = (killer.battlesFought || 0) + 1;
+            entity.battlesFought = (entity.battlesFought || 0) + 1;
+
+            if (!killer.epithet) {
+                if (killer.kills >= 4) {
+                    killer.epithet = 'the Undefeated';
+                } else if (killer.kills >= 2) {
+                    killer.epithet = 'the Slayer';
+                } else {
+                    killer.epithet = 'the Blooded';
+                }
+            }
+
+            if (typeof killer.remember === 'function') {
+                const tick = this.worldState?.simulation?.clock?.tick ?? 0;
+                killer.remember('KILLED_ENEMY', tick, {
+                    victimId: entity.id,
+                    victimName: entity.name || 'Enemy'
+                });
+            }
+
+            // Emit death to simulation eventBus
+            const bus = this.worldState?.simulation?.eventBus;
+            if (bus) {
+                bus.emit('COMBAT_KILL', {
+                    killerId: killer.id,
+                    killerName: killer.name,
+                    killerEpithet: killer.epithet,
+                    victimId: entity.id,
+                    victimName: entity.name,
+                    x: entity.x,
+                    y: entity.y
+                });
+            }
+        }
         
         // Drop loot (simplified)
-        if (entity.inventory) {
-            // Drop half inventory on ground (TODO: Implement ground items)
+        if (entity.inventory && this.worldState?.simulation?.dropInventoryOnGround) {
+            this.worldState.simulation.dropInventoryOnGround(entity);
         }
 
-        this.worldState.events.trigger('entity_death', {
+        this.worldState.events?.trigger?.('entity_death', {
             entity: entity,
             killer: killer,
             faction: entity.factionId

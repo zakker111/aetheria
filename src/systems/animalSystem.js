@@ -10,6 +10,11 @@ const SPECIES = {
   wolf:   { speed: 0.48, herd: [2, 4], weight: 8, foodGain: 0,  hostile: true }
 };
 
+const WOLF_BIOMES = Object.freeze(['forest', 'jungle', 'highland', 'tundra', 'mountain', 'snow']);
+const PREY_BIOMES = Object.freeze(['forest', 'jungle', 'grassland', 'plains', 'savanna']);
+const WOLF_BIOMES_SET = new Set(WOLF_BIOMES);
+const PREY_BIOMES_SET = new Set(PREY_BIOMES);
+
 export class AnimalSystem {
   constructor(sim = null) {
     this.sim = sim;
@@ -31,10 +36,7 @@ export class AnimalSystem {
   }
 
   _spawnBiomesFor(species) {
-    if (species === 'wolf') {
-      return ['forest', 'jungle', 'highland', 'tundra', 'mountain', 'snow'];
-    }
-    return ['forest', 'jungle', 'grassland', 'plains', 'savanna'];
+    return species === 'wolf' ? WOLF_BIOMES : PREY_BIOMES;
   }
 
   findSpawnTile(allowedBiomes) {
@@ -119,33 +121,30 @@ export class AnimalSystem {
     const rng = this._rng();
 
     // --- Movement / behavior -------------------------------------------
-    for (const a of [...this.animals]) {
+    const movedAnimals = [];
+    const deadAnimals = [];
+    for (let i = 0; i < this.animals.length; i++) {
+      const a = this.animals[i];
       a.age++;
       if (a.breedCooldown > 0) a.breedCooldown--;
       if (a.attackCooldown > 0) a.attackCooldown--;
 
       // Old age death (wolves that live too long)
       if (a.age > a.maxAge) {
-        this.removeAnimal(a);
+        deadAnimals.push(a);
         continue;
       }
 
       const def = SPECIES[a.species];
 
       // Danger check: nearby armed/hunting agents scare prey; wolves chase.
-      // O(1)-amortized: query the shared per-tick perception scan cache
-      // instead of scanning the full agent roster per animal (was
-      // animals x agents every tick). _getScan returns entities in
-      // canonical id order, so threat selection stays deterministic and
-      // identical across fresh runs, save/load resumes and same-seed twins.
+      // O(1)-amortized: query the shared per-tick perception scan cache.
       let threat = null;
       let nearestAgent = null;
       let nearestAgentD = Infinity;
-      // Snapshot the shared scan list: animal movement mutates the spatial
-      // index mid-loop, which invalidates (clears) the cache. Holding the
-      // old array reference keeps this iteration safe and read-only.
-      const nearby = [...world._getScan(Math.floor(a.x), Math.floor(a.y), 7)];
-      for (const ent of nearby) {
+      const nearby = world._getScan(Math.floor(a.x), Math.floor(a.y), 7);
+      for (let j = 0; j < nearby.length; j++) {
+        const ent = nearby[j];
         if (!ent || ent.type !== 'agent' || !ent.alive) continue;
         const d2 = (ent.x - a.x) ** 2 + (ent.y - a.y) ** 2;
         if (d2 > 49) continue; // exact radius test (scan is square-bounded)
@@ -180,7 +179,8 @@ export class AnimalSystem {
         if (nearestAgent && nearestAgentD < preyD && (nearestAgent.lifeStage === 'child' || nearestAgent.health < 50)) {
           prey = nearestAgent; preyD = nearestAgentD;
         }
-        for (const other of this.animals) {
+        for (let j = 0; j < this.animals.length; j++) {
+          const other = this.animals[j];
           if (other === a || other.species === 'wolf') continue;
           const d = Math.hypot(other.x - a.x, other.y - a.y);
           if (d < preyD) { prey = other; preyD = d; }
@@ -196,7 +196,7 @@ export class AnimalSystem {
           } else if (prey.type === 'animal') {
             prey.health -= 60;
             if (prey.health <= 0) {
-              this.removeAnimal(prey);
+              deadAnimals.push(prey);
               this.sim.eventBus?.emit('ANIMAL_KILLED', { species: prey.species, x: prey.x, y: prey.y, by: 'wolf' });
             }
           }
@@ -223,14 +223,24 @@ export class AnimalSystem {
 
       // Terrain constraints: stay in habitable biomes, avoid water/fire/buildings
       const tx = Math.floor(nx), ty = Math.floor(ny);
-      const okBiome = this._spawnBiomesFor(a.species).includes(this._biomeAt(tx, ty));
+      const biome = world.biome[ty * world.width + tx] || 'plains';
+      const okBiome = (a.species === 'wolf' ? WOLF_BIOMES_SET : PREY_BIOMES_SET).has(biome);
       if (okBiome && world.isWalkable(tx, ty) && !world.isBurning(tx, ty)) {
-        world.removeFromSpatialIndex(Math.floor(a.x), Math.floor(a.y), a);
         a.x = nx; a.y = ny;
-        world.addToSpatialIndex(tx, ty, a);
+        movedAnimals.push(a);
       } else {
         a.wanderTicks = 0; // pick a new direction next tick
       }
+    }
+
+    // Batch removal of dead animals
+    for (let i = 0; i < deadAnimals.length; i++) {
+      this.removeAnimal(deadAnimals[i]);
+    }
+
+    // Batch update moved animals in spatial index
+    if (movedAnimals.length > 0) {
+      world.updateMovedAgents(movedAnimals);
     }
 
     // --- Breeding (herd species only, capped) --------------------------
@@ -238,9 +248,14 @@ export class AnimalSystem {
       for (const a of this.animals) {
         if (SPECIES[a.species].hostile) continue; // wolves breed rarely below
         if (a.age < 200 || a.breedCooldown > 0) continue;
-        const mate = this.animals.find(o => o !== a && o.species === a.species &&
-          o.age >= 200 && o.breedCooldown <= 0 &&
-          Math.hypot(o.x - a.x, o.y - a.y) < 3);
+        let mate = null;
+        for (let j = 0; j < this.animals.length; j++) {
+          const o = this.animals[j];
+          if (o !== a && o.species === a.species && o.age >= 200 && o.breedCooldown <= 0) {
+            const dx = o.x - a.x, dy = o.y - a.y;
+            if (dx * dx + dy * dy < 9) { mate = o; break; }
+          }
+        }
         if (mate) {
           a.breedCooldown = mate.breedCooldown = 400;
           const baby = this.spawn(a.species, (a.x + mate.x) / 2, (a.y + mate.y) / 2);

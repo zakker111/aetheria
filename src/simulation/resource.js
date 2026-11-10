@@ -46,12 +46,12 @@ export class Resource {
     }
   }
 
-  update(environmentalModifier = 1.0) {
+  update(environmentalModifier = 1.0, world = null) {
     if (this.destroyed) return;
 
     const rate = Math.max(0.005, this.regrowRate * (environmentalModifier || 1.0));
 
-    if (this.amount <= 0) {
+    if (this.amount <= 0 || this.depleted) {
       // Node depleted: sit dormant until the recovery countdown elapses,
       // then nature begins refilling it from zero.
       if (this.recoveryTicks > 0) {
@@ -62,6 +62,9 @@ export class Resource {
           this.depleted = false;
           if (this.normalLabel) {
             this.label = this.normalLabel;
+          }
+          if (world && typeof world.addToSpatialIndex === 'function') {
+            world.addToSpatialIndex(Math.floor(this.x), Math.floor(this.y), this);
           }
         }
       }
@@ -82,22 +85,29 @@ export class Resource {
   // Called whenever harvesting brings a node to empty: arm the recovery
   // countdown so depletion is real and visible (a felled grove reads as a
   // "Stump", an exhausted seam as "Spent Seam") before it regrows.
-  markDepleted() {
-    if (this.amount <= 0 && this.recoveryTicks === 0) {
+  markDepleted(world = null) {
+    this.amount = 0;
+    if (this.recoveryTicks === 0) {
       this.recoveryTicks = this.recoveryTime || 60;
       this.depleted = true;
       if (this.depletedLabel) {
         if (!this.normalLabel) this.normalLabel = this.label;
         this.label = this.depletedLabel;
       }
+      if (world && typeof world.removeFromSpatialIndex === 'function') {
+        world.removeFromSpatialIndex(Math.floor(this.x), Math.floor(this.y), this);
+      }
     }
   }
 
-  consume(amount) {
+  consume(amount, world = null) {
     if (this.destroyed) return false;
     this.amount = Math.max(0, this.amount - amount);
-    if (this.amount <= 0) this.markDepleted();
-    return this.amount > 0;
+    if (this.amount <= 0) {
+      this.markDepleted(world);
+      return false;
+    }
+    return true;
   }
 
   serialize() {

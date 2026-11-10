@@ -20,15 +20,5 @@ jobs:
         run: npm run lint
       - name: Build with Vite
         run: npm run build
-      - name: Determinism suite
-        run: node tests/determinism.mjs
-      - name: Gossip save/load suite
-        run: node tests/gossip.mjs
-      - name: Supply chain suite
-        run: node tests/supplychain.mjs
-      - name: War visibility suite
-        run: node tests/warvisible.mjs
-      - name: Warring scenario suite
-        run: node tests/scenario_warring.mjs
-      - name: Soak test
-        run: node tests/soak.mjs
+      - name: Run Test Suites
+        run: npm test

@@ -450,6 +450,15 @@ export class Agent {
     // (Sorting happens once per shared scan inside world._getScan.)
 
     for (const entity of nearby) {
+      if (
+        perception.nearbyAgents.length >= MAX_NEARBY_AGENTS &&
+        perception.nearbyResources.length >= MAX_NEARBY_RESOURCES &&
+        perception.nearbyBuildings.length >= MAX_NEARBY_BUILDINGS &&
+        perception.nearbyAnimals.length >= MAX_NEARBY_ANIMALS
+      ) {
+        break;
+      }
+
       if (entity.id === this.id) continue;
 
       const dx = entity.x - this.x;
@@ -493,7 +502,8 @@ export class Agent {
 
   // Generate goals based on needs, jobs, reproduction, building, and community
   generateGoals(simulation, perception = null) {
-    this.goals = [];
+    if (!this.goals) this.goals = [];
+    else this.goals.length = 0;
     
     const homeSettlement = simulation?.settlementSystem?.getAgentSettlement?.(this.id);
     const hasTownFood = (homeSettlement?.stockpile?.food || 0) + (homeSettlement?.stockpile?.bread || 0) > 0;
@@ -972,7 +982,8 @@ export class Agent {
 
   // Generate legal actions for current goals
   generateActions(perception, world, simulation) {
-    const actions = [];
+    const actions = this._actionsBuffer || (this._actionsBuffer = []);
+    actions.length = 0;
     
     // Lazy perception: Simulation.updateAgents() marks perception stale each
     // tick; the spatial scan runs here only if a goal below actually reads
@@ -996,20 +1007,8 @@ export class Agent {
           //  - At-war or hostile settlements: never build for them.
           const homeId = this.settlementId ||
             (simulation && simulation.settlementSystem ? simulation.settlementSystem.agentSettlementMap.get(this.id) : null);
-          const isFriendlySite = (siteSid) => {
-            if (siteSid == null) return true;             // unowned site: anyone may build
-            if (homeId == null) return false;             // homeless agents only build unowned sites
-            if (siteSid === homeId) return true;          // own community always
-            if (simulation && simulation.diplomacySystem) {
-              try {
-                const rel = simulation.diplomacySystem.getRelation(homeId, siteSid);
-                if (!rel) return false;
-                if (rel.status === 'war') return false;   // never aid an enemy
-                return rel.score >= 40;                   // friendly enough => cooperative labor
-              } catch { return false; }
-            }
-            return true;                                  // no diplomacy layer: treat all as friendly
-          };
+          const diplo = simulation && simulation.diplomacySystem;
+
           // Check all incomplete buildings in simulation or local perception
           let candidate = null;
           let bestDist = Infinity;
@@ -1020,7 +1019,19 @@ export class Agent {
           // rebuilt once per tick — same deterministic outcome, far cheaper.
           const pendingList = (simulation && simulation.incompleteBuildings) || [];
           for (const b of pendingList) {
-            if (isFriendlySite(b.settlementId ?? null)) {
+            const siteSid = b.settlementId ?? null;
+            let friendly = true;
+            if (siteSid != null) {
+              if (homeId == null) {
+                friendly = false;
+              } else if (siteSid !== homeId) {
+                if (diplo) {
+                  const rel = diplo.getRelation(homeId, siteSid);
+                  friendly = !!rel && rel.status !== 'war' && rel.score >= 40;
+                }
+              }
+            }
+            if (friendly) {
               const dist = this.distanceTo(b);
               if (dist < bestDist) {
                 bestDist = dist;
@@ -1041,8 +1052,12 @@ export class Agent {
           break;
         }
         
-        case "reproduce":
+        case "reproduce": {
           needScan();
+          const relSys = simulation && simulation.relationshipSystem;
+          const fam = relSys ? relSys.getRelatives(this.id) : null;
+          const myRelMap = relSys && relSys.relationships ? relSys.relationships.get(this.id) : null;
+
           for (const agent of perception.nearbyAgents) {
             if (agent.alive && agent !== this &&
                 agent.lifeStage === "adult" &&
@@ -1050,16 +1065,14 @@ export class Agent {
                 agent.gender !== this.gender &&
                 agent.needs.food > 40 && agent.needs.water > 40) {
               // Incest taboo: never pursue parents / children / siblings
-              const fam = simulation && simulation.relationshipSystem
-                ? simulation.relationshipSystem.getRelatives(this.id) : null;
               if (fam && (fam.spouse === agent.id ||
                           fam.parents.includes(agent.id) ||
                           fam.children.includes(agent.id) ||
                           fam.siblings.includes(agent.id))) continue;
               // Prefer partners we already know (bonding matters), plus compatibility
               let bonus = 0;
-              if (simulation && simulation.relationshipSystem) {
-                const rel = simulation.relationshipSystem.getRelationship(this.id, agent.id);
+              if (myRelMap) {
+                const rel = myRelMap.get(agent.id);
                 if (rel) bonus += Math.min(8, (rel.friendship || 0) * 0.08);
               }
               if (this.partnerId === agent.id) bonus += 6; // established couples stay together
@@ -1071,6 +1084,7 @@ export class Agent {
             }
           }
           break;
+        }
 
         case "socialize":
           needScan();
@@ -1153,7 +1167,7 @@ export class Agent {
         case "chop_wood":
           needScan();
           for (const res of perception.nearbyResources) {
-            if (res.resourceType === "wood" && res.amount > 0) {
+            if (res.resourceType === "wood" && res.amount > 0 && !res.depleted) {
               actions.push({
                 type: "chop_wood",
                 target: res,
@@ -1166,7 +1180,7 @@ export class Agent {
         case "mine_ore":
           needScan();
           for (const res of perception.nearbyResources) {
-            if ((res.resourceType === "ore" || res.resourceType === "gem") && res.amount > 0) {
+            if ((res.resourceType === "ore" || res.resourceType === "gem") && res.amount > 0 && !res.depleted) {
               actions.push({
                 type: "mine_ore",
                 target: res,
@@ -1183,7 +1197,7 @@ export class Agent {
         case "find_food":
           needScan();
           for (const res of perception.nearbyResources) {
-            if (res.resourceType === "food" && res.amount > 0) {
+            if (res.resourceType === "food" && res.amount > 0 && !res.depleted) {
               actions.push({
                 type: "gather_food",
                 target: res,
@@ -1202,7 +1216,7 @@ export class Agent {
           const memNow = tickOf(simulation);
           needScan();
           for (const res of perception.nearbyResources) {
-            if (res.amount > 0) {
+            if (res.amount > 0 && !res.depleted) {
               let actType = "gather_food";
               if (res.resourceType === "wood") actType = "chop_wood";
               else if (res.resourceType === "ore") actType = "mine_ore";
@@ -1245,7 +1259,7 @@ export class Agent {
         case "find_water":
           needScan();
           for (const res of perception.nearbyResources) {
-            if (res.resourceType === "water") {
+            if (res.resourceType === "water" && res.amount > 0 && !res.depleted) {
               actions.push({
                 type: "drink_water",
                 target: res,
@@ -1277,16 +1291,16 @@ export class Agent {
           let best = null;
           let bestScore = -Infinity;
           needScan();
+          const relSys = simulation && simulation.relationshipSystem;
+          const myRelMap = relSys && relSys.relationships ? relSys.relationships.get(this.id) : null;
           for (const agent of perception.nearbyAgents) {
             if (!agent.alive || agent === this) continue;
             const d = this.distanceTo(agent);
             if (d < 4) continue; // already together — socialize covers it
             let affinity = 0;
-            if (simulation && simulation.relationshipSystem) {
-              try {
-                const rel = simulation.relationshipSystem.getRelationship(this.id, agent.id);
-                if (rel) affinity = (rel.friendship || 0) * 0.1;
-              } catch { /* ignore */ }
+            if (myRelMap) {
+              const rel = myRelMap.get(agent.id);
+              if (rel) affinity = (rel.friendship || 0) * 0.1;
             }
             const score = affinity - Math.min(20, d) * 0.3;
             if (score > bestScore) { bestScore = score; best = agent; }
@@ -1619,9 +1633,8 @@ export class Agent {
       // A view with no hear-timestamp can only come from a legacy save; treat
       // it as fresh rather than silently dropping the hearsay signal.
       const gAge = heardAt != null ? Math.max(0, now - heardAt) : 0;
-      if (gAge <= Agent.MEMORY_RECENCY_TICKS) {
-        aff += 0.6 * this.gossipViews.get(subjectId) * (1 - gAge / Agent.MEMORY_RECENCY_TICKS);
-      }
+      const decay = Math.max(0.2, 1 - gAge / Agent.MEMORY_RECENCY_TICKS);
+      aff += 0.6 * this.gossipViews.get(subjectId) * decay;
     }
 
     return Math.max(-10, Math.min(10, aff));
@@ -2295,15 +2308,29 @@ export class Agent {
       }
         
       case "gather_food":
-        if (!action.target || action.target.amount <= 0) {
+        if (!action.target || action.target.amount <= 0 || action.target.depleted) {
           this.currentAction = null;
           break;
         }
         if (this.distanceTo(action.target) < 1.8) {
           // First harvest of a refilled node restores its living label.
           if (action.target.normalLabel) action.target.label = action.target.normalLabel;
-          action.target.amount = Math.max(0, action.target.amount - 0.5);
-          if (action.target.amount <= 0) action.target.markDepleted();
+          if (typeof action.target.consume === 'function') {
+            action.target.consume(3.0, world);
+          } else {
+            action.target.amount = Math.max(0, action.target.amount - 3.0);
+            if (action.target.amount <= 0 && typeof action.target.markDepleted === 'function') {
+              action.target.markDepleted(world);
+            }
+          }
+          if ((action.target.amount <= 0 || action.target.depleted) && eventBus) {
+            eventBus.emit("RESOURCE_DEPLETED", {
+              agentId: this.id,
+              resourceType: "food",
+              x: action.target.x,
+              y: action.target.y
+            });
+          }
           this.inventory.wheat = (this.inventory.wheat || 0) + 1;
           this.needs.food = Math.min(100, this.needs.food + 30);
           // Phase 2: skill XP with life-stage modifiers; rich nodes get
@@ -2339,14 +2366,28 @@ export class Agent {
         break;
 
       case "chop_wood":
-        if (!action.target || action.target.amount <= 0) {
+        if (!action.target || action.target.amount <= 0 || action.target.depleted) {
           this.currentAction = null;
           break;
         }
         if (this.distanceTo(action.target) < 1.8) {
           if (action.target.normalLabel) action.target.label = action.target.normalLabel;
-          action.target.amount = Math.max(0, action.target.amount - 0.5);
-          if (action.target.amount <= 0) action.target.markDepleted();
+          if (typeof action.target.consume === 'function') {
+            action.target.consume(4.0, world);
+          } else {
+            action.target.amount = Math.max(0, action.target.amount - 4.0);
+            if (action.target.amount <= 0 && typeof action.target.markDepleted === 'function') {
+              action.target.markDepleted(world);
+            }
+          }
+          if ((action.target.amount <= 0 || action.target.depleted) && eventBus) {
+            eventBus.emit("RESOURCE_DEPLETED", {
+              agentId: this.id,
+              resourceType: "wood",
+              x: action.target.x,
+              y: action.target.y
+            });
+          }
           this.inventory.wood_log = (this.inventory.wood_log || 0) + 1;
           // Phase 2: woodcutters train gather; remember productive trees.
           {
@@ -2370,17 +2411,32 @@ export class Agent {
         break;
 
       case "mine_ore":
-        if (!action.target || action.target.amount <= 0) {
+        if (!action.target || action.target.amount <= 0 || action.target.depleted) {
           this.currentAction = null;
           break;
         }
         if (this.distanceTo(action.target) < 1.8) {
           if (action.target.normalLabel) action.target.label = action.target.normalLabel;
-          action.target.amount = Math.max(0, action.target.amount - 0.5);
-          if (action.target.amount <= 0) action.target.markDepleted();
+          const isGemNode = action.target.resourceType === "gem";
+          const harvestUnits = isGemNode ? 2.0 : 3.5;
+          if (typeof action.target.consume === 'function') {
+            action.target.consume(harvestUnits, world);
+          } else {
+            action.target.amount = Math.max(0, action.target.amount - harvestUnits);
+            if (action.target.amount <= 0 && typeof action.target.markDepleted === 'function') {
+              action.target.markDepleted(world);
+            }
+          }
+          if ((action.target.amount <= 0 || action.target.depleted) && eventBus) {
+            eventBus.emit("RESOURCE_DEPLETED", {
+              agentId: this.id,
+              resourceType: isGemNode ? "gem" : "ore",
+              x: action.target.x,
+              y: action.target.y
+            });
+          }
           // Crystal veins yield the rare gem stone castles demand — a distinct
           // inventory good that flows through deposit -> stockpile -> craft.
-          const isGemNode = action.target.resourceType === "gem";
           if (isGemNode) {
             this.inventory.gem_raw = (this.inventory.gem_raw || 0) + 1;
           } else {
@@ -2408,25 +2464,33 @@ export class Agent {
         break;
         
       case "drink_water":
-        if (!action.target) {
+        if (!action.target || action.target.amount <= 0 || action.target.depleted) {
           this.currentAction = null;
           break;
         }
         if (this.distanceTo(action.target) < 1.8) {
           this.needs.water = Math.min(100, this.needs.water + 45);
           if (typeof action.target.consume === 'function') {
-            action.target.consume(1);
+            action.target.consume(2.5, world);
           } else if (typeof action.target.amount === 'number' && action.target.amount > 0) {
-            action.target.amount = Math.max(0, action.target.amount - 1);
+            action.target.amount = Math.max(0, action.target.amount - 2.5);
             if (action.target.amount <= 0 && typeof action.target.markDepleted === 'function') {
-              action.target.markDepleted();
+              action.target.markDepleted(world);
             }
+          }
+          if ((action.target.amount <= 0 || action.target.depleted) && eventBus) {
+            eventBus.emit("RESOURCE_DEPLETED", {
+              agentId: this.id,
+              resourceType: "water",
+              x: action.target.x,
+              y: action.target.y
+            });
           }
           if (eventBus) {
             eventBus.emit("RESOURCE_CONSUMED", { 
               agentId: this.id, 
-              resourceType: "water",
-              amount: 1
+              resourceType: "water", 
+              amount: 2.5
             });
           }
           this.currentAction = null;
@@ -2556,7 +2620,7 @@ export class Agent {
             simulation.settlementSystem.withdrawFromStockpile(sid, "water", 1);
           }
           if (action.target && typeof action.target.consume === 'function') {
-            action.target.consume(1);
+            action.target.consume(2.0, world);
           }
           if (eventBus) {
             eventBus.emit("RESOURCE_CONSUMED", { agentId: this.id, settlementId: sid, resourceType: "water", amount: 1 });
@@ -3022,6 +3086,9 @@ export class Agent {
       reproduceCooldown: this.reproduceCooldown || 0,
       starvationTicks: this.starvationTicks || 0,
       deathCause: this.deathCause ?? null,
+      kills: this.kills || 0,
+      epithet: this.epithet ?? null,
+      battlesFought: this.battlesFought || 0,
       needs: { ...this.needs },
       personality: { ...this.personality },
       skills: { ...this.skills },
@@ -3163,6 +3230,9 @@ export class Agent {
     agent.starvationTicks = data.starvationTicks || 0;
     agent.reproduceCooldown = data.reproduceCooldown || 0;
     agent.deathCause = data.deathCause ?? null;
+    agent.kills = data.kills || 0;
+    agent.epithet = data.epithet ?? null;
+    agent.battlesFought = data.battlesFought || 0;
     agent.needs = { ...data.needs };
     agent.personality = { ...data.personality };
     agent.skills = { ...data.skills };

@@ -121,31 +121,46 @@ export class FactionSystem {
     return newFactions;
   }
   
-  // Recruit new members to factions
+  // Recruit new members to factions (optimized with spatial lookup)
   recruitMembers(agents, settlements, relationshipSystem) {
+    const world = this.sim?.world;
     for (const faction of this.factions.values()) {
-      // Find potential recruits near faction members
-      const factionAgents = agents.filter(a => 
-        a.alive && faction.members.has(a.id)
-      );
+      if (faction.members.size === 0) continue;
       
-      if (factionAgents.length === 0) continue;
+      // Select up to 4 recruiters per faction to avoid O(members x agents) scaling
+      const recruiters = [];
+      if (faction.leaderId && this.sim?._agentById) {
+        const leader = this.sim._agentById(faction.leaderId);
+        if (leader && leader.alive) recruiters.push(leader);
+      }
+      for (const memId of faction.members) {
+        if (recruiters.length >= 4) break;
+        if (memId === faction.leaderId) continue;
+        const m = (typeof this.sim?._agentById === 'function')
+          ? this.sim._agentById(memId)
+          : agents.find(a => a.id === memId);
+        if (m && m.alive) recruiters.push(m);
+      }
       
-      for (const member of factionAgents) {
-        // Find nearby agents
-        const nearbyAgents = agents.filter(a => {
-          if (!a.alive || this.agentFactionMap.has(a.id)) return false;
-          const dx = a.x - member.x;
-          const dy = a.y - member.y;
-          return Math.sqrt(dx * dx + dy * dy) < 15;
-        });
+      if (recruiters.length === 0) continue;
+      
+      const visitedRecruits = new Set();
+      for (const member of recruiters) {
+        const nearby = (world && typeof world.getNearbyAgents === 'function')
+          ? world.getNearbyAgents(member.x, member.y, 15)
+          : agents;
         
-        for (const candidate of nearbyAgents) {
-          // Check belief compatibility
-          const compatibility = this.calculateBeliefCompatibility(candidate, faction);
-          
-          if (compatibility > 0.6 && this._rng().next() < faction.influence * 0.1) {
-            this.joinFaction(candidate.id, faction.id);
+        for (let i = 0; i < nearby.length; i++) {
+          const candidate = nearby[i];
+          if (!candidate.alive || this.agentFactionMap.has(candidate.id) || visitedRecruits.has(candidate.id)) continue;
+          const dx = candidate.x - member.x;
+          const dy = candidate.y - member.y;
+          if (dx * dx + dy * dy < 225) { // 15^2 = 225
+            visitedRecruits.add(candidate.id);
+            const compatibility = this.calculateBeliefCompatibility(candidate, faction);
+            if (compatibility > 0.6 && this._rng().next() < faction.influence * 0.1) {
+              this.joinFaction(candidate.id, faction.id);
+            }
           }
         }
       }

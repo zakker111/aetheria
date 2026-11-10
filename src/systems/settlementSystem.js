@@ -327,8 +327,15 @@ export class SettlementSystem {
       // Every ~25 ticks a structure collapses until none remain.
       if (bs.length > 0 && (settlement.ruinsTicks % 25 === 0)) {
         const gone = bs.shift();
+        if (gone) {
+          gone.isRuined = true;
+          gone.health = 0;
+          if (this.sim?.world?.scorchTile) {
+            this.sim.world.scorchTile(Math.floor(gone.x), Math.floor(gone.y), 180);
+          }
+        }
         this.sim?.eventBus?.emit('BUILDING_COLLAPSED', {
-          name: settlement.name, buildingType: gone.type || gone.buildingType || 'structure'
+          name: settlement.name, buildingType: gone?.type || gone?.buildingType || 'structure'
         });
       }
       // Once fully collapsed and long abandoned, erase it from memory.
