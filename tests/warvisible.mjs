@@ -50,7 +50,8 @@ check('war has a justified casus belli (not generic fallback)',
   a.signature === '' || /Resource Wars|Diplomatic Rift|Holy War|Militarist Aggression/.test(a.signature));
 check('warfare system reacted (warband formed or battle recorded)',
   a.sim.warfareSystem.warbands.size > 0 ||
-  a.sim.diplomacySystem.activeWars.some(w => w.battles.length > 0));
+  a.sim.diplomacySystem.activeWars.some(w => w.battles.length > 0) ||
+  a.sim.diplomacySystem.warHistory.some(w => w.battles.length > 0));
 check('diplomacy state deterministic across identical seeds', a.signature === b.signature);
 
 // No settlement should be at war with more than every other settlement

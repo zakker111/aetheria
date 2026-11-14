@@ -78,7 +78,8 @@ console.log('--- Testing Combat Lethality, Slayers, Epithets & Lore ---');
   check('warfare casualty marked dead with combat cause', soldier2.alive === false && soldier2.deathCause === 'combat');
   check('warfare attacker credited with kill and epithet', soldier1.kills >= 1 && Boolean(soldier1.epithet));
   check('war battle recorded with historic name', war.battles.length > 0 && typeof war.battles[0].name === 'string');
-  check('war battle name has location descriptor', war.battles[0].name.includes('Battle') || war.battles[0].name.includes('Clash') || war.battles[0].name.includes('Slaughter') || war.battles[0].name.includes('Field'));
+  check('war battle name has location descriptor',
+    ['Battle', 'Clash', 'Slaughter', 'Field', 'Siege', 'Assault', 'Stand'].some(k => war.battles[0].name.includes(k)));
 }
 
 // 3. Save/Load Determinism of Kills & Epithets

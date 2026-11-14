@@ -16,27 +16,31 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
   onSelectAgent,
   onPanTo,
 }) => {
-  const [activeTab, setActiveTab] = useState<'dynasties' | 'diplomacy' | 'warroom'>('dynasties');
+  const [activeTab, setActiveTab] = useState<'dynasties' | 'diplomacy' | 'warroom' | 'heroes'>('dynasties');
   const [selectedDynastyId, setSelectedDynastyId] = useState<number | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
   const [selectedSettlementId, setSelectedSettlementId] = useState<number | null>(null);
   const [marriageTargetDynastyId, setMarriageTargetDynastyId] = useState<number | null>(null);
+  const [, setUiRevision] = useState(0);
 
   if (!isOpen || !simulation) return null;
 
   const sim = simulation;
-  const dynasties = sim.dynastySystem ? Array.from(sim.dynastySystem.dynasties.values()) : [];
-  const settlements = sim.settlementSystem ? Array.from(sim.settlementSystem.settlements.values()) : [];
-  const wars = sim.diplomacySystem ? sim.diplomacySystem.activeWars || [] : [];
-  const warHistory = sim.diplomacySystem ? sim.diplomacySystem.warHistory || [] : [];
-  const treaties = sim.diplomacySystem ? sim.diplomacySystem.treaties || [] : [];
+  const dynasties: any[] = sim.dynastySystem ? Array.from(sim.dynastySystem.dynasties.values()) : [];
+  const settlements: any[] = sim.settlementSystem ? Array.from(sim.settlementSystem.settlements.values()) : [];
+  const wars: any[] = sim.diplomacySystem ? sim.diplomacySystem.activeWars || [] : [];
+  const warHistory: any[] = sim.diplomacySystem ? sim.diplomacySystem.warHistory || [] : [];
+  const treaties: any[] = sim.diplomacySystem ? sim.diplomacySystem.treaties || [] : [];
+  const activeCivilWars = dynasties.filter((d: any) => d.civilWar?.active);
 
   // Default selected dynasty to first available
   const currentDynasty = selectedDynastyId 
-    ? dynasties.find(d => d.id === selectedDynastyId) || dynasties[0]
+    ? dynasties.find((d: any) => d.id === selectedDynastyId) || dynasties[0]
     : dynasties[0];
 
-  const currentSettlement = settlements.find(s => s.id === currentDynasty?.settlementId);
+  const currentSettlement = settlements.find((s: any) => s.id === currentDynasty?.settlementId);
+
+  const bumpUi = () => setUiRevision((n) => n + 1);
 
   // Helper to arrange royal marriage
   const handleArrangeMarriage = (dynAId: number, dynBId: number) => {
@@ -44,14 +48,50 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
     const record = sim.dynastySystem.arrangeRoyalMarriage(dynAId, dynBId);
     if (record) {
       setMarriageTargetDynastyId(null);
+      bumpUi();
     }
+  };
+
+  // Helper to toggle succession law
+  const handleSetSuccessionLaw = (dynId: number, law: 'primogeniture' | 'elective') => {
+    if (!sim.dynastySystem?.setSuccessionLaw) return;
+    if (sim.dynastySystem.setSuccessionLaw(dynId, law)) {
+      bumpUi();
+    }
+  };
+
+  // Helper to spark or resolve a succession crisis
+  const handleSparkCrisis = (dynId: number) => {
+    if (!sim.dynastySystem?.sparkSuccessionCrisis) return;
+    sim.dynastySystem.sparkSuccessionCrisis(dynId, 'Imperial Chancellery Intervention');
+    bumpUi();
+  };
+
+  const handleResolveCivilWar = (dyn: any, outcome: 'loyalist_victory' | 'usurpation') => {
+    if (!sim.dynastySystem?.resolveCivilWar) return;
+    sim.dynastySystem.resolveCivilWar(dyn, outcome);
+    bumpUi();
   };
 
   // Helper to convene peace conference
   const handleConveneConference = (s1Id: number, s2Id: number) => {
     if (!sim.diplomacySystem) return;
     sim.diplomacySystem.convenePeaceConference(s1Id, s2Id, null, "Diplomatic Mediation");
+    bumpUi();
   };
+
+  // Living champions & fallen legends for Hall of Heroes
+  const livingHeroes = (sim.agents || [])
+    .filter((a: any) => a.alive && ((a.kills || 0) >= 1 || a.legendaryWeapon || a.epithet))
+    .slice()
+    .sort((a: any, b: any) => ((b.kills || 0) - (a.kills || 0)) || ((b.battlesFought || 0) - (a.battlesFought || 0)) || (a.id - b.id))
+    .slice(0, 18);
+  const fallenLegends = (sim.fallenHeroes || []).slice(0, 18);
+  const historicBattles = [...wars, ...warHistory]
+    .flatMap((w: any) => (w.battles || []).map((b: any) => ({ ...b, attackerName: w.attackerName, defenderName: w.defenderName })))
+    .filter((b: any) => b && b.name)
+    .sort((a: any, b: any) => (b.tick || 0) - (a.tick || 0))
+    .slice(0, 20);
 
   return (
     <div
@@ -192,11 +232,34 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
+              whiteSpace: 'nowrap',
               transition: 'all 0.15s ease',
             }}
           >
             <span>⚔️</span>
-            <span>War Room & Sieges ({wars.length})</span>
+            <span>War Room ({wars.length + activeCivilWars.length})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('heroes')}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '8px',
+              border: 'none',
+              background: activeTab === 'heroes' ? '#f59e0b' : 'transparent',
+              color: activeTab === 'heroes' ? '#0f172a' : '#cbd5e1',
+              fontWeight: 600,
+              fontSize: '13px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              whiteSpace: 'nowrap',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <span>🏆</span>
+            <span>Hall of Heroes</span>
           </button>
         </div>
 
@@ -322,14 +385,45 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
                     </div>
                   </div>
 
-                  {/* Monarch Details */}
+                  {/* Succession Law Switcher */}
                   <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '10px' }}>
                     <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>REIGNING MONARCH</div>
                     <div style={{ fontSize: '14px', fontWeight: 700, color: '#f8fafc', marginTop: '2px' }}>
                       {currentDynasty.monarchTitle} {currentDynasty.monarchName}
                     </div>
-                    <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
-                      Succession: {currentDynasty.successionLaw === 'primogeniture' ? 'Hereditary Primogeniture' : 'Elective'}
+                    <div style={{ display: 'flex', gap: '4px', marginTop: '8px', background: '#0f172a', padding: '3px', borderRadius: '6px' }}>
+                      <button
+                        onClick={() => handleSetSuccessionLaw(currentDynasty.id, 'primogeniture')}
+                        style={{
+                          flex: 1,
+                          padding: '5px 8px',
+                          borderRadius: '4px',
+                          border: 'none',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          background: currentDynasty.successionLaw !== 'elective' ? '#334155' : 'transparent',
+                          color: currentDynasty.successionLaw !== 'elective' ? '#f8fafc' : '#94a3b8',
+                        }}
+                      >
+                        Primogeniture
+                      </button>
+                      <button
+                        onClick={() => handleSetSuccessionLaw(currentDynasty.id, 'elective')}
+                        style={{
+                          flex: 1,
+                          padding: '5px 8px',
+                          borderRadius: '4px',
+                          border: 'none',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          background: currentDynasty.successionLaw === 'elective' ? '#334155' : 'transparent',
+                          color: currentDynasty.successionLaw === 'elective' ? '#f8fafc' : '#94a3b8',
+                        }}
+                      >
+                        Elective Council
+                      </button>
                     </div>
                   </div>
 
@@ -349,7 +443,7 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#94a3b8', marginBottom: '4px' }}>
                       <span>Royal Legitimacy</span>
-                      <span style={{ fontWeight: 700, color: '#f8fafc' }}>{Math.round(currentDynasty.legitimacy)}%</span>
+                      <span style={{ fontWeight: 700, color: '#f8fafc', fontVariantNumeric: 'tabular-nums' }}>{Math.round(currentDynasty.legitimacy)}%</span>
                     </div>
                     <div style={{ height: '6px', width: '100%', background: '#0f172a', borderRadius: '3px', overflow: 'hidden' }}>
                       <div
@@ -361,6 +455,49 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
                         }}
                       />
                     </div>
+                  </div>
+
+                  {/* Claimant & Civil War Crisis Status */}
+                  <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '10px' }}>
+                    {currentDynasty.civilWar?.active ? (
+                      <div style={{ padding: '10px', borderRadius: '8px', background: 'rgba(220, 38, 38, 0.14)', border: '1px solid rgba(239, 68, 68, 0.35)' }}>
+                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#fca5a5' }}>
+                          Active Civil War
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#e2e8f0', marginTop: '3px', fontVariantNumeric: 'tabular-nums' }}>
+                          Claimant {currentDynasty.civilWar.claimantName} · Fallen: Rebels {currentDynasty.civilWar.rebelCasualties || 0} / Crown {currentDynasty.civilWar.loyalistCasualties || 0}
+                        </div>
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+                          <button
+                            onClick={() => handleResolveCivilWar(currentDynasty, 'loyalist_victory')}
+                            style={{ flex: 1, padding: '6px 8px', background: '#1e293b', border: '1px solid rgba(56, 189, 248, 0.4)', borderRadius: '6px', color: '#38bdf8', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}
+                          >
+                            Back Loyalists
+                          </button>
+                          <button
+                            onClick={() => handleResolveCivilWar(currentDynasty, 'usurpation')}
+                            style={{ flex: 1, padding: '6px 8px', background: '#1e293b', border: '1px solid rgba(245, 158, 11, 0.4)', borderRadius: '6px', color: '#fbbf24', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}
+                          >
+                            Crown Claimant
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                          <div>Rival Claimant: <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{currentDynasty.pretenderName || 'None'}</span></div>
+                          <div style={{ fontVariantNumeric: 'tabular-nums' }}>Unrest: {Math.round(currentDynasty.crisisTension || 0)}%</div>
+                        </div>
+                        {currentDynasty.pretenderId && (
+                          <button
+                            onClick={() => handleSparkCrisis(currentDynasty.id)}
+                            style={{ padding: '6px 10px', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.35)', borderRadius: '6px', color: '#fca5a5', fontSize: '11px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                          >
+                            Spark Crisis
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Action: Arrange Royal Marriage */}
@@ -777,12 +914,64 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
             >
               <div>
                 <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#f8fafc' }}>
-                  War Room & Live Campaigns ({wars.length})
+                  War Room & Live Campaigns ({wars.length + activeCivilWars.length})
                 </h2>
                 <div style={{ fontSize: '12px', color: '#94a3b8' }}>
-                  Monitor ongoing frontlines, multi-stage town sieges, and dynamic War Scores.
+                  Monitor ongoing frontlines, dynastic civil wars, town sieges, and dynamic War Scores.
                 </div>
               </div>
+
+              {activeCivilWars.map((dyn: any) => {
+                const sHome = settlements.find(s => s.id === dyn.settlementId);
+                return (
+                  <div
+                    key={`cw_${dyn.id}`}
+                    style={{
+                      padding: '16px',
+                      borderRadius: '12px',
+                      background: 'rgba(127, 29, 29, 0.25)',
+                      border: '1px solid rgba(245, 158, 11, 0.45)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '10px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ fontWeight: 700, fontSize: '15px', color: '#fef3c7' }}>
+                        Dynastic Civil War — {dyn.settlementName} ({dyn.name})
+                      </div>
+                      {sHome && onPanTo && (
+                        <button
+                          onClick={() => { onPanTo(sHome.center.x, sHome.center.y); onClose(); }}
+                          style={{ padding: '5px 10px', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.4)', borderRadius: '6px', color: '#fbbf24', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}
+                        >
+                          Pan to Capital
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
+                      Crown: {dyn.civilWar.loyalistMonarchName} vs Claimant: {dyn.civilWar.claimantName} · Cause: {dyn.civilWar.reason}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#cbd5e1', fontVariantNumeric: 'tabular-nums' }}>
+                      Casualties: Crown {dyn.civilWar.loyalistCasualties || 0} · Rebels {dyn.civilWar.rebelCasualties || 0}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                      <button
+                        onClick={() => handleResolveCivilWar(dyn, 'loyalist_victory')}
+                        style={{ padding: '7px 12px', background: '#1e293b', border: '1px solid rgba(56, 189, 248, 0.45)', borderRadius: '6px', color: '#38bdf8', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
+                      >
+                        Back Loyalists
+                      </button>
+                      <button
+                        onClick={() => handleResolveCivilWar(dyn, 'usurpation')}
+                        style={{ padding: '7px 12px', background: '#d97706', border: 'none', borderRadius: '6px', color: '#ffffff', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
+                      >
+                        Crown Claimant
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
 
               {wars.length > 0 ? (
                 wars.map((w, idx) => {
@@ -793,7 +982,7 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
                   const defCas = w.casualties?.[w.defenderId] || 0;
 
                   // Find active warbands in this war
-                  const warbands = sim.warfareSystem ? Array.from(sim.warfareSystem.warbands.values()).filter(wb =>
+                  const warbands: any[] = sim.warfareSystem ? Array.from(sim.warfareSystem.warbands.values()).filter((wb: any) =>
                     (wb.settlementId === w.attackerId && wb.targetSettlementId === w.defenderId) ||
                     (wb.settlementId === w.defenderId && wb.targetSettlementId === w.attackerId)
                   ) : [];
@@ -886,6 +1075,37 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
                           </div>
                         </div>
                       </div>
+
+                      {/* Active Amphibious Expeditions */}
+                      {warbands.filter(wb => wb.isAmphibious || wb.embarked).length > 0 && (
+                        <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '10px' }}>
+                          <div style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 700, marginBottom: '6px' }}>
+                            ⛵ AMPHIBIOUS EXPEDITIONS
+                          </div>
+                          {warbands.filter(wb => wb.isAmphibious || wb.embarked).map(wb => (
+                            <div
+                              key={`amph_${wb.id}`}
+                              style={{
+                                padding: '8px 10px',
+                                background: 'rgba(14, 116, 144, 0.18)',
+                                border: '1px solid rgba(56, 189, 248, 0.35)',
+                                borderRadius: '6px',
+                                fontSize: '12px',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                              }}
+                            >
+                              <span style={{ fontWeight: 600, color: '#e0f2fe' }}>
+                                {wb.settlementName} Longboat Fleet ({wb.soldiers?.length || 0} raiders)
+                              </span>
+                              <span style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 600 }}>
+                                {wb.embarked ? 'At Sea / River Crossing' : 'Landed Ashore'}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
 
                       {/* Active Sieges Section */}
                       {warbands.filter(wb => wb.state === 'sieging').length > 0 && (
@@ -1000,6 +1220,185 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
                   <div style={{ color: '#64748b', fontSize: '12px' }}>No historic wars recorded yet.</div>
                 )}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================== */}
+        {/* TAB 4: HALL OF HEROES, RELICS & HISTORIC BATTLEFIELDS */}
+        {/* ========================================================== */}
+        {activeTab === 'heroes' && (
+          <div style={{ display: 'flex', width: '100%', height: '100%' }}>
+            {/* Living Champions & Fallen Legends */}
+            <div style={{ flex: 1, padding: '24px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#f8fafc' }}>
+                  Living Champions & Relic Bearers ({livingHeroes.length})
+                </h2>
+                <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+                  Warriors earn epithets on the field and forge named blades at three or more victories.
+                </div>
+              </div>
+
+              {livingHeroes.length > 0 ? (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
+                  {livingHeroes.map((h: any) => {
+                    const homeName = h.settlementId ? (settlements.find(s => s.id === h.settlementId)?.name || 'Wilds') : 'Wilds';
+                    return (
+                      <div
+                        key={h.id}
+                        style={{
+                          padding: '14px',
+                          borderRadius: '10px',
+                          background: 'rgba(30, 41, 59, 0.65)',
+                          border: '1px solid rgba(255, 255, 255, 0.08)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '6px',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                          <div style={{ fontWeight: 700, fontSize: '14px', color: '#f8fafc' }}>
+                            {h.name}{h.epithet ? ` ${h.epithet}` : ''}
+                          </div>
+                          {onPanTo && (
+                            <button
+                              onClick={() => {
+                                if (onSelectAgent) onSelectAgent(h.id);
+                                onPanTo(h.x, h.y);
+                                onClose();
+                              }}
+                              style={{
+                                padding: '4px 10px',
+                                background: 'rgba(56, 189, 248, 0.14)',
+                                border: '1px solid rgba(56, 189, 248, 0.35)',
+                                borderRadius: '6px',
+                                color: '#38bdf8',
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              Locate
+                            </button>
+                          )}
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+                          {homeName} · {h.kills || 0} Kills · {h.battlesFought || 0} Battles · Age {Math.floor(h.age || 0)}
+                        </div>
+                        {h.legendaryWeapon && (
+                          <div style={{ fontSize: '12px', color: '#fbbf24', fontWeight: 600 }}>
+                            Relic Blade: {h.legendaryWeapon}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ color: '#64748b', fontSize: '13px' }}>No living champions have claimed battlefield laurels yet.</div>
+              )}
+
+              <div>
+                <h3 style={{ margin: '8px 0 4px', fontSize: '15px', fontWeight: 700, color: '#f8fafc' }}>
+                  Memorial of Fallen Legends ({fallenLegends.length})
+                </h3>
+                {fallenLegends.length > 0 ? (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '10px', marginTop: '8px' }}>
+                    {fallenLegends.map((h: any) => (
+                      <div
+                        key={`fallen_${h.id}`}
+                        style={{
+                          padding: '12px',
+                          borderRadius: '8px',
+                          background: 'rgba(15, 23, 42, 0.65)',
+                          border: '1px solid rgba(255, 255, 255, 0.07)',
+                        }}
+                      >
+                        <div style={{ fontWeight: 600, fontSize: '13px', color: '#e2e8f0' }}>
+                          {h.name}{h.epithet ? ` ${h.epithet}` : ''}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
+                          {h.settlementName} · {h.kills || 0} Kills · Died Age {h.age} ({h.cause})
+                        </div>
+                        {h.legendaryWeapon && (
+                          <div style={{ fontSize: '11px', color: '#d97706', marginTop: '2px' }}>
+                            Wielded {h.legendaryWeapon}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ color: '#64748b', fontSize: '12px' }}>No fallen champions or monarchs recorded yet.</div>
+                )}
+              </div>
+            </div>
+
+            {/* Historic Battlefields Sidebar */}
+            <div
+              style={{
+                width: '380px',
+                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+                background: 'rgba(15, 23, 42, 0.4)',
+                padding: '20px',
+                overflowY: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '12px',
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#f8fafc' }}>
+                Historic Battlefields ({historicBattles.length})
+              </h3>
+              {historicBattles.length > 0 ? (
+                historicBattles.map((b: any, i: number) => (
+                  <div
+                    key={`${b.name}_${b.tick}_${i}`}
+                    style={{
+                      padding: '12px',
+                      borderRadius: '8px',
+                      background: 'rgba(30, 41, 59, 0.6)',
+                      border: '1px solid rgba(255, 255, 255, 0.08)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: '10px',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: '13px', color: '#f8fafc' }}>{b.name}</div>
+                      <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
+                        {b.attackerName} vs {b.defenderName} · Day {Math.floor((b.tick || 0) / 100) + 1}
+                      </div>
+                    </div>
+                    {onPanTo && typeof b.x === 'number' && typeof b.y === 'number' && (
+                      <button
+                        onClick={() => {
+                          onPanTo(b.x, b.y);
+                          onClose();
+                        }}
+                        style={{
+                          padding: '5px 10px',
+                          background: 'rgba(245, 158, 11, 0.15)',
+                          border: '1px solid rgba(245, 158, 11, 0.35)',
+                          borderRadius: '6px',
+                          color: '#fbbf24',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        View Site
+                      </button>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <div style={{ color: '#64748b', fontSize: '12px' }}>No named battles recorded yet.</div>
+              )}
             </div>
           </div>
         )}

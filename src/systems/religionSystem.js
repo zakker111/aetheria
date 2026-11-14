@@ -142,16 +142,26 @@ export class ReligionSystem {
     /**
      * Check if an agent should become a priest
      */
-    checkPriestEmergence(agent) {
+    checkPriestEmergence(agent, temples = null) {
         if (!agent.religion) this.initReligionEntity(agent);
         if (agent.religion.isPriest) return;
         
-        // Fast-fail priest requirements before expensive spatial building scan
+        // Fast-fail priest requirements before spatial building scan
         if (agent.religion.faith < 80) return;
         if ((agent.personality.social ?? 0) < 0.7) return;
         if (agent.currentJob && agent.job !== JOB_TYPES.IDLE) return;
         
-        if (this.hasNearbyTemple(agent)) {
+        if (temples) {
+            for (let i = 0; i < temples.length; i++) {
+                const b = temples[i];
+                const dx = agent.x - b.x;
+                const dy = agent.y - b.y;
+                if (dx * dx + dy * dy <= 100) { // radius 10
+                    this.promoteToPriest(agent);
+                    return;
+                }
+            }
+        } else if (this.hasNearbyTemple(agent)) {
             this.promoteToPriest(agent);
         }
     }
@@ -234,8 +244,10 @@ export class ReligionSystem {
         }
         const hasTemples = temples.length > 0;
 
-        for (const agent of (this.worldState.agents || [])) {
-            if (agent.dead) continue;
+        const agents = this.worldState.agents || [];
+        for (let aIdx = 0; aIdx < agents.length; aIdx++) {
+            const agent = agents[aIdx];
+            if (agent.dead || agent.alive === false) continue;
             
             if (!agent.religion) this.initReligionEntity(agent);
             
@@ -258,8 +270,8 @@ export class ReligionSystem {
             // Clamp faith
             agent.religion.faith = Math.max(0, Math.min(100, agent.religion.faith));
             
-            // Check priest emergence
-            this.checkPriestEmergence(agent);
+            // Check priest emergence (reusing already filtered temples list)
+            if (hasTemples) this.checkPriestEmergence(agent, temples);
             
             // If priest died or lost faith, demote
             if (agent.religion.isPriest && agent.religion.faith < 30) {
@@ -516,19 +528,30 @@ export class ReligionSystem {
      * Handle holy war tensions between different beliefs
      */
     checkHolyWars() {
-        if (!this.simulation || !this.simulation.diplomacySystem) return;
+        if (!this.simulation || !this.simulation.diplomacySystem || !this.simulation.settlementSystem) return;
         const settlements = Array.from(this.simulation.settlementSystem.settlements.values());
-        for (let i = 0; i < settlements.length; i++) {
-            for (let j = i + 1; j < settlements.length; j++) {
-                const s1 = settlements[i];
-                const s2 = settlements[j];
-                const f1 = this.getDominantFaith(s1);
-                const f2 = this.getDominantFaith(s2);
-                if (f1 && f2 && f1 !== f2) {
-                    const rel = this.simulation.diplomacySystem.getRelation(s1.id, s2.id);
+        const count = settlements.length;
+        if (count < 2) return;
+
+        // Precompute each settlement's dominant faith once per tick instead of O(N^2 * agents)
+        const faiths = new Array(count);
+        for (let i = 0; i < count; i++) {
+            faiths[i] = this.getDominantFaith(settlements[i]);
+        }
+
+        const diplo = this.simulation.diplomacySystem;
+        for (let i = 0; i < count; i++) {
+            const s1 = settlements[i];
+            const f1 = faiths[i];
+            if (!f1) continue;
+            for (let j = i + 1; j < count; j++) {
+                const f2 = faiths[j];
+                if (f2 && f1 !== f2) {
+                    const s2 = settlements[j];
+                    const rel = diplo.getRelation(s1.id, s2.id);
                     if (rel && rel.status === "tension") {
-                        this.simulation.diplomacySystem.addGrievance(s1.id, s2.id, "Zealous Crusade Grievance", 12);
-                        this.simulation.diplomacySystem.addGrievance(s2.id, s1.id, "Zealous Crusade Grievance", 12);
+                        diplo.addGrievance(s1.id, s2.id, "Zealous Crusade Grievance", 12);
+                        diplo.addGrievance(s2.id, s1.id, "Zealous Crusade Grievance", 12);
                     }
                 }
             }

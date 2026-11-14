@@ -104,6 +104,20 @@ export const Dock: React.FC<DockProps> = ({ currentTool, onSelectTool }) => {
         <button style={getToolBtnStyle('build_farm')} onClick={() => onSelectTool('build_farm')}>
           🌾 Farm (9)
         </button>
+        <button
+          style={getToolBtnStyle('build_dock')}
+          onClick={() => onSelectTool('build_dock')}
+          title="Place shoreline Dock for fishing boats & river barges"
+        >
+          ⚓ Dock
+        </button>
+        <button
+          style={getToolBtnStyle('build_bridge')}
+          onClick={() => onSelectTool('build_bridge')}
+          title="Build timber Bridge across a river or narrow strait (1–10 tiles)"
+        >
+          🌉 Bridge
+        </button>
 
         <div style={dividerStyle} />
 

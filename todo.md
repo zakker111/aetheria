@@ -40,7 +40,7 @@
 - [x] **Zero memory leak footprint**: In-place render coordinates, scalar water projection, and pooled entity buffers.
 
 ## ✅ Phase 5 — Testing & Open Source Readiness (COMPLETE)
-- [x] **10 Comprehensive Automated Test Suites** (`npm test`):
+- [x] **14 Comprehensive Automated Test Suites** (`npm test`):
   1. `tests/determinism.mjs`: Byte-identical RNG reproducibility and save/load state parity.
   2. `tests/gossip.mjs`: Gossip network and emotional memory persistence.
   3. `tests/supplychain.mjs`: Multi-tier commodity crafting and caravan trade routes.
@@ -51,4 +51,31 @@
   8. `tests/war_phase3b.mjs`: Equipment crafting, tactical roles, plundering, and conquest.
   9. `tests/dynasty_warfare.mjs`: Dynastic lineages, royal marriages, sieges, and peace conferences.
   10. `tests/combat_lethality_lore.mjs`: Mortal combat lethality, slayer titles, named battles, and lore serialization.
+  11. `tests/phase6_succession_heroes.mjs`: Succession laws, pretender detection, civil war warbands, usurpation, legendary relics, and Hall of Heroes persistence.
+  12. `tests/phase6_coastal_river.mjs`: Shoreline Dock snapping, fishing boats, river barges, amphibious raid embarkation/disembarkation, and mid-voyage save/load determinism.
+  13. `tests/phase7_lakes_bridges.mjs`: Major inland lakes, multi-tile wide navigable rivers, autonomous/divine bridge spanning, and boat-vs-bridge crossing logic.
+  14. `tests/phase8_tactical_mergers.mjs`: Carrying-capacity `maxAgents` cap, zero double-counting, lethal warfare, Era 5–6 modern tactical combat, and Metropolis city mergers/civil wars.
 - [x] **GitHub Actions CI & GitHub Pages Deployment**: Fully automated build, test, and zero-config deployment workflows.
+
+## ✅ Phase 6 — Succession Crises, Civil Wars & Maritime Expansion (COMPLETE)
+- [x] **Succession Crises & Civil Wars**: Realm succession laws (primogeniture/elective), rival pretender tracking, tension escalation on weak legitimacy or disputed monarch deaths, loyalist vs. rebel warband mobilization, and usurpation/loyalist resolution.
+- [x] **Hall of Heroes & Legendary Relics**: Combat champions forging named relic weapons at 3+ kills and permanent Hall of Heroes memorial archival upon death.
+- [x] **Coastal & River Gameplay (`navalSystem.js`)**:
+  - **Harbor Docks**: Autonomous coastal/river dock planning plus `⚓ Dock` divine placement tool with shoreline snapping.
+  - **Fishing Boats**: Docks launch fishing vessels that harvest coastal waters and land catches directly into settlement food stockpiles.
+  - **River Barges**: Water-connected trade routes classify as `barge` transport and dispatch cargo barges across rivers and channels.
+  - **Amphibious Raids**: Warbands confronting unbridged water embark onto dragon-prowed raid longboats, cross water deterministically, and disembark onto enemy shores.
+
+## ✅ Phase 7 — Great Lakes, Wide Rivers & Bridge Engineering (COMPLETE)
+- [x] **Major Inland Lakes & Connected Watershed Rivers (`worldState.js`)**: Procedural 16–28 tile wide organic inland lakes sorted high-to-low, winding connecting rivers linking lakes naturally with flared inlets/outlets and gently sloped riparian banks, highland feeder tributaries, and sea outflows.
+- [x] **Bridge Construction & Crossings (`infrastructureSystem.js`)**: Autonomous river bridging for trade routes & neighboring towns (1–7 tiles wide), full `world.setBridge` + shoreline road approaches, `🌉 Bridge` divine placement tool (up to 10 tiles), and boat fallback across wide lakes (>10 tiles).
+
+## ✅ Phase 8 — Carrying Capacity, Modernized Tactical Warfare & City Mergers (COMPLETE)
+- [x] **Demographic Balance, Agent Cap & Late-Age Speed**: Logistic reproduction gating, `58–82` elder longevity balance, `maxAgents` carrying capacity (`360` default), exact birth/death metric tracking without double-counting, throttled relationship decay, zero RNG spam in `ageSystem.js`, and periodic pruning of ancient ruins & destroyed resources.
+- [x] **Lethal Wars & Era 5–6 Tactical Combat**: Combat regen suppression (`_lastCombatTick`), slower wounded retreats, critical/execute strikes, commander rally auras, siege storming fatalities, **Industrial & Gunpowder Era** (`musket`, `cannon` AOE), **Modern Tactical Era** (`rifle`, heavy `artillery` AOE), tactical ranged standoff/kiting, shieldbearer screening, and 2.5D weapon/explosion rendering.
+- [x] **Metropolis Tier & City Mergers**: Neighboring large peaceful towns unite into a `Metropolis` (`🌆`, `pop >= 40`), consolidating citizens, stockpiles, buildings, and territories while escalating union dynasty tension into occasional succession civil wars.
+
+## 🚧 Upcoming Pipeline Candidates
+- [ ] **Cultural Wonders & Great Monuments**: Multi-stage civilization mega-projects (Great Lighthouse, Stonehenge, Grand Citadel) yielding regional buffs.
+- [ ] **Espionage, Sabotage & Guild Factions**: Spy networks, bridge/granary sabotage, and merchant guild charters.
+- [ ] **Save Slot Export / Replay Highlights**: Downloadable JSON chronicle/world snapshots and era-by-era history timeline filters.

@@ -45,7 +45,7 @@ export const App: React.FC = () => {
   const [is25D, setIs25D] = useState(true);
   const [heightScaleLabel, setHeightScaleLabel] = useState('Heights: Normal');
 
-  const [timeState, setTimeState] = useState<TimeState>({ days: 0, hours: 0, ticks: 0 });
+  const [timeState, setTimeState] = useState<TimeState>({ days: 0, hours: 0, tick: 0 });
   const [agentCount, setAgentCount] = useState(0);
   const [births, setBirths] = useState(0);
   const [deaths, setDeaths] = useState(0);
@@ -192,6 +192,39 @@ export const App: React.FC = () => {
       }
     };
 
+    const handleSuccessionCrisis = (e: any) => {
+      addChronicleEntry(`👑 Succession Crisis in ${e.settlementName || 'a realm'}: ${e.claimantName} challenges ${e.monarchName || 'the crown'}!`);
+      showNotification(`👑 Civil War in ${e.settlementName || 'a realm'}!`);
+    };
+
+    const handleCrownUsurped = (e: any) => {
+      addChronicleEntry(`👑 Usurpation! ${e.usurperName} seized the throne of ${e.settlementName}!`);
+      showNotification(`👑 ${e.usurperName} seized ${e.settlementName}!`);
+    };
+
+    const handleRebellionCrushed = (e: any) => {
+      addChronicleEntry(`🛡️ Loyalists crushed the claimant uprising in ${e.settlementName}.`);
+      showNotification(`🛡️ Rebellion crushed in ${e.settlementName}`);
+    };
+
+    const handleAmphibiousLaunch = (e: any) => {
+      addChronicleEntry(`⛵ ${e.settlementName} launched an amphibious raid of ${e.size} warriors toward ${e.targetSettlementName || 'enemy shores'}!`);
+      showNotification(`⛵ ${e.settlementName} launched amphibious raid!`);
+    };
+
+    const handleAmphibiousLanding = (e: any) => {
+      addChronicleEntry(`⚔️ ${e.settlementName} raiders stormed ashore at (${Math.round(e.x || 0)}, ${Math.round(e.y || 0)})!`);
+    };
+
+    const handleBargeTrade = (e: any) => {
+      addChronicleEntry(`⛴️ River barge delivered ${e.amount} ${e.resource} from ${e.from} to ${e.to}.`);
+    };
+
+    const handleSettlementsMerged = (e: any) => {
+      addChronicleEntry(`🌆 Grand Civic Union: ${e.secondaryName} united into ${e.primaryName} (${e.tier}, Pop ${e.population})!`);
+      showNotification(`🌆 ${e.secondaryName} united into ${e.primaryName}!`);
+    };
+
     sim.eventBus.on('AGENT_CREATED', handleAgentCreated);
     sim.eventBus.on('AGENT_DIED', handleAgentDied);
     sim.eventBus.on('CONSTRUCTION_COMPLETED', handleConstruction);
@@ -203,6 +236,13 @@ export const App: React.FC = () => {
     sim.eventBus.on('MONUMENT_SURVEYED', handleMonumentSurveyed);
     sim.eventBus.on('WEATHER_CHANGED', handleWeatherChanged);
     sim.eventBus.on('LIGHTNING_STRIKE', handleLightning);
+    sim.eventBus.on('SUCCESSION_CRISIS_STARTED', handleSuccessionCrisis);
+    sim.eventBus.on('CROWN_USURPED', handleCrownUsurped);
+    sim.eventBus.on('REBELLION_CRUSHED', handleRebellionCrushed);
+    sim.eventBus.on('AMPHIBIOUS_RAID_LAUNCHED', handleAmphibiousLaunch);
+    sim.eventBus.on('AMPHIBIOUS_LANDING', handleAmphibiousLanding);
+    sim.eventBus.on('BARGE_TRADE_COMPLETED', handleBargeTrade);
+    sim.eventBus.on('SETTLEMENTS_MERGED', handleSettlementsMerged);
 
     // Custom window events
     const handleEntityInspected = (e: CustomEvent) => {
@@ -216,36 +256,45 @@ export const App: React.FC = () => {
     window.addEventListener('entity_inspected', handleEntityInspected as EventListener);
     window.addEventListener('show_notification', handleShowNotification as EventListener);
 
-    // Game animation loop
+    // Game animation loop with fixed-timestep accumulator for 60/120Hz smooth interpolation
     let lastTime = 0;
+    let accumulator = 0;
     let lastUiUpdate = 0;
     let animationFrameId: number;
     const TICK_RATE = 350; // ms per tick at 1x speed
 
     const gameLoop = (currentTime: number) => {
       if (!lastTime) lastTime = currentTime;
-      const deltaTime = currentTime - lastTime;
+      const rawDelta = currentTime - lastTime;
+      const frameDt = Math.min(250, Math.max(0, rawDelta));
+      lastTime = currentTime;
       const currentSpeed = sim.clock.speed;
 
+      let tickAlpha = 1;
       if (currentSpeed > 0) {
         const stepInterval = TICK_RATE / currentSpeed;
-        if (deltaTime >= stepInterval) {
-          const maxSteps = Math.min(2, Math.floor(deltaTime / stepInterval));
-          for (let s = 0; s < maxSteps; s++) {
-            sim.tick();
-          }
-          lastTime = currentTime;
+        accumulator += frameDt;
+        let steps = 0;
+        while (accumulator >= stepInterval && steps < 4) {
+          sim.tick();
+          accumulator -= stepInterval;
+          steps++;
         }
+        if (accumulator >= stepInterval) {
+          accumulator = stepInterval * 0.99;
+        }
+        tickAlpha = Math.max(0, Math.min(1, accumulator / stepInterval));
       } else {
-        lastTime = currentTime;
+        accumulator = 0;
       }
 
+      renderer.setFrameTiming(tickAlpha, frameDt, currentSpeed);
       renderer.render();
 
       // UI state refresh throttle (4 times/sec)
       if (currentTime - lastUiUpdate > 250) {
         const t = sim.clock.getTime();
-        setTimeState((prev) => (prev.days === t.days && prev.hours === t.hours && prev.ticks === t.ticks ? prev : t));
+        setTimeState((prev) => (prev.days === t.days && prev.hours === t.hours && prev.tick === t.tick ? prev : t));
         setAgentCount(sim.agents.length);
         setBirths(sim.birthsThisSession || 0);
         setDeaths(sim.deathsThisSession || 0);
@@ -396,7 +445,9 @@ export const App: React.FC = () => {
             const updated = sim.settlementSystem?.settlements.get(currentInspect.entity.id);
             if (updated) {
               const ageSummary = sim.civilizationAgeSystem?.getSettlementAgeSummary(updated.id);
-              return { kind: 'settlement', entity: { ...updated, age: ageSummary } };
+              const docksCount = (sim.buildings || []).filter((b: any) => b.settlementId === updated.id && b.buildingType === 'dock' && !b.isRuined).length;
+              const vesselsCount = (sim.navalSystem?.vessels || []).filter((v: any) => v.settlementId === updated.id).length;
+              return { kind: 'settlement', entity: { ...updated, age: ageSummary, docksCount, vesselsCount } };
             }
             return null;
           } else if (currentInspect.kind === 'building') {

@@ -219,6 +219,28 @@ export class Interaction {
         break;
       }
 
+      case "build_dock": {
+        const res = this.simulation.navalSystem?.placeDockBlueprint(x, y);
+        if (res?.success) {
+          soundManager.playBuild();
+          this.notify(`⚓ Planned harbor dock blueprint${res.settlement ? ` for ${res.settlement.name}` : ''} at (${res.dock.x}, ${res.dock.y})!`);
+        } else {
+          this.notify(res?.reason || "Docks must be placed along a shoreline next to water!");
+        }
+        break;
+      }
+
+      case "build_bridge": {
+        const res = this.simulation.infrastructureSystem?.placeBridgeAt(x, y, 10);
+        if (res?.success) {
+          soundManager.playBuild();
+          this.notify(`🌉 Built ${res.span}-tile timber bridge across the waters!`);
+        } else {
+          this.notify(res?.message || res?.reason || "Click on a river or narrow strait (1–10 tiles wide) to span a bridge!");
+        }
+        break;
+      }
+
       case "build_house":
       case "build_workshop":
       case "build_farm":

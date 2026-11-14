@@ -11,7 +11,7 @@ export class TradeSystem {
         this.sim = simulation;
         this.caravans = []; // Active trade caravans
         this.tradeRoutes = []; // Established routes
-        this.eventBus = EventBus.getInstance();
+        this.eventBus = simulation?.eventBus || EventBus.getInstance();
         
         // Configuration
         this.CARAVAN_SIZE = 3; // Agents per caravan
@@ -138,11 +138,13 @@ export class TradeSystem {
     }
 
     createTradeRoute(s1, s2) {
+        const isWaterRoute = Boolean(this.sim?.navalSystem?.routeUsesWater(s1, s2));
         const route = {
             id: `route_${s1.id}_${s2.id}`,
             from: s1.id,
             to: s2.id,
             distance: this.calculateDistance(s1, s2),
+            transportMode: isWaterRoute ? 'barge' : 'land',
             active: true
         };
         this.tradeRoutes.push(route);
@@ -150,7 +152,8 @@ export class TradeSystem {
         this.eventBus.emit('trade:route_established', { 
             from: s1.name, 
             to: s2.name, 
-            distance: route.distance 
+            distance: route.distance,
+            transportMode: route.transportMode
         });
 
         // Spawn initial caravan if resources allow
@@ -190,13 +193,14 @@ export class TradeSystem {
             this.caravans.push({
                 id: `caravan_${this.caravanSeq = (this.caravanSeq || 0) + 1}`,
                 routeId: route.id,
+                isBarge: route.transportMode === 'barge',
                 agents: caravanAgents,
                 progress: 0,
                 tradeTicksLeft: 0,
                 state: 'traveling_to_market' // traveling_to_market, trading, returning
             });
             
-            this.eventBus.emit('trade:caravan_spawned', { route: route.id, size: caravanAgents.length });
+            this.eventBus.emit('trade:caravan_spawned', { route: route.id, size: caravanAgents.length, transportMode: route.transportMode || 'land' });
         }
     }
 

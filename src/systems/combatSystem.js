@@ -22,10 +22,10 @@ export class CombatSystem {
             entity.combat = {
                 health: entity.type === ENTITY_TYPES.AGENT ? 100 : 50,
                 maxHealth: entity.type === ENTITY_TYPES.AGENT ? 100 : 50,
-                damage: entity.type === ENTITY_TYPES.AGENT ? 10 : 5,
-                range: 1.5, // Melee range
+                damage: entity.type === ENTITY_TYPES.AGENT ? 15 : 6,
+                range: 1.6, // Melee range
                 attackCooldown: 0,
-                attackSpeed: 60, // Frames between attacks
+                attackSpeed: 36, // Responsive combat cadence
                 targetId: null,
                 isAttacking: false,
                 attackFlashTicks: 0
@@ -39,7 +39,7 @@ export class CombatSystem {
     dealDamage(attacker, target, amount) {
         if (!target.combat) return false;
 
-        const actualDamage = Math.max(1, Math.floor(amount * (1 - (target.defense || 0))));
+        const actualDamage = Math.max(2, Math.floor(amount * (1 - (target.defense || 0))));
         target.combat.health -= actualDamage;
 
         // Keep target.health and target.needs.health in sync for agents
@@ -48,6 +48,9 @@ export class CombatSystem {
             if (target.needs) target.needs.health = target.health;
         }
 
+        const tick = this.worldState?.simulation?.clock?.tick ?? 0;
+        target._lastCombatTick = tick;
+
         // Memory: a victim of agent-on-agent violence remembers their
         // attacker. This seeds the gossip pipeline with negative claims and
         // colors future social decisions via _feltAbout(). No-op for
@@ -55,7 +58,6 @@ export class CombatSystem {
         if (attacker && target !== attacker &&
             typeof target.remember === 'function' &&
             attacker.type === 'agent') {
-            const tick = this.worldState?.simulation?.clock?.tick ?? 0;
             target.remember('ATTACKED_BY', tick, { subjectId: attacker.id, rep: -2 });
         }
 
@@ -101,6 +103,10 @@ export class CombatSystem {
                     killer.epithet = 'the Blooded';
                 }
             }
+            if (killer.kills >= 3 && !killer.legendaryWeapon) {
+                const relicNames = ['Oathkeeper', 'Dawnbreaker', 'Bloodthorn', 'Ashfang', 'Kingsbane', 'Ironcrown', 'Stormbrand', 'Grimfang'];
+                killer.legendaryWeapon = relicNames[(Number(killer.id) || 0) % relicNames.length];
+            }
 
             if (typeof killer.remember === 'function') {
                 const tick = this.worldState?.simulation?.clock?.tick ?? 0;
@@ -117,6 +123,7 @@ export class CombatSystem {
                     killerId: killer.id,
                     killerName: killer.name,
                     killerEpithet: killer.epithet,
+                    killerWeapon: killer.legendaryWeapon || null,
                     victimId: entity.id,
                     victimName: entity.name,
                     x: entity.x,

@@ -38,7 +38,8 @@ export class SettlementSystem {
 
   // Get settlement tier based on population
   getTierInfo(pop) {
-    if (pop >= 25) return { tier: "City", icon: "🏰", radius: 25, bonus: "Metropolis" };
+    if (pop >= 40) return { tier: "Metropolis", icon: "🌆", radius: 30, bonus: "Grand Metropolis" };
+    if (pop >= 25) return { tier: "City", icon: "🏰", radius: 25, bonus: "High Bastion" };
     if (pop >= 15) return { tier: "Town", icon: "🏛️", radius: 20, bonus: "Civic Order" };
     if (pop >= 8)  return { tier: "Village", icon: "🏡", radius: 16, bonus: "Craft Guilds" };
     if (pop >= 4)  return { tier: "Hamlet", icon: "🛖", radius: 12, bonus: "Cooperative" };
@@ -345,6 +346,210 @@ export class SettlementSystem {
         this.sim?.eventBus?.emit('SETTLEMENT_FORGOTTEN', { id, name: settlement.name });
       }
     }
+  }
+
+  // Merge neighboring large peaceful cities into a Metropolis union
+  mergeCloseBigCities(tick = 0) {
+    const active = Array.from(this.settlements.values())
+      .filter(s => s && !s.ruined && (s.population || s.agentIds?.size || 0) >= 14 && (s.recentlyMergedUntil || 0) <= tick)
+      .sort((a, b) => a.id - b.id);
+
+    if (active.length < 2) return null;
+
+    for (let i = 0; i < active.length; i++) {
+      for (let j = i + 1; j < active.length; j++) {
+        const s1 = active[i];
+        const s2 = active[j];
+        const pop1 = s1.population || s1.agentIds?.size || 0;
+        const pop2 = s2.population || s2.agentIds?.size || 0;
+        if (Math.max(pop1, pop2) < 16) continue;
+        if (s1.center == null || s2.center == null) continue;
+
+        const dist = Math.hypot(s1.center.x - s2.center.x, s1.center.y - s2.center.y);
+        if (dist > 32) continue;
+
+        // Diplomacy check: do not unite settlements actively at war or hostile
+        const rel = this.sim?.diplomacySystem?.getRelation?.(s1.id, s2.id);
+        if (rel && (rel.status === 'war' || rel.score < 45)) continue;
+
+        // Deterministic periodic union chance (~1/3 per check interval)
+        if (((s1.id * 17 + s2.id * 31 + Math.floor(tick / 100)) % 3) !== 0) continue;
+
+        const primary = pop1 >= pop2 ? s1 : s2;
+        const secondary = pop1 >= pop2 ? s2 : s1;
+        return this.mergeSettlements(primary.id, secondary.id, 'Grand Civic Union');
+      }
+    }
+    return null;
+  }
+
+  mergeSettlements(primaryId, secondaryId, reason = 'Grand Civic Union') {
+    const primary = this.settlements.get(primaryId);
+    const secondary = this.settlements.get(secondaryId);
+    if (!primary || !secondary || primary.id === secondary.id || primary.ruined || secondary.ruined) {
+      return null;
+    }
+
+    const tick = this.sim?.clock?.tick ?? 0;
+    const oldSecondaryName = secondary.name;
+
+    // Identify absorbed leader before transfer for dynastic claim tension
+    let absorbedLeaderId = null;
+    if (this.sim?.dynastySystem?.settlementDynastyMap?.has(secondary.id)) {
+      const secDyn = this.sim.dynastySystem.dynasties.get(this.sim.dynastySystem.settlementDynastyMap.get(secondary.id));
+      absorbedLeaderId = secDyn?.monarchId ?? null;
+    }
+    if (!absorbedLeaderId && secondary.leadership) {
+      for (const aid of secondary.agentIds) {
+        const a = this.sim?._agentById?.(aid);
+        if (a && a.alive && a.name === secondary.leadership) {
+          absorbedLeaderId = a.id;
+          break;
+        }
+      }
+    }
+
+    // Transfer citizens & home coordinates
+    for (const aid of Array.from(secondary.agentIds || [])) {
+      primary.agentIds.add(aid);
+      this.agentSettlementMap.set(aid, primary.id);
+      const agent = this.sim?._agentById?.(aid);
+      if (agent) {
+        agent.settlementId = primary.id;
+        if (agent.isMonarch && primary.leadership !== agent.name) {
+          agent.isMonarch = false;
+        }
+      }
+    }
+
+    // Consolidate buildings
+    if (!Array.isArray(primary.buildings)) primary.buildings = [];
+    if (Array.isArray(secondary.buildings)) {
+      for (const b of secondary.buildings) {
+        if (!b) continue;
+        b.settlementId = primary.id;
+        primary.buildings.push(b);
+      }
+    }
+    if (this.sim?.buildings) {
+      for (const b of this.sim.buildings) {
+        if (b && b.settlementId === secondary.id) {
+          b.settlementId = primary.id;
+          if (!primary.buildings.includes(b)) primary.buildings.push(b);
+        }
+      }
+    }
+
+    // Consolidate workshops
+    if (this.sim?.craftingSystem?.workshops) {
+      for (const ws of this.sim.craftingSystem.workshops.values()) {
+        if (ws && ws.settlementId === secondary.id) {
+          ws.settlementId = primary.id;
+        }
+      }
+    }
+
+    // Consolidate stockpiles
+    if (!primary.stockpile) primary.stockpile = { food: 0, wood: 0, stone: 0, ore: 0, water: 0 };
+    if (secondary.stockpile) {
+      for (const key of Object.keys(secondary.stockpile)) {
+        const val = secondary.stockpile[key] || 0;
+        if (val > 0) primary.stockpile[key] = (primary.stockpile[key] || 0) + val;
+      }
+    }
+    primary.resources = {
+      food: primary.stockpile.food || 0,
+      wood: primary.stockpile.wood || 0,
+      ore: primary.stockpile.ore || 0,
+      water: primary.stockpile.water || 0
+    };
+
+    // Merge territories
+    const secTerr = this.territories.get(secondary.id);
+    if (secTerr) {
+      if (!this.territories.has(primary.id)) this.territories.set(primary.id, new Set());
+      const priTerr = this.territories.get(primary.id);
+      for (const tileKey of secTerr) priTerr.add(tileKey);
+      this.territories.delete(secondary.id);
+    }
+
+    // Advance civilization age to highest partner epoch
+    const ageSys = this.sim?.civilizationAgeSystem;
+    if (ageSys?.settlementAges) {
+      const a1 = ageSys.settlementAges.get(primary.id);
+      const a2 = ageSys.settlementAges.get(secondary.id);
+      if (a1 && a2 && (a2.ageId || 1) > (a1.ageId || 1)) {
+        a1.ageId = a2.ageId;
+        a1.unlockedAt = a2.unlockedAt;
+      }
+      ageSys.settlementAges.delete(secondary.id);
+    }
+
+    // Redirect naval docks/vessels, trade routes, and end dangling secondary diplomacy
+    if (this.sim?.navalSystem?.vessels) {
+      for (const v of this.sim.navalSystem.vessels) {
+        if (!v) continue;
+        if (v.settlementId === secondary.id) v.settlementId = primary.id;
+        if (v.targetSettlementId === secondary.id) v.targetSettlementId = primary.id;
+      }
+    }
+    if (this.sim?.tradeSystem?.tradeRoutes) {
+      this.sim.tradeSystem.tradeRoutes = this.sim.tradeSystem.tradeRoutes.filter(r =>
+        !( (r.from === primary.id && r.to === secondary.id) || (r.from === secondary.id && r.to === primary.id) )
+      );
+      for (const r of this.sim.tradeSystem.tradeRoutes) {
+        if (r.from === secondary.id) r.from = primary.id;
+        if (r.to === secondary.id) r.to = primary.id;
+      }
+    }
+    if (this.sim?.diplomacySystem?.activeWars) {
+      for (const w of this.sim.diplomacySystem.activeWars) {
+        if ((w.attackerId === secondary.id && w.defenderId === primary.id) ||
+            (w.defenderId === secondary.id && w.attackerId === primary.id)) {
+          this.sim.diplomacySystem.signPeace(primary.id, secondary.id, primary.id, tick, reason);
+        }
+      }
+    }
+    if (this.sim?.diplomacySystem?.relations) {
+      for (const key of Array.from(this.sim.diplomacySystem.relations.keys())) {
+        if (String(key).split('-').includes(String(secondary.id))) {
+          this.sim.diplomacySystem.relations.delete(key);
+        }
+      }
+    }
+
+    // Recompute population, tier (Metropolis if >= 40), and expanded civic radius
+    const newPop = primary.agentIds.size;
+    primary.population = newPop;
+    primary.previousPopulation = newPop;
+    const tierInfo = this.getTierInfo(newPop);
+    primary.tier = tierInfo.tier;
+    primary.tierIcon = tierInfo.icon;
+    primary.leadershipTitle = newPop >= 40 ? "Archon" : newPop >= 15 ? "Mayor" : "Chieftain";
+    primary.recentlyMergedUntil = tick + 400;
+    this.claimTerritory(primary.id, primary.center.x, primary.center.y, tierInfo.radius);
+
+    // Delete absorbed settlement record
+    this.settlements.delete(secondary.id);
+
+    // Escalate dynastic union power struggle / civil war risk if rival dynasties collide
+    if (this.sim?.dynastySystem?.onSettlementMerged) {
+      this.sim.dynastySystem.onSettlementMerged(primary, { id: secondaryId, name: oldSecondaryName }, absorbedLeaderId);
+    }
+
+    if (this.sim?.eventBus) {
+      this.sim.eventBus.emit('SETTLEMENTS_MERGED', {
+        primaryId: primary.id,
+        primaryName: primary.name,
+        secondaryId: secondaryId,
+        secondaryName: oldSecondaryName,
+        population: newPop,
+        tier: primary.tier,
+        reason
+      });
+    }
+
+    return primary;
   }
   
   // Generate unique settlement name.

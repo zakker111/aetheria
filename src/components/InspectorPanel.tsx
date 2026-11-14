@@ -117,7 +117,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
         <span>
           {data.kind === 'agent' && `👤 Citizen: ${e.name}${e.epithet ? ` "${e.epithet}"` : ''}`}
           {data.kind === 'settlement' && `${e.tierIcon || '🏡'} ${e.name} (${e.tier || 'Village'})`}
-          {data.kind === 'building' && `🏛️ Building: ${e.buildingType || e.type}`}
+          {data.kind === 'building' && (e.buildingType === 'dock' ? '⚓ Harbor Dock' : `🏛️ Building: ${e.buildingType || e.type}`)}
           {data.kind === 'resource' &&
             `${e.resourceType === 'food' ? '🌾' : e.resourceType === 'wood' ? '🌲' : e.resourceType === 'ore' ? '⛏️' : '💧'} ${e.label || e.resourceType?.toUpperCase()}`}
         </span>
@@ -386,7 +386,15 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 {e.growthTrend || 'stable'})
               </div>
               <div>
-                🏛️ Buildings: <b>{e.buildings ? e.buildings.length : 0}</b> structures
+                🏛️ Buildings: <b style={{ fontVariantNumeric: 'tabular-nums' }}>{e.buildings ? e.buildings.length : 0}</b> structures
+                {(() => {
+                  const docks = e.docksCount ?? (Array.isArray(e.buildings) ? e.buildings.filter((b: any) => (b.buildingType || b.type) === 'dock' && !b.isRuined).length : 0);
+                  const fleet = e.vesselsCount ?? 0;
+                  if (docks === 0 && fleet === 0) return null;
+                  return (
+                    <span style={{ color: '#38bdf8' }}> · ⚓ {docks} docks · ⛵ {fleet} vessels</span>
+                  );
+                })()}
               </div>
               <div>
                 📍 Center: ({Math.floor(e.center?.x || 0)}, {Math.floor(e.center?.y || 0)})

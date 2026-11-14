@@ -13,8 +13,8 @@ export class AgeSystem {
         // Configuration
         this.CHILD_AGE = 0;
         this.ADULT_AGE = 18;
-        this.ELDER_AGE = 60;
-        this.MAX_AGE = 90;
+        this.ELDER_AGE = 58;
+        this.MAX_AGE = 82;
         this.AGING_INTERVAL = 100; // Ticks per year of aging
         
         this.lastAgeTick = 0;
@@ -28,33 +28,38 @@ export class AgeSystem {
             this.agePopulation();
         }
         
-        this.updateBehaviors();
+        this.updateBehaviors(currentTick);
     }
 
     /**
      * Age all agents and handle lifecycle events
      */
     agePopulation() {
-        // sim.agents is an array (not a Map) — .values() used to throw TypeError
         const agents = Array.isArray(this.sim.agents) ? this.sim.agents : Array.from(this.sim.agents.values());
+        const expired = [];
 
-        agents.forEach(agent => {
-            // NOTE: aging itself is owned by Agent.updateNeeds() (+0.01/tick).
-            // This pass only fires lifecycle hooks — no duplicate aging.
+        for (let i = 0; i < agents.length; i++) {
+            const agent = agents[i];
+            if (!agent || !agent.alive) continue;
 
-            // Check for natural death (Agent also self-checks; keep parity here)
-            if (agent.alive && agent.age >= this.MAX_AGE) {
-                this.handleDeath(agent, 'old_age');
-                return;
+            // Check for natural death (respect personal maxAge)
+            const limit = agent.maxAge || this.MAX_AGE;
+            if (agent.age >= limit) {
+                expired.push(agent);
+                continue;
             }
 
-            // Check life stage transitions (integer-safe comparisons)
+            // Check life stage transitions
             if (agent.lifeStage !== 'adult' && agent.age >= this.ADULT_AGE && agent.age < this.ELDER_AGE) {
                 this.onBecomeAdult(agent);
             } else if (agent.lifeStage === 'adult' && agent.age >= this.ELDER_AGE) {
                 this.onBecomeElder(agent);
             }
-        });
+        }
+
+        for (let i = 0; i < expired.length; i++) {
+            this.handleDeath(expired[i], 'old_age');
+        }
     }
 
     onBecomeAdult(agent) {
@@ -62,7 +67,6 @@ export class AgeSystem {
         agent.canMarry = true;
         agent.canWork = true;
         
-        // Assign adult job if not assigned (settlements have no assignJob — route via economySystem)
         if ((!agent.job || agent.job === 'unemployed') && this.sim.economySystem) {
             const availableJobs = ['gatherer', 'farmer', 'lumberjack', 'miner', 'builder', 'craftsman'];
             this.sim.economySystem.assignJob(agent, availableJobs);
@@ -81,8 +85,7 @@ export class AgeSystem {
         agent.job = null;
         agent.productivity = 0.6; // Slower movement/actions
         
-        // Elder wisdom bonus
-        if (agent.personality.wisdom) {
+        if (agent.personality && agent.personality.wisdom) {
             agent.personality.wisdom += 2;
         }
         
@@ -93,187 +96,153 @@ export class AgeSystem {
     }
 
     handleDeath(agent, cause) {
-        // Handle inheritance/family notification
-        if (agent.relationships) {
-            const family = agent.relationships.family || [];
-            family.forEach(relId => {
+        // Notify living relatives via RelationshipSystem
+        if (this.sim.relationshipSystem?.getRelatives) {
+            const rels = this.sim.relationshipSystem.getRelatives(agent.id);
+            const familyIds = [
+                ...(rels.parents || []),
+                ...(rels.children || []),
+                ...(rels.siblings || []),
+                ...(rels.spouse ? [rels.spouse] : [])
+            ];
+            for (let i = 0; i < familyIds.length; i++) {
+                const relId = familyIds[i];
                 const relative = (typeof this.sim._agentById === 'function')
                     ? this.sim._agentById(relId)
-                    : (Array.isArray(this.sim.agents)
-                        ? this.sim.agents.find(a => a.id === relId)
-                        : this.sim.agents.get(relId));
-                if (relative) {
-                    // Grief debuff
-                    if (relative.needs) {
-                        relative.needs.morale = Math.max(0, (relative.needs.morale || 100) - 30);
-                    }
-                    
+                    : null;
+                if (relative && relative.alive && relative.needs) {
+                    relative.needs.morale = Math.max(0, (relative.needs.morale || 100) - 25);
                     this.eventBus.emit('agent:grief', {
                         deceased: agent.name,
                         mourner: relative.name,
                         relationship: relId
                     });
                 }
-            });
+            }
         }
         
-        // Remove agent
-        this.sim.removeAgent(agent.id);
+        agent.alive = false;
+        agent.deathCause = cause || 'old_age';
+        this.sim.removeAgent(agent.id, agent.deathCause);
         
         this.eventBus.emit('agent:died', {
             id: agent.id,
             name: agent.name,
             age: agent.age,
-            cause: cause
+            cause: agent.deathCause
         });
     }
 
     /**
-     * Update behaviors based on age/life stage
+     * Update behaviors based on age/life stage (throttled & zero-RNG for late-game speed)
      */
-    updateBehaviors() {
+    updateBehaviors(currentTick = 0) {
         const agents = this.sim.agents || [];
+        let mentorsThisTick = 0;
         
-        agents.forEach(agent => {
+        for (let i = 0; i < agents.length; i++) {
+            const agent = agents[i];
+            if (!agent || !agent.alive || agent._lodTier === 2) continue;
+            if (((agent.id + currentTick) & 3) !== 0) continue; // deterministic 1-in-4 throttle
+
             if (agent.lifeStage === 'child') {
-                this.updateChildBehavior(agent);
+                this.updateChildBehavior(agent, currentTick);
             } else if (agent.lifeStage === 'elder') {
-                this.updateElderBehavior(agent);
+                if (this.updateElderBehavior(agent, currentTick, mentorsThisTick < 3)) {
+                    mentorsThisTick++;
+                }
             }
-        });
+        }
     }
 
-    updateChildBehavior(agent) {
-        // Children follow parents or stay in settlement (agents store parents[] array)
+    updateChildBehavior(agent, currentTick = 0) {
         const parentId = Array.isArray(agent.parents) ? agent.parents[0] : agent.parentId;
         if (!parentId) return;
 
         const parent = (typeof this.sim._agentById === 'function')
             ? this.sim._agentById(parentId)
-            : (Array.isArray(this.sim.agents)
-                ? this.sim.agents.find(a => a.id === parentId)
-                : this.sim.agents.get(parentId));
+            : null;
         if (parent && parent.alive !== false) {
-            // Simple follow logic
             const dx = parent.x - agent.x;
             const dy = parent.y - agent.y;
-            const dist = Math.sqrt(dx*dx + dy*dy);
+            const distSq = dx * dx + dy * dy;
             
-            if (dist > 5) { // Keep close but not on top
-                const moveX = (dx / dist) * 0.3; // Slower movement
-                const moveY = (dy / dist) * 0.3;
-                agent.x += moveX;
-                agent.y += moveY;
+            if (distSq > 25) {
+                const dist = Math.sqrt(distSq);
+                const nx = agent.x + (dx / dist) * 0.6;
+                const ny = agent.y + (dy / dist) * 0.6;
+                if (!this.sim.world || this.sim.world.isWalkable(Math.floor(nx), Math.floor(ny))) {
+                    agent.x = nx;
+                    agent.y = ny;
+                }
+            } else if ((agent.id * 17 + currentTick) % 20 === 0) {
+                const jx = (((agent.id * 13 + currentTick) % 3) - 1) * 0.5;
+                const jy = (((agent.id * 29 + currentTick) % 3) - 1) * 0.5;
+                const nx = Math.max(2, Math.min((this.sim.world?.width || 128) - 2, agent.x + jx));
+                const ny = Math.max(2, Math.min((this.sim.world?.height || 128) - 2, agent.y + jy));
+                if (!this.sim.world || this.sim.world.isWalkable(Math.floor(nx), Math.floor(ny))) {
+                    agent.x = nx;
+                    agent.y = ny;
+                }
             }
-        }
-        
-        // Children play (random movement when close to parent)
-        if (this.sim.world.rng.next() < 0.05) {
-            agent.x += (this.sim.world.rng.next() - 0.5) * 2;
-            agent.y += (this.sim.world.rng.next() - 0.5) * 2;
         }
         
         agent.state = 'playing';
     }
 
-    updateElderBehavior(agent) {
-        // Elders rest more, move slower, advise younger agents
-        if (this.sim.world.rng.next() < 0.1) {
+    updateElderBehavior(agent, currentTick = 0, allowMentor = true) {
+        if ((agent.id * 11 + currentTick) % 10 === 0) {
             agent.state = 'resting';
-            return;
+            return false;
         }
         
-        // Move slowly towards settlement center or community buildings
         if (agent.settlementId) {
             const settlement = this.sim.settlements.get(agent.settlementId);
-            if (settlement) {
+            if (settlement && settlement.center) {
                 const dx = settlement.center.x - agent.x;
                 const dy = settlement.center.y - agent.y;
-                const dist = Math.sqrt(dx*dx + dy*dy);
+                const distSq = dx * dx + dy * dy;
                 
-                if (dist > 2) {
-                    const moveX = (dx / dist) * 0.2; // Very slow
-                    const moveY = (dy / dist) * 0.2;
-                    agent.x += moveX;
-                    agent.y += moveY;
+                if (distSq > 4) {
+                    const dist = Math.sqrt(distSq);
+                    const nx = agent.x + (dx / dist) * 0.4;
+                    const ny = agent.y + (dy / dist) * 0.4;
+                    if (!this.sim.world || this.sim.world.isWalkable(Math.floor(nx), Math.floor(ny))) {
+                        agent.x = nx;
+                        agent.y = ny;
+                    }
                 }
             }
         }
         
-        // Chance to mentor nearby young agents
-        if (this.sim.world.rng.next() < 0.02) {
-            this.mentorNearby(agent);
+        if (allowMentor && (agent.id * 23 + currentTick) % 60 === 0) {
+            return this.mentorNearby(agent);
         }
+        return false;
     }
 
     mentorNearby(elder) {
         const nearby = this.sim.world.getNearbyAgents(elder.x, elder.y, 5);
-        const youngOnes = nearby.filter(a => 
-            a.lifeStage === 'child' || (a.age < 25 && a.lifeStage === 'adult')
-        );
-        
-        if (youngOnes.length > 0) {
-            const mentee = youngOnes[0];
-            // Boost mentee's skill growth
-            if (!mentee.skills) mentee.skills = {};
-            Object.keys(elder.skills || {}).forEach(skill => {
-                if (elder.skills[skill] > 5) {
-                    mentee.skills[skill] = (mentee.skills[skill] || 0) + 0.1;
+        for (let i = 0; i < nearby.length; i++) {
+            const a = nearby[i];
+            if (a.alive && (a.lifeStage === 'child' || (a.age < 25 && a.lifeStage === 'adult'))) {
+                if (!a.skills) a.skills = {};
+                const skills = Object.keys(elder.skills || {});
+                for (let k = 0; k < skills.length; k++) {
+                    const skill = skills[k];
+                    if (elder.skills[skill] > 2) {
+                        a.skills[skill] = Math.min(5, (a.skills[skill] || 1) + 0.08);
+                    }
                 }
-            });
-            
-            this.eventBus.emit('agent:mentored', {
-                mentor: elder.name,
-                mentee: mentee.name,
-                skill: Object.keys(elder.skills)[0] || 'wisdom'
-            });
+                this.eventBus.emit('agent:mentored', {
+                    mentor: elder.name,
+                    mentee: a.name,
+                    skill: skills[0] || 'wisdom'
+                });
+                return true;
+            }
         }
-    }
-
-    /**
-     * Spawn a new child agent
-     */
-    spawnChild(parentA, parentB, settlementId) {
-        const settlement = this.sim.settlements.get(settlementId);
-        if (!settlement) return null;
-        
-        const child = this.sim.spawnAgent(
-            parentA.x,
-            parentA.y,
-            parentA.factionId
-        );
-        
-        if (child) {
-            child.age = 0;
-            child.lifeStage = 'child';
-            child.parentId = parentA.id;
-            child.parentIds = [parentA.id, parentB.id];
-            child.canWork = false;
-            child.canMarry = false;
-            
-            // Inherit some traits
-            child.personality = {
-                intelligence: (parentA.personality.intelligence + parentB.personality.intelligence) / 2 + (this.sim.world.rng.next() - 0.5) * 2,
-                strength: (parentA.personality.strength + parentB.personality.strength) / 2 + (this.sim.world.rng.next() - 0.5) * 2,
-                charisma: (parentA.personality.charisma + parentB.personality.charisma) / 2 + (this.sim.world.rng.next() - 0.5) * 2
-            };
-            
-            // Add to family trees
-            if (!parentA.relationships.children) parentA.relationships.children = [];
-            parentA.relationships.children.push(child.id);
-            
-            if (!parentB.relationships.children) parentB.relationships.children = [];
-            parentB.relationships.children.push(child.id);
-            
-            this.eventBus.emit('agent:born', {
-                id: child.id,
-                name: child.name,
-                parents: [parentA.name, parentB.name],
-                settlement: settlement.name
-            });
-        }
-        
-        return child;
+        return false;
     }
 
     serialize() {

@@ -9,6 +9,8 @@ export type ToolType =
   | 'build_house'
   | 'build_workshop'
   | 'build_farm'
+  | 'build_dock'
+  | 'build_bridge'
   | 'rain'
   | 'lightning'
   | 'douse'
@@ -22,7 +24,7 @@ export type ToolType =
 export interface TimeState {
   days: number;
   hours: number;
-  ticks: number;
+  tick: number;
 }
 
 export interface ResourceSummary {

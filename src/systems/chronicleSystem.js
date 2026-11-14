@@ -39,6 +39,10 @@ export class ChronicleSystem {
     return entry;
   }
 
+  addEntry(kind, text, extra = {}) {
+    return this.add(kind, text, extra);
+  }
+
   recent(limit = 30) {
     const list = this.entries.slice(-limit).reverse();
     this._refreshFrontLines(list);
@@ -75,6 +79,12 @@ export class ChronicleSystem {
     bus.on('SETTLEMENT_FOUNDED', (d) => {
       this.add('founding', `${d.name || 'A new settlement'} was founded at (${Math.round(d.x)},${Math.round(d.y)}).`,
         { settlementName: d.name });
+    });
+    bus.on('SETTLEMENTS_MERGED', (d) => {
+      this.add('era', `🌆 Grand Civic Union! ${d.secondaryName || 'A neighboring city'} merged into ${d.primaryName || 'a metropolis'} (${d.tier || 'City'}, Pop ${d.population || '?'}).`, {
+        icon: '🌆',
+        settlementId: d.primaryId
+      });
     });
     bus.on('DIPLOMATIC_EVENT', (d) => {
       const title = d.title || 'A treaty';
@@ -134,6 +144,59 @@ export class ChronicleSystem {
         victimId: d.victimId,
         x: d.x,
         y: d.y
+      });
+    });
+    bus.on('SUCCESSION_CRISIS_STARTED', (d) => {
+      this.add('war', `👑 Succession Crisis in ${d.settlementName || 'a realm'}! ${d.claimantName || 'A pretender'} raised banners against ${d.monarchName || 'the crown'} (${d.reason || 'Disputed Legitimacy'}).`, {
+        icon: '⚔️',
+        settlementId: d.settlementId
+      });
+    });
+    bus.on('CROWN_USURPED', (d) => {
+      this.add('era', `👑 Usurpation! ${d.usurperName || 'A claimant'} seized the throne of ${d.settlementName || 'the realm'} (${d.dynastyName || 'Royal House'}).`, {
+        icon: '👑',
+        settlementId: d.settlementId
+      });
+    });
+    bus.on('REBELLION_CRUSHED', (d) => {
+      this.add('peace', `🛡️ Loyalist forces of ${d.dynastyName || 'the crown'} crushed the claimant uprising in ${d.settlementName || 'the realm'}.`, {
+        icon: '🛡️',
+        settlementId: d.settlementId
+      });
+    });
+    bus.on('AMPHIBIOUS_RAID_LAUNCHED', (d) => {
+      this.add('war', `⛵ ${d.settlementName || 'A warband'} embarked ${d.size || '?'} raiders on longboats toward ${d.targetSettlementName || 'enemy shores'}.`, {
+        icon: '⛵',
+        x: d.x,
+        y: d.y
+      });
+    });
+    bus.on('AMPHIBIOUS_LANDING', (d) => {
+      this.add('war', `⚔️ Amphibious raiders from ${d.settlementName || 'across the waters'} stormed ashore at (${Math.round(d.x || 0)}, ${Math.round(d.y || 0)}).`, {
+        icon: '⛵',
+        x: d.x,
+        y: d.y
+      });
+    });
+    bus.on('BARGE_TRADE_COMPLETED', (d) => {
+      this.add('era', `⛴️ River barge delivered ${d.amount || 0} ${d.resource || 'goods'} from ${d.from || 'port'} to ${d.to || 'market'}.`, {
+        icon: '⛴️'
+      });
+    });
+    bus.on('CONSTRUCTION_COMPLETED', (d) => {
+      if (d?.buildingType === 'dock') {
+        this.add('founding', `⚓ A harbor dock was completed at (${Math.round(d.x || 0)}, ${Math.round(d.y || 0)}), opening the waters to fishing and trade.`, {
+          icon: '⚓',
+          x: d.x,
+          y: d.y
+        });
+      }
+    });
+    bus.on('infrastructure:bridge_built', (d) => {
+      this.add('founding', `🌉 Engineers of ${d?.faction || 'the realm'} spanned a ${d?.span || ''}-tile bridge across the waters.`, {
+        icon: '🌉',
+        x: d?.x,
+        y: d?.y
       });
     });
     bus.on('SOLDIER_WOUNDED', () => {

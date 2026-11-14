@@ -343,6 +343,7 @@ export class EventSystem {
         const damageRoll = world.rng.next();
         if (damageRoll < 0.1) {
           agent.alive = false; // 10% fatality
+          agent.deathCause = 'fire';
         } else if (damageRoll < 0.4) {
           this.injuredAgents.set(agent.id, {
             injury: 50,
@@ -403,6 +404,7 @@ export class EventSystem {
         
         if (world.rng.next() < 0.05) {
           agent.alive = false;
+          agent.deathCause = 'flood';
         } else if (world.rng.next() < 0.3) {
           this.injuredAgents.set(agent.id, {
             injury: 30,
@@ -561,6 +563,7 @@ export class EventSystem {
       if (event && event.effects.mortalityRate != null &&
           world.rng.next() < event.effects.mortalityRate / Math.max(1, event.duration)) {
         agent.alive = false;
+        agent.deathCause = diseaseData.disease === 'plague' ? 'plague' : 'illness';
         this.infectedAgents.delete(agentId);
         continue;
       }

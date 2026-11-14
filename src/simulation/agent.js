@@ -59,8 +59,8 @@ export class Agent {
     this.generation = 1;      // dynasty depth (children of surnamed parents = max+1)
     // Default initial agents are young adults (18-32), newborns are passed 0
     this.age = initialAge !== null ? initialAge : (18 + Math.floor(this.rng.next() * 14));
-    this.maxAge = 75 + Math.floor(this.rng.next() * 25); // 75-100 years
-    this.lifeStage = this.age < 18 ? "child" : (this.age >= 60 ? "elder" : "adult");
+    this.maxAge = 58 + Math.floor(this.rng.next() * 24); // 58-81 years balanced lifespan
+    this.lifeStage = this.age < 18 ? "child" : (this.age >= 58 ? "elder" : "adult");
     
     this.gender = this.rng.next() > 0.5 ? "male" : "female";
     this.children = 0;
@@ -71,6 +71,7 @@ export class Agent {
     this.health = 100;
     this.maxHealth = 100;
     this.starvationTicks = 0;
+    this._lastCombatTick = null;
     
     // Components (doc 02: avoid giant NPC class, use components)
     this.needs = {
@@ -219,10 +220,10 @@ export class Agent {
   // dt: delta ticks for time-sliced LOD updates (defaults to 1 tick).
   updateNeeds(dt = 1) {
     // Life-stage-scaled drains (Phase 2): children burn needs slower, elders
-    // tire faster and metabolize food/water quicker.
+    // experience gradual frailty so natural mortality keeps pace with births.
     const stage = this.lifeStage;
-    const drainMul = stage === "child" ? 0.7 : (stage === "elder" ? 1.25 : 1.0);
-    const restMul = stage === "child" ? 0.6 : (stage === "elder" ? 1.4 : 1.0);
+    const drainMul = stage === "child" ? 0.7 : (stage === "elder" ? 1.4 : 1.0);
+    const restMul = stage === "child" ? 0.6 : (stage === "elder" ? 1.45 : 1.0);
 
     // Slower drains so agents have time to actually find food/water instead
     // of cascading into starvation deaths.
@@ -240,7 +241,7 @@ export class Agent {
     // Life stage transitions
     if (this.age < 18) {
       this.lifeStage = "child";
-    } else if (this.age >= 60) {
+    } else if (this.age >= 58) {
       this.lifeStage = "elder";
     } else {
       this.lifeStage = "adult";
@@ -263,16 +264,12 @@ export class Agent {
       }
     } else {
       this.starvationTicks = 0;
-      // Phase 3b Step 3 (combat depth): soldiers actively fighting in a
-      // warband do NOT regenerate health mid-battle — without this gate the
-      // 0.5/tick regen outpaces melee damage (~12 per 45-tick swing), so
-      // battles become endless stalemates and nobody ever dies (no
-      // casualties/battles ever recorded). Wounded men resting at home DO
-      // heal (they left their warbandId when they broke off the line).
       const inBattle = this.militaryDuty && this.warbandId != null &&
         this.sim?.warfareSystem?.warbands?.get(this.warbandId)?.state === 'engaging';
-      if (!inBattle && this.health < this.maxHealth) {
-        this.health = Math.min(this.maxHealth, this.health + 0.5 * dt);
+      const nowTick = tickOf(this.sim);
+      const recentlyStruck = this._lastCombatTick != null && (nowTick - this._lastCombatTick) < 120;
+      if (!inBattle && !recentlyStruck && this.health < this.maxHealth) {
+        this.health = Math.min(this.maxHealth, this.health + 0.35 * dt);
       }
     }
 
@@ -308,9 +305,13 @@ export class Agent {
 
     if (this.needs.water < 45 && this.settlementId && simulation?.settlementSystem) {
       const set = simulation.settlementSystem.settlements.get(this.settlementId);
-      if (set && set.stockpile && (set.stockpile.water || 0) > 0) {
-        set.stockpile.water = Math.max(0, set.stockpile.water - 1);
-        this.needs.water = Math.min(100, this.needs.water + 55);
+      if (set) {
+        if (set.stockpile && (set.stockpile.water || 0) > 0) {
+          set.stockpile.water = Math.max(0, set.stockpile.water - 1);
+          this.needs.water = Math.min(100, this.needs.water + 55);
+        } else if (set.center) {
+          this.needs.water = Math.min(100, this.needs.water + 45);
+        }
       }
     }
 
@@ -355,15 +356,17 @@ export class Agent {
       }
     }
 
-    // 4. Macro reproduction in background hinterland settlements
+    // 4. Macro reproduction in background hinterland settlements (respects global cap & child limit)
     const totalPop = simulation ? simulation.agents.length : 0;
-    if (totalPop < 2500 && this.lifeStage === 'adult' && this.needs.food > 75 && this.needs.water > 75 &&
+    const popCap = simulation?.maxAgents ?? 360;
+    if (totalPop < popCap && this.lifeStage === 'adult' && this.age <= this.maxAge - 14 &&
+        this.children < 3 && this.needs.food > 75 && this.needs.water > 75 &&
         this.reproduceCooldown <= 0 && this.partnerId && births && simulation) {
-      if ((this.id * 31 + simulation.clock.tick) % 350 === 0) {
+      if ((this.id * 31 + simulation.clock.tick) % 450 === 0) {
         const partner = simulation._agentById(this.partnerId);
-        if (partner && partner.alive && partner.reproduceCooldown <= 0) {
-          this.reproduceCooldown = 450;
-          partner.reproduceCooldown = 450;
+        if (partner && partner.alive && partner.reproduceCooldown <= 0 && partner.children < 3) {
+          this.reproduceCooldown = 480;
+          partner.reproduceCooldown = 480;
           births.push({ x: this.x, y: this.y, parentId1: this.id, parentId2: partner.id });
         }
       }
@@ -508,15 +511,16 @@ export class Agent {
     const homeSettlement = simulation?.settlementSystem?.getAgentSettlement?.(this.id);
     const hasTownFood = (homeSettlement?.stockpile?.food || 0) + (homeSettlement?.stockpile?.bread || 0) > 0;
 
-    // 1. Critical Hunger & Thirst
+    // 1. Critical Hunger & Thirst (extreme deprivation < 18 outranks non-fire fleeing)
     if (this.needs.food < 45) {
+      const foodUrgent = this.needs.food < 18 ? 135 - this.needs.food : 120 - this.needs.food;
       if (this.inventory.bread > 0 || this.inventory.wheat > 0) {
-        this.goals.push({ type: "eat_from_inventory", priority: 120 - this.needs.food });
+        this.goals.push({ type: "eat_from_inventory", priority: foodUrgent });
       } else if (hasTownFood && homeSettlement?.center) {
-        this.goals.push({ type: "eat_from_stockpile", priority: 115 - this.needs.food, target: homeSettlement.center });
-        this.goals.push({ type: "find_food", priority: 105 - this.needs.food });
+        this.goals.push({ type: "eat_from_stockpile", priority: foodUrgent - 2, target: homeSettlement.center });
+        this.goals.push({ type: "find_food", priority: foodUrgent - 10 });
       } else {
-        this.goals.push({ type: "find_food", priority: 110 - this.needs.food });
+        this.goals.push({ type: "find_food", priority: foodUrgent - 5 });
       }
     } else if (this.needs.food < 75) {
       if (this.inventory.bread > 0 || this.inventory.wheat > 0) {
@@ -530,10 +534,11 @@ export class Agent {
     }
     
     if (this.needs.water < 45) {
+      const waterUrgent = this.needs.water < 18 ? 138 - this.needs.water : 118 - this.needs.water;
       if (homeSettlement?.center) {
-        this.goals.push({ type: "fetch_town_water", priority: 118 - this.needs.water, target: homeSettlement });
+        this.goals.push({ type: "fetch_town_water", priority: waterUrgent, target: homeSettlement });
       }
-      this.goals.push({ type: "find_water", priority: 115 - this.needs.water });
+      this.goals.push({ type: "find_water", priority: waterUrgent - 3 });
     } else if (this.needs.water < 75) {
       if (homeSettlement?.center) {
         this.goals.push({ type: "fetch_town_water", priority: 58, target: homeSettlement });
@@ -591,13 +596,21 @@ export class Agent {
         this._warThreat = null;
         const hostiles = mySid != null ? simulation.diplomacySystem.getEnemies(mySid) : [];
         if (hostiles.length > 0 && !this.militaryDuty) {
-          const hostileSet = new Set(hostiles);
+          const singleHostile = hostiles.length === 1 ? hostiles[0] : -1;
+          const hostileSet = hostiles.length > 1 ? new Set(hostiles) : null;
+          const agentSetMap = simulation.settlementSystem ? simulation.settlementSystem.agentSettlementMap : null;
           let best = null, bestD = Infinity;
-          for (const other of simulation.agents) {
-            if (!other.alive || other.militaryDuty) continue;
-            const osid = other.settlementId ||
-              (simulation.settlementSystem ? simulation.settlementSystem.agentSettlementMap.get(other.id) : null);
-            if (osid == null || !hostileSet.has(osid)) continue;
+          // Non-desperate civilians only trigger flee for threats < 9 tiles, so
+          // a radius-10 spatial scan covers 100% of threats in O(1) vs O(agents).
+          const scanList = desperate
+            ? simulation.agents
+            : simulation.world._getScan(Math.floor(this.x), Math.floor(this.y), 10);
+          for (let i = 0; i < scanList.length; i++) {
+            const other = scanList[i];
+            if (other.type !== "agent" || !other.alive || other.militaryDuty) continue;
+            const osid = other.settlementId || (agentSetMap ? agentSetMap.get(other.id) : null);
+            if (osid == null) continue;
+            if (singleHostile !== -1 ? osid !== singleHostile : !hostileSet.has(osid)) continue;
             const dx = other.x - this.x, dy = other.y - this.y;
             const d2 = dx * dx + dy * dy;
             if (d2 < bestD) { bestD = d2; best = other; }
@@ -609,9 +622,9 @@ export class Agent {
         threatX = this._warThreat.x; threatY = this._warThreat.y;
         threatDist = this._warThreat.dist; threatKind = "war";
       }
-      // Fire nearby? Scan a few tiles around us for burning ground.
+      // Fire nearby? Only scan 7x7 tile window when fires actually exist in the world.
       const w = simulation.world;
-      if (w.fireTiles) {
+      if (simulation._fireActive && w.fireTiles) {
         const px = Math.floor(this.x), py = Math.floor(this.y);
         for (let dy = -3; dy <= 3 && threatKind !== "war"; dy++) {
           for (let dx = -3; dx <= 3; dx++) {
@@ -629,7 +642,8 @@ export class Agent {
     if ((underThreat && (desperate || this.personality.brave < 0.6 || this.lifeStage !== "adult")) ||
         (desperate && threatKind !== null)) {
       this.fleeFrom = { x: threatX, y: threatY };
-      this.goals.push({ type: "flee", priority: 130, target: { x: threatX, y: threatY }, kind: threatKind });
+      const fleePriority = (threatKind === "fire" && threatDist < 2.5) ? 145 : 130;
+      this.goals.push({ type: "flee", priority: fleePriority, target: { x: threatX, y: threatY }, kind: threatKind });
     } else {
       this.fleeFrom = null;
     }
@@ -747,16 +761,19 @@ export class Agent {
       this.goals.push({ type: "pray", priority: 70 });
     }
     
-    // 5. Reproduction & Family Life (Adults in prime age with decent needs)
+    // 5. Reproduction & Family Life (Adults in prime age, carrying-capacity tapered)
     const currentPop = simulation ? simulation.agents.length : 0;
-    const minFoodWater = currentPop > 800 ? 65 : 45;
-    if (currentPop < 2500 &&
+    const popCap = simulation?.maxAgents ?? 360;
+    const occupancy = currentPop / Math.max(1, popCap);
+    const minFoodWater = occupancy > 0.75 ? 74 : (occupancy > 0.5 ? 60 : 48);
+    const maxChildren = occupancy > 0.65 ? 2 : 3;
+    if (currentPop < popCap &&
         this.lifeStage === "adult" &&
-        this.age >= 18 && this.age <= this.maxAge - 15 && 
+        this.age >= 18 && this.age <= this.maxAge - 14 && 
         (!this.reproduceCooldown || this.reproduceCooldown <= 0) &&
         this.needs.food > minFoodWater && this.needs.water > minFoodWater && 
-        this.children < (currentPop > 1000 ? 3 : 5)) {
-      this.goals.push({ type: "reproduce", priority: 58 });
+        this.children < maxChildren) {
+      this.goals.push({ type: "reproduce", priority: 54 });
     }
     
     // 6. Social Interaction & Community Bonding — and neighbor visits:
@@ -770,11 +787,12 @@ export class Agent {
       this.goals.push({ type: "visit_neighbor", priority: 26 });
     }
     
-    // 7. Settlement Stay, Tethering & Stockpile Sharing
-    if (simulation && simulation.settlementSystem) {
-      const settlement = simulation.settlementSystem.getAgentSettlement(this.id);
-      if (settlement && settlement.center) {
-        const distToCenter = Math.hypot(this.x - settlement.center.x, this.y - settlement.center.y);
+    // 7. Settlement Stay, Tethering & Stockpile Sharing (reuse homeSettlement from line 508)
+    let cachedDistToCenter = -1;
+    if (homeSettlement && homeSettlement.center) {
+      const settlement = homeSettlement;
+      const distToCenter = Math.hypot(this.x - settlement.center.x, this.y - settlement.center.y);
+      cachedDistToCenter = distToCenter;
 
         // Communal Stockpile sharing: when workers have gathered a haul, bring it back to town!
         // Craftsmen don't deposit raw materials (those feed the workshop
@@ -852,7 +870,7 @@ export class Agent {
 
         // Town well / water fetch when in or near settlement
         if (this.needs.water < 65 && distToCenter <= 16) {
-          this.goals.push({ type: "fetch_town_water", priority: this.needs.water < 45 ? 116 : 58, target: settlement.center });
+          this.goals.push({ type: "fetch_town_water", priority: this.needs.water < 45 ? 116 : 58, target: settlement });
         }
 
         // Sleep at home: go rest where you live (drives foot traffic on roads)
@@ -868,23 +886,16 @@ export class Agent {
           const homePull = Math.min(80, 52 + Math.floor(distToCenter - 14));
           this.goals.push({ type: "return_to_settlement", priority: homePull, target: settlement.center });
         }
-      }
     }
     
     // 7.5 Town Life & Urban Activities ("hanging around town doing stuff"):
     // When an agent is in or near their settlement, they actively take part in community life:
-    //  - Gather around the communal hearth / town square (warm up, drink, chat, relax)
-    //  - Browse market stalls and trade
-    //  - Pray or seek blessings at the temple / shrine
-    //  - Watch blacksmith / craftsmen at the workshop
-    //  - Spar / drill at watchtower / barracks
-    //  - Play games in the streets (children)
-    //  - Tend communal town crops
-    if (simulation && simulation.settlementSystem) {
-      const settlement = simulation.settlementSystem.getAgentSettlement(this.id);
-      if (settlement && settlement.center) {
-        const distToCenter = Math.hypot(this.x - settlement.center.x, this.y - settlement.center.y);
-        if (distToCenter <= 18) {
+    if (homeSettlement && homeSettlement.center) {
+      const settlement = homeSettlement;
+      const distToCenter = cachedDistToCenter >= 0
+        ? cachedDistToCenter
+        : Math.hypot(this.x - settlement.center.x, this.y - settlement.center.y);
+      if (distToCenter <= 18) {
           const t = tickOf(simulation);
           const isChild = this.lifeStage === "child";
           const isGuard = job === 'soldier' || job === 'guard';
@@ -932,13 +943,17 @@ export class Agent {
           if (isFarmer || ((this.id * 17 + t) % 24) === 0) {
             this.goals.push({ type: "tend_town_farm", priority: isFarmer ? 76 : 31, target: settlement.center });
           }
-        }
       }
     }
 
-    // 8. Proactive foraging if inventory has space
-    const totalItems = Object.values(this.inventory).reduce((a, b) => typeof b === 'number' ? a + b : a, 0);
-    if (totalItems < this.inventory.capacity) {
+    // 8. Proactive foraging if inventory has space (zero-allocation sum matching Object.values)
+    let totalItems = 0;
+    const inv = this.inventory;
+    for (const k in inv) {
+      const v = inv[k];
+      if (typeof v === 'number') totalItems += v;
+    }
+    if (totalItems < inv.capacity) {
       this.goals.push({ type: "forage_nearby", priority: 35 });
     }
 
@@ -1547,8 +1562,13 @@ export class Agent {
       }
     }
 
-    actions.sort((a, b) => b.score - a.score);
-    return actions[0];
+    let best = actions[0];
+    for (let i = 1; i < actions.length; i++) {
+      if (actions[i].score > best.score) {
+        best = actions[i];
+      }
+    }
+    return best;
   }
 
   // Personal memory: bounded to last 8 salient life events. Pure data write —
@@ -2048,10 +2068,10 @@ export class Agent {
           this.needs.food = Math.max(0, this.needs.food - 7);
           this.needs.water = Math.max(0, this.needs.water - 7);
           this.children++;
-          this.reproduceCooldown = 150; // Sustained cooldown
+          this.reproduceCooldown = 340; // Balanced generational cooldown (~3.4 sim years)
           
           mate.children++;
-          mate.reproduceCooldown = 150;
+          mate.reproduceCooldown = 340;
           mate.needs.social = Math.min(100, mate.needs.social + 20);
           
           const babyX = Math.max(2, Math.min(world.width - 2, this.x + (this.rng.next() - 0.5) * 2));
@@ -2870,6 +2890,7 @@ export class Agent {
         }
         this.moveToward({ x: destX, y: destY }, world, 1.8); // panic sprint ×1.8 speed
         this.needs.rest = Math.max(0, this.needs.rest - 0.15); // running is exhausting
+        this.currentAction = null;
         break;
       }
         
@@ -2964,7 +2985,7 @@ export class Agent {
   // Smooth movement with border clamping and multi-direction obstacle avoidance
   // speedBoost: optional multiplier (e.g. panic fleeing sprints at ×1.8)
   moveToward(target, world, speedBoost = 1) {
-    if (!target) return;
+    if (!target || this.embarked) return;
     
     const dx = target.x - this.x;
     const dy = target.y - this.y;
@@ -3088,6 +3109,8 @@ export class Agent {
       deathCause: this.deathCause ?? null,
       kills: this.kills || 0,
       epithet: this.epithet ?? null,
+      legendaryWeapon: this.legendaryWeapon ?? null,
+      isRebel: this.isRebel === true,
       battlesFought: this.battlesFought || 0,
       needs: { ...this.needs },
       personality: { ...this.personality },
@@ -3163,6 +3186,8 @@ export class Agent {
       // war-threat scans; losing them desyncs soldier behavior after resume.
       militaryDuty: this.militaryDuty === true,
       warbandId: this.warbandId ?? null,
+      embarked: this.embarked === true,
+      vesselId: this.vesselId ?? null,
       combatRole: this.combatRole ?? null,
       hasWeapon: this.hasWeapon ?? false,
       hasShield: this.hasShield ?? false,
@@ -3176,6 +3201,7 @@ export class Agent {
       // Combat component: mirrors canonical health each update, but cooldown/
       // target/attack-speed state must survive the round trip.
       combat: this.combat ? { ...this.combat } : null,
+      _lastCombatTick: this._lastCombatTick ?? null,
       // Religion component: faith decays incrementally per tick — without
       // persisting it, priests lose their status and faith on load.
       religion: this.religion ? { ...this.religion } : null,
@@ -3217,8 +3243,8 @@ export class Agent {
     agent.generation = data.generation ?? 1;
     agent.alive = data.alive !== undefined ? data.alive : true;
     agent.age = data.age ?? 20;
-    agent.maxAge = data.maxAge || 85;
-    agent.lifeStage = data.lifeStage || (agent.age < 18 ? "child" : (agent.age >= 60 ? "elder" : "adult"));
+    agent.maxAge = data.maxAge || 72;
+    agent.lifeStage = data.lifeStage || (agent.age < 18 ? "child" : (agent.age >= 58 ? "elder" : "adult"));
     agent.gender = data.gender || "male";
     agent.children = data.children || 0;
     agent.parents = data.parents || [];
@@ -3228,10 +3254,13 @@ export class Agent {
     agent.health = data.health || 100;
     agent.maxHealth = data.maxHealth || 100;
     agent.starvationTicks = data.starvationTicks || 0;
+    agent._lastCombatTick = data._lastCombatTick ?? null;
     agent.reproduceCooldown = data.reproduceCooldown || 0;
     agent.deathCause = data.deathCause ?? null;
     agent.kills = data.kills || 0;
     agent.epithet = data.epithet ?? null;
+    agent.legendaryWeapon = data.legendaryWeapon ?? null;
+    agent.isRebel = data.isRebel === true;
     agent.battlesFought = data.battlesFought || 0;
     agent.needs = { ...data.needs };
     agent.personality = { ...data.personality };
@@ -3327,6 +3356,8 @@ export class Agent {
     // war-threat scans; losing them desyncs soldier behavior after resume.
     agent.militaryDuty = data.militaryDuty === true;
     agent.warbandId = data.warbandId ?? null;
+    agent.embarked = data.embarked === true;
+    agent.vesselId = data.vesselId ?? null;
     agent.combatRole = data.combatRole ?? null;
     agent.hasWeapon = data.hasWeapon ?? false;
     agent.hasShield = data.hasShield ?? false;

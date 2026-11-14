@@ -405,8 +405,10 @@ export class RelationshipSystem {
   }
 
   // Decay relationships over time (neglect)
-  decayRelationships(deltaTime) {
+  decayRelationships(deltaTime = 1) {
     const nowTick = this.sim?.clock?.tick ?? null;
+    const fStep = 0.1 * deltaTime;
+    const tStep = 0.05 * deltaTime;
     for (const relMap of this.relationships.values()) {
       for (const rel of relMap.values()) {
         // Neglect threshold expressed in sim ticks (100 ticks ~ 1 sim year);
@@ -416,8 +418,8 @@ export class RelationshipSystem {
           : (Date.now() - (rel.lastInteraction || 0) > 86400000); // legacy 24h
         if (rel.interactions > 0 && stale) {
           // Small decay if no recent interaction
-          rel.friendship = Math.max(-100, rel.friendship - 0.1);
-          rel.trust = Math.max(0, rel.trust - 0.05);
+          rel.friendship = Math.max(-100, rel.friendship - fStep);
+          rel.trust = Math.max(0, rel.trust - tStep);
         }
       }
     }

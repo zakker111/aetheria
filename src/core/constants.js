@@ -29,7 +29,8 @@ export const BUILDING_TYPES = {
   FARM: 'farm',
   TOWER: 'tower',
   WALL: 'wall',
-  WAREHOUSE: 'warehouse'
+  WAREHOUSE: 'warehouse',
+  DOCK: 'dock'
 };
 
 // Storage capacity per building type (units of food/wood/stone/ore/water).
@@ -41,6 +42,7 @@ export const STORAGE_CAPACITY = {
   workshop: 30,
   market: 60,
   warehouse: 250,
+  dock: 80,
   temple: 20,
   barracks: 30,
   castle: 120,
@@ -57,6 +59,7 @@ export const STORAGE_CAPACITY = {
 export const BUILD_COSTS = {
   house:     { plank: 2 },
   farm:      { plank: 2 },
+  dock:      { plank: 4 },
   workshop:  { plank: 4 },
   temple:    { plank: 4, iron_ingot: 2 },
   tower:     { plank: 4, iron_ingot: 2 },

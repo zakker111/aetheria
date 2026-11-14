@@ -47,9 +47,33 @@ export class CanvasRenderer {
     this._renderItemPool = [];
     this._poolIndex = 0;
     this._seenBuildingIds = new Set();
+    this._pN = { x: 0, y: 0 };
+    this._pE = { x: 0, y: 0 };
+    this._pS = { x: 0, y: 0 };
+    this._pW = { x: 0, y: 0 };
+    this._pTmp = { x: 0, y: 0 };
+
+    // Frame timing & sub-tick interpolation state
+    this._tickAlpha = 1;
+    this._lastActiveAlpha = 1;
+    this._frameDtMs = 16.67;
+    this._frameDtSec = 0.01667;
+    this._simSpeed = 1;
+    this._frameNow = Date.now();
+    this._currentSimTick = 0;
     
     this.setupInput();
     this.setupEventListeners();
+  }
+
+  setFrameTiming(tickAlpha, frameDtMs, speed) {
+    const clampedAlpha = tickAlpha < 0 ? 0 : tickAlpha > 1 ? 1 : tickAlpha;
+    this._tickAlpha = clampedAlpha;
+    if (speed > 0) this._lastActiveAlpha = clampedAlpha;
+    const dt = frameDtMs > 0 ? Math.min(100, frameDtMs) : 16.67;
+    this._frameDtMs = dt;
+    this._frameDtSec = dt * 0.001;
+    this._simSpeed = speed ?? 1;
   }
 
   getRenderItem(kind, entity, x, y, depth) {
@@ -457,8 +481,9 @@ export class CanvasRenderer {
     if (this.camera.targetY === undefined) this.camera.targetY = this.camera.y;
     if (this.camera.targetZoom === undefined) this.camera.targetZoom = this.camera.zoom;
 
-    const camEase = 0.14;
-    const zoomEase = 0.16;
+    const dtFactor = Math.min(3, (this._frameDtSec || 0.01667) * 60);
+    const camEase = 1 - Math.pow(0.84, dtFactor);
+    const zoomEase = 1 - Math.pow(0.82, dtFactor);
 
     const dx = this.camera.targetX - this.camera.x;
     const dy = this.camera.targetY - this.camera.y;
@@ -475,8 +500,8 @@ export class CanvasRenderer {
   }
 
   /**
-   * Continuous Sub-Frame Entity Coordinate Interpolation (60 FPS visual smoothing)
-   * Prevents jerky stepped hopping between 10Hz/350ms simulation ticks without mutating simulation logic.
+   * Continuous Tick-to-Tick Linear Coordinate Interpolation (60/120 FPS visual smoothing)
+   * Glides entities smoothly at constant velocity between simulation ticks without mutating state.
    */
   getEntityRenderCoords(entity) {
     if (!entity) return { x: 0, y: 0 };
@@ -484,54 +509,71 @@ export class CanvasRenderer {
     const ty = entity.y !== undefined ? entity.y : entity.centroidY;
     if (tx === undefined || ty === undefined) return { x: 0, y: 0 };
 
-    if (!entity._renderCoords) {
-      entity._renderCoords = { x: tx, y: ty };
+    let rc = entity._renderCoords;
+    if (!rc) {
+      rc = entity._renderCoords = { x: tx, y: ty };
     }
 
+    const simTick = this._currentSimTick;
     if (entity._rx === undefined || entity._ry === undefined) {
       entity._rx = tx;
       entity._ry = ty;
-      entity._renderCoords.x = tx;
-      entity._renderCoords.y = ty;
-      return entity._renderCoords;
+      entity._fromX = tx;
+      entity._fromY = ty;
+      entity._animTick = simTick;
+      rc.x = tx;
+      rc.y = ty;
+      return rc;
     }
 
-    const dx = tx - entity._rx;
-    const dy = ty - entity._ry;
-    const dist = Math.hypot(dx, dy);
+    if (entity._animTick !== simTick) {
+      const ddx = tx - entity._rx;
+      const ddy = ty - entity._ry;
+      if (ddx * ddx + ddy * ddy > 12.25) {
+        // Snap for spawns or teleports (> 3.5 tiles)
+        entity._fromX = tx;
+        entity._fromY = ty;
+        entity._rx = tx;
+        entity._ry = ty;
+      } else {
+        entity._fromX = entity._rx;
+        entity._fromY = entity._ry;
+      }
+      entity._animTick = simTick;
+    } else if (this._simSpeed === 0) {
+      const ddx = tx - entity._rx;
+      const ddy = ty - entity._ry;
+      if (ddx * ddx + ddy * ddy > 12.25) {
+        entity._fromX = tx;
+        entity._fromY = ty;
+        entity._rx = tx;
+        entity._ry = ty;
+      }
+    }
 
-    // Instant snap for spawning or long-distance teleports
-    if (dist > 3.5) {
+    const fx = entity._fromX;
+    const fy = entity._fromY;
+    if (fx !== tx || fy !== ty) {
+      const alpha = this._simSpeed > 0 ? this._tickAlpha : this._lastActiveAlpha;
+      entity._rx = fx + (tx - fx) * alpha;
+      entity._ry = fy + (ty - fy) * alpha;
+    } else {
       entity._rx = tx;
       entity._ry = ty;
-      entity._renderCoords.x = tx;
-      entity._renderCoords.y = ty;
-      return entity._renderCoords;
     }
 
-    // Adaptive smooth interpolation:
-    // Blend a responsive exponential approach with a minimum linear glide speed
-    // so agents walk smoothly into their destination without slowing to a crawl.
-    if (dist > 0.001) {
-      const step = Math.min(dist, Math.max(dist * 0.18, 0.016));
-      entity._rx += (dx / dist) * step;
-      entity._ry += (dy / dist) * step;
-    }
-
-    if (dist <= 0.004) {
-      entity._rx = tx;
-      entity._ry = ty;
-    }
-
-    entity._renderCoords.x = entity._rx;
-    entity._renderCoords.y = entity._ry;
-    return entity._renderCoords;
+    rc.x = entity._rx;
+    rc.y = entity._ry;
+    return rc;
   }
 
   /**
    * Main Render Pipeline
    */
   render() {
+    this._frameNow = Date.now();
+    this._currentSimTick = this.simulation?.clock?.tick ?? 0;
+
     // 0. Smooth Camera Interpolation
     this.updateCameraSmoothly();
 
@@ -773,7 +815,7 @@ export class CanvasRenderer {
     if (!world) return;
     const ctx = this.ctx;
     const zoom = this.camera.zoom;
-    const now = Date.now();
+    const now = this._frameNow;
     const w = world.width;
     const centerX = this.canvas.width * 0.5;
     const centerY = this.canvas.height * 0.5;
@@ -818,13 +860,18 @@ export class CanvasRenderer {
         // Shimmering animated water surface
         const shimmer = 0.5 + 0.3 * Math.sin(now * 0.003 + x * 1.5 + y * 2.1);
         if (isOceanLake) {
-          ctx.fillStyle = `rgba(14, 116, 184, ${0.72 + 0.1 * shimmer})`;
+          const isFlowingChannel = riverFlow >= 0.45;
+          ctx.fillStyle = isFlowingChannel
+            ? `rgba(24, 144, 210, ${0.72 + 0.12 * shimmer})`
+            : `rgba(14, 116, 184, ${0.72 + 0.1 * shimmer})`;
           ctx.fill();
 
-          // Gentle white water foam crest at zoom
-          if (zoom >= 6 && shimmer > 0.65) {
-            ctx.strokeStyle = `rgba(255, 255, 255, ${0.28 * shimmer})`;
-            ctx.lineWidth = 1;
+          // Gentle white water foam crest / flowing river ripple at zoom
+          if (zoom >= 5 && (isFlowingChannel || (zoom >= 6 && shimmer > 0.65))) {
+            ctx.strokeStyle = isFlowingChannel
+              ? `rgba(224, 242, 254, ${0.22 + 0.2 * shimmer})`
+              : `rgba(255, 255, 255, ${0.28 * shimmer})`;
+            ctx.lineWidth = isFlowingChannel ? Math.max(1, zoom * 0.1) : 1;
             ctx.beginPath();
             ctx.moveTo((pNx + pWx) * 0.5, (pNy + pWy) * 0.5);
             ctx.lineTo((pEx + pSx) * 0.5, (pEy + pSy) * 0.5);
@@ -857,7 +904,8 @@ export class CanvasRenderer {
     const ctx = this.ctx;
     const zoom = this.camera.zoom;
     const w = world.width;
-    const now = Date.now();
+    const now = this._frameNow;
+    const pN = this._pN, pE = this._pE, pS = this._pS, pW = this._pW, pTmp = this._pTmp;
 
     for (let y = minY; y <= maxY; y++) {
       for (let x = minX; x <= maxX; x++) {
@@ -871,11 +919,11 @@ export class CanvasRenderer {
         const elev = this.getTileElevation(x, y);
 
         // Scorched Earth in 2.5D
-        if (world.scorchedTiles && world.scorchedTiles[idx] > 0) {
-          const pN = this.worldToScreen(x, y, elev);
-          const pE = this.worldToScreen(x + 1, y, elev);
-          const pS = this.worldToScreen(x + 1, y + 1, elev);
-          const pW = this.worldToScreen(x, y + 1, elev);
+        if (isScorched) {
+          this.worldToScreenFast(x, y, elev, pN);
+          this.worldToScreenFast(x + 1, y, elev, pE);
+          this.worldToScreenFast(x + 1, y + 1, elev, pS);
+          this.worldToScreenFast(x, y + 1, elev, pW);
 
           const scorchAlpha = Math.min(0.85, (world.scorchedTiles[idx] / 255) * 0.75 + 0.15);
           ctx.fillStyle = `rgba(28, 25, 23, ${scorchAlpha})`;
@@ -889,11 +937,11 @@ export class CanvasRenderer {
         }
 
         // Bridges spanning water
-        if (world.bridgeTiles && world.bridgeTiles[idx]) {
-          const pN = this.worldToScreen(x, y, elev + 2);
-          const pE = this.worldToScreen(x + 1, y, elev + 2);
-          const pS = this.worldToScreen(x + 1, y + 1, elev + 2);
-          const pW = this.worldToScreen(x, y + 1, elev + 2);
+        if (isBridge) {
+          this.worldToScreenFast(x, y, elev + 2, pN);
+          this.worldToScreenFast(x + 1, y, elev + 2, pE);
+          this.worldToScreenFast(x + 1, y + 1, elev + 2, pS);
+          this.worldToScreenFast(x, y + 1, elev + 2, pW);
 
           // Wood plank bridge deck
           ctx.fillStyle = "#854d0e";
@@ -922,11 +970,11 @@ export class CanvasRenderer {
           }
         }
         // Cobblestone roads & foot traffic trails
-        else if (world.roadTiles && world.roadTiles[idx]) {
-          const pN = this.worldToScreen(x + 0.15, y + 0.15, elev);
-          const pE = this.worldToScreen(x + 0.85, y + 0.15, elev);
-          const pS = this.worldToScreen(x + 0.85, y + 0.85, elev);
-          const pW = this.worldToScreen(x + 0.15, y + 0.85, elev);
+        else if (isRoad) {
+          this.worldToScreenFast(x + 0.15, y + 0.15, elev, pN);
+          this.worldToScreenFast(x + 0.85, y + 0.15, elev, pE);
+          this.worldToScreenFast(x + 0.85, y + 0.85, elev, pS);
+          this.worldToScreenFast(x + 0.15, y + 0.85, elev, pW);
 
           const traffic = world.footTraffic ? world.footTraffic[idx] : 0;
           ctx.fillStyle = traffic >= 15 ? "rgba(180, 160, 130, 0.82)" : "rgba(195, 180, 155, 0.65)";
@@ -940,25 +988,25 @@ export class CanvasRenderer {
         }
 
         // Active wildfire burning tiles
-        if (world.fireTiles && world.fireTiles[idx] > 0) {
-          const screen = this.worldToScreen(x + 0.5, y + 0.5, elev);
+        if (isFire) {
+          this.worldToScreenFast(x + 0.5, y + 0.5, elev, pTmp);
           const flicker = 0.6 + 0.4 * Math.sin(now * 0.015 + x * 3.1 + y * 4.7);
           const fs = Math.max(4, zoom * 0.9 * flicker);
 
           // Charred base
           ctx.fillStyle = "rgba(40, 10, 0, 0.65)";
           ctx.beginPath();
-          ctx.ellipse(screen.x, screen.y, fs * 0.6, fs * 0.3, 0, 0, Math.PI * 2);
+          ctx.ellipse(pTmp.x, pTmp.y, fs * 0.6, fs * 0.3, 0, 0, Math.PI * 2);
           ctx.fill();
 
           // Core flame
-          const flameGrad = ctx.createRadialGradient(screen.x, screen.y - fs * 0.5, 0, screen.x, screen.y - fs * 0.3, fs);
+          const flameGrad = ctx.createRadialGradient(pTmp.x, pTmp.y - fs * 0.5, 0, pTmp.x, pTmp.y - fs * 0.3, fs);
           flameGrad.addColorStop(0, "rgba(255, 240, 120, 0.95)");
           flameGrad.addColorStop(0.4, "rgba(249, 115, 22, 0.85)");
           flameGrad.addColorStop(1, "rgba(220, 38, 38, 0)");
           ctx.fillStyle = flameGrad;
           ctx.beginPath();
-          ctx.arc(screen.x, screen.y - fs * 0.5, fs * 0.8, 0, Math.PI * 2);
+          ctx.arc(pTmp.x, pTmp.y - fs * 0.5, fs * 0.8, 0, Math.PI * 2);
           ctx.fill();
         }
       }
@@ -1058,7 +1106,11 @@ export class CanvasRenderer {
         const a = animals[i];
         if (a.alive === false) continue;
         if (a.x < minX - 3 || a.x > maxX + 3 || a.y < minY - 3 || a.y > maxY + 3) {
-          if (a._rx !== undefined) { a._rx = a.x; a._ry = a.y; }
+          if (a._rx !== undefined) {
+            a._rx = a.x; a._ry = a.y;
+            a._fromX = a.x; a._fromY = a.y;
+            a._animTick = this._currentSimTick;
+          }
           continue;
         }
         const coords = this.getEntityRenderCoords(a);
@@ -1076,12 +1128,36 @@ export class CanvasRenderer {
         const ag = agents[i];
         if (!ag.alive) continue;
         if (ag.x < minX - 3 || ag.x > maxX + 3 || ag.y < minY - 3 || ag.y > maxY + 3) {
-          if (ag._rx !== undefined) { ag._rx = ag.x; ag._ry = ag.y; }
+          if (ag._rx !== undefined) {
+            ag._rx = ag.x; ag._ry = ag.y;
+            ag._fromX = ag.x; ag._fromY = ag.y;
+            ag._animTick = this._currentSimTick;
+          }
           continue;
         }
         const coords = this.getEntityRenderCoords(ag);
         if (coords.x >= minX - 1 && coords.x <= maxX + 1 && coords.y >= minY - 1 && coords.y <= maxY + 1) {
           list.push(this.getRenderItem("agent", ag, coords.x, coords.y, coords.x + coords.y + 0.3));
+        }
+      }
+    }
+
+    // 4b. Coastal/River Vessels (Fishing Boats, River Barges, Raid Longboats)
+    const vessels = this.simulation.navalSystem?.vessels;
+    if (vessels && vessels.length > 0) {
+      for (let i = 0; i < vessels.length; i++) {
+        const v = vessels[i];
+        if (v.x < minX - 3 || v.x > maxX + 3 || v.y < minY - 3 || v.y > maxY + 3) {
+          if (v._rx !== undefined) {
+            v._rx = v.x; v._ry = v.y;
+            v._fromX = v.x; v._fromY = v.y;
+            v._animTick = this._currentSimTick;
+          }
+          continue;
+        }
+        const coords = this.getEntityRenderCoords(v);
+        if (coords.x >= minX - 1 && coords.x <= maxX + 1 && coords.y >= minY - 1 && coords.y <= maxY + 1) {
+          list.push(this.getRenderItem("vessel", v, coords.x, coords.y, coords.x + coords.y + 0.25));
         }
       }
     }
@@ -1112,6 +1188,9 @@ export class CanvasRenderer {
           break;
         case "animal":
           this.render25DAnimal(item.entity, screen, elev);
+          break;
+        case "vessel":
+          this.render25DVessel(item.entity, screen, elev);
           break;
         case "agent":
           this.render25DAgent(item.entity, screen, elev);
@@ -1378,7 +1457,7 @@ export class CanvasRenderer {
     const zoom = this.camera.zoom;
     const type = b.buildingType || b.type || "house";
     const bs = Math.max(6, zoom * (type === "castle" ? 1.4 : type === "tower" ? 1.0 : 0.9));
-    const now = Date.now();
+    const now = this._frameNow;
 
     ctx.save();
 
@@ -1734,6 +1813,51 @@ export class CanvasRenderer {
       ctx.arc(screen.x + bs * 0.32, screen.y - wallH * 0.45, 3, 0, Math.PI * 2);
       ctx.fill();
 
+    } else if (type === "dock") {
+      // 2.5D Harbor Pier & Mooring Dock extending onto coastline/riverbank
+      const deckH = bs * 0.35;
+
+      // Timber support pilings submerged at water edge
+      ctx.fillStyle = "#451a03";
+      ctx.fillRect(screen.x - bs * 0.5, screen.y - deckH, bs * 0.14, deckH + bs * 0.25);
+      ctx.fillRect(screen.x - bs * 0.08, screen.y - deckH + bs * 0.08, bs * 0.14, deckH + bs * 0.25);
+      ctx.fillRect(screen.x + bs * 0.36, screen.y - deckH, bs * 0.14, deckH + bs * 0.25);
+
+      // Isometric timber plank platform
+      ctx.fillStyle = "#92400e";
+      ctx.beginPath();
+      ctx.moveTo(screen.x - bs * 0.62, screen.y - deckH);
+      ctx.lineTo(screen.x, screen.y + bs * 0.3 - deckH);
+      ctx.lineTo(screen.x + bs * 0.62, screen.y - deckH);
+      ctx.lineTo(screen.x, screen.y - bs * 0.3 - deckH);
+      ctx.closePath();
+      ctx.fill();
+
+      // Sunlit plank highlight seams
+      ctx.strokeStyle = "#b45309";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(screen.x - bs * 0.38, screen.y - deckH);
+      ctx.lineTo(screen.x + bs * 0.24, screen.y - deckH + bs * 0.14);
+      ctx.moveTo(screen.x - bs * 0.24, screen.y - deckH - bs * 0.14);
+      ctx.lineTo(screen.x + bs * 0.38, screen.y - deckH);
+      ctx.stroke();
+
+      // Harbor mooring post + glowing lantern
+      ctx.fillStyle = "#78350f";
+      ctx.fillRect(screen.x + bs * 0.32, screen.y - deckH - bs * 0.45, bs * 0.12, bs * 0.48);
+      const lanternPulse = 0.75 + 0.25 * Math.sin(now * 0.008 + (b.id || 0));
+      ctx.fillStyle = `rgba(251, 191, 36, ${lanternPulse})`;
+      ctx.beginPath();
+      ctx.arc(screen.x + bs * 0.38, screen.y - deckH - bs * 0.48, Math.max(2.2, bs * 0.14), 0, Math.PI * 2);
+      ctx.fill();
+
+      // Trade barrel & rope coil
+      ctx.fillStyle = "#713f12";
+      ctx.fillRect(screen.x - bs * 0.32, screen.y - deckH - bs * 0.22, bs * 0.2, bs * 0.24);
+      ctx.fillStyle = "#d97706";
+      ctx.fillRect(screen.x - bs * 0.32, screen.y - deckH - bs * 0.14, bs * 0.2, bs * 0.05);
+
     } else if (type === "warehouse" || type === "stockpile") {
       // 2.5D Broad Storage Granary & Supply Cargo Porch
       const wallH = bs * 0.75;
@@ -1954,7 +2078,7 @@ export class CanvasRenderer {
     if (!s) return;
     const ctx = this.ctx;
     const zoom = this.camera.zoom;
-    const now = Date.now();
+    const now = this._frameNow;
     const r = Math.max(8, zoom * 1.3);
 
     ctx.save();
@@ -2066,14 +2190,32 @@ export class CanvasRenderer {
     ctx.ellipse(screen.x, screen.y + 1, s * 0.8, s * 0.32, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    const distMoved = Math.hypot(a.x - (a._rx ?? a.x), a.y - (a._ry ?? a.y));
-    const isAnimalMoving = distMoved > 0.003;
-    if (isAnimalMoving) {
-      a._animCycle = (a._animCycle || 0) + 0.18;
-    } else {
-      a._animCycle = (a._animCycle || 0) + 0.035;
+    const aFromX = a._fromX ?? a.x;
+    const aFromY = a._fromY ?? a.y;
+    const aMoveX = a.x - aFromX;
+    const aMoveY = a.y - aFromY;
+    const aMoveSq = aMoveX * aMoveX + aMoveY * aMoveY;
+    const now = this._frameNow;
+
+    if (aMoveSq > 0.0001) {
+      a._movingHoldUntil = now + 140;
+      const screenDx = aMoveX - aMoveY;
+      if (Math.abs(screenDx) > 0.002) {
+        a._facing = screenDx < 0 ? -1 : 1;
+      }
     }
-    const hop = isAnimalMoving ? Math.sin(a._animCycle) * 2.2 : Math.sin(a._animCycle) * 0.65;
+    const isAnimalMoving = this._simSpeed > 0 && now < (a._movingHoldUntil || 0);
+    if (this._simSpeed > 0) {
+      const rate = isAnimalMoving ? 9.5 * Math.min(2.2, Math.max(0.85, this._simSpeed)) : 2.0;
+      a._animCycle = (a._animCycle || 0) + this._frameDtSec * rate;
+    }
+    const hop = isAnimalMoving ? Math.abs(Math.sin(a._animCycle || 0)) * -2.2 : Math.sin(a._animCycle || 0) * 0.5;
+
+    if ((a._facing || 1) === -1) {
+      ctx.translate(screen.x, screen.y);
+      ctx.scale(-1, 1);
+      ctx.translate(-screen.x, -screen.y);
+    }
 
     if (a.species === "deer") {
       // 2.5D Graceful Stag
@@ -2125,6 +2267,144 @@ export class CanvasRenderer {
   }
 
   /**
+   * 2.5D Naval Vessels:
+   * Fishing Boats (small sail + catch basket), River Barges (wide cargo hull + town banner),
+   * and Amphibious Raid Longboats (shielded gunwales + crimson war sail).
+   */
+  render25DVessel(v, screen, elev) {
+    const ctx = this.ctx;
+    const zoom = this.camera.zoom;
+    const now = this._frameNow;
+    const s = Math.max(4, zoom * 0.56);
+    const bob = Math.sin(now * 0.006 + (v.id || 0) * 1.7) * 1.6;
+    const facing = v.facing || 1;
+
+    ctx.save();
+
+    // Animated water wake ripple beneath hull
+    const wakePulse = 0.28 + 0.14 * Math.sin(now * 0.008 + (v.id || 0));
+    ctx.strokeStyle = `rgba(186, 230, 253, ${wakePulse})`;
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.ellipse(screen.x, screen.y + 1, s * 1.15, s * 0.48, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    if (facing === -1) {
+      ctx.translate(screen.x, screen.y);
+      ctx.scale(-1, 1);
+      ctx.translate(-screen.x, -screen.y);
+    }
+
+    if (v.kind === "raid") {
+      // 2.5D Dragon-Prowed Raid Longboat with gunwale shields & crimson war sail
+      const vy = screen.y - s * 0.25 + bob;
+      ctx.fillStyle = "#451a03";
+      ctx.beginPath();
+      ctx.moveTo(screen.x - s * 1.1, vy - s * 0.1);
+      ctx.lineTo(screen.x - s * 0.85, vy + s * 0.35);
+      ctx.lineTo(screen.x + s * 0.85, vy + s * 0.35);
+      ctx.lineTo(screen.x + s * 1.15, vy - s * 0.15);
+      ctx.lineTo(screen.x + s * 0.95, vy - s * 0.35);
+      ctx.lineTo(screen.x + s * 0.72, vy);
+      ctx.lineTo(screen.x - s * 0.75, vy);
+      ctx.closePath();
+      ctx.fill();
+
+      // Row of round Viking/warband shields along side
+      const shieldColors = ["#dc2626", "#f59e0b", "#cbd5e1", "#dc2626"];
+      for (let k = 0; k < 4; k++) {
+        ctx.fillStyle = shieldColors[k];
+        ctx.beginPath();
+        ctx.arc(screen.x - s * 0.55 + k * s * 0.36, vy + s * 0.08, s * 0.14, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Mast & Striped Crimson War Sail
+      ctx.strokeStyle = "#78350f";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(screen.x, vy);
+      ctx.lineTo(screen.x, vy - s * 1.45);
+      ctx.stroke();
+
+      ctx.fillStyle = "#dc2626";
+      ctx.beginPath();
+      ctx.moveTo(screen.x, vy - s * 1.38);
+      ctx.quadraticCurveTo(screen.x + s * 0.72, vy - s * 0.95, screen.x + s * 0.52, vy - s * 0.42);
+      ctx.lineTo(screen.x, vy - s * 0.48);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = "#fef2f2";
+      ctx.fillRect(screen.x + s * 0.1, vy - s * 1.15, s * 0.18, s * 0.52);
+
+    } else if (v.kind === "barge") {
+      // 2.5D Heavy River Trade Barge with cargo hold & settlement pennant
+      const vy = screen.y - s * 0.22 + bob;
+      ctx.fillStyle = "#78350f";
+      ctx.beginPath();
+      ctx.moveTo(screen.x - s * 1.0, vy - s * 0.1);
+      ctx.lineTo(screen.x - s * 0.78, vy + s * 0.34);
+      ctx.lineTo(screen.x + s * 0.78, vy + s * 0.34);
+      ctx.lineTo(screen.x + s * 1.0, vy - s * 0.1);
+      ctx.closePath();
+      ctx.fill();
+
+      // Cargo crates & grain sacks aboard deck
+      ctx.fillStyle = "#d97706";
+      ctx.fillRect(screen.x - s * 0.52, vy - s * 0.38, s * 0.42, s * 0.32);
+      ctx.fillStyle = "#eab308";
+      ctx.fillRect(screen.x + s * 0.02, vy - s * 0.32, s * 0.38, s * 0.26);
+
+      // Mast & Trade Banner Sail
+      ctx.strokeStyle = "#451a03";
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(screen.x - s * 0.05, vy - s * 0.1);
+      ctx.lineTo(screen.x - s * 0.05, vy - s * 1.25);
+      ctx.stroke();
+
+      ctx.fillStyle = v.bannerColor || "#38bdf8";
+      ctx.beginPath();
+      ctx.moveTo(screen.x - s * 0.05, vy - s * 1.22);
+      ctx.lineTo(screen.x + s * 0.58, vy - s * 0.92);
+      ctx.lineTo(screen.x - s * 0.05, vy - s * 0.58);
+      ctx.closePath();
+      ctx.fill();
+
+    } else {
+      // 2.5D Nimble Fishing Boat with off-white lateen sail & catch net
+      const vy = screen.y - s * 0.2 + bob;
+      ctx.fillStyle = "#92400e";
+      ctx.beginPath();
+      ctx.moveTo(screen.x - s * 0.75, vy - s * 0.08);
+      ctx.lineTo(screen.x - s * 0.52, vy + s * 0.26);
+      ctx.lineTo(screen.x + s * 0.52, vy + s * 0.26);
+      ctx.lineTo(screen.x + s * 0.78, vy - s * 0.08);
+      ctx.closePath();
+      ctx.fill();
+
+      // Mast & Triangular Sail
+      ctx.strokeStyle = "#5c2c16";
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(screen.x, vy);
+      ctx.lineTo(screen.x, vy - s * 1.15);
+      ctx.stroke();
+
+      ctx.fillStyle = v.cargo?.amount > 0 ? "#fef08a" : "#f8fafc";
+      ctx.beginPath();
+      ctx.moveTo(screen.x, vy - s * 1.12);
+      ctx.lineTo(screen.x + s * 0.55, vy - s * 0.32);
+      ctx.lineTo(screen.x, vy - s * 0.28);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  /**
    * 2.5D Humanoid Character Graphics:
    * Citizens, Warriors, Builders, Priests with custom outfits, animated walking legs,
    * swinging tools (axes, pickaxes, hammers), shields, and action thought bubbles!
@@ -2132,7 +2412,7 @@ export class CanvasRenderer {
   render25DAgent(agent, screen, elev) {
     const ctx = this.ctx;
     const zoom = this.camera.zoom;
-    const now = Date.now();
+    const now = this._frameNow;
     const s = Math.max(3, zoom * 0.48);
 
     ctx.save();
@@ -2152,32 +2432,33 @@ export class CanvasRenderer {
       ctx.stroke();
     }
 
-    const rx = agent._rx ?? agent.x;
-    const ry = agent._ry ?? agent.y;
-    const distFromTarget = Math.hypot(agent.x - rx, agent.y - ry);
+    const fromX = agent._fromX ?? agent.x;
+    const fromY = agent._fromY ?? agent.y;
+    const stepDx = agent.x - fromX;
+    const stepDy = agent.y - fromY;
+    const stepSq = stepDx * stepDx + stepDy * stepDy;
     const hasPath = Boolean(agent.path && agent.path.length > 0);
     const actType = typeof agent.currentAction === 'string' ? agent.currentAction : agent.currentAction?.type;
-    const isActionMoving = Boolean(
-      actType === 'move' ||
-      actType === 'wander' ||
-      actType === 'patrol' ||
-      (agent.currentAction && agent.currentAction.target)
-    );
-    const isMoving = distFromTarget > 0.003 || hasPath || (isActionMoving && distFromTarget > 0.001);
 
-    if (distFromTarget > 0.005) {
-      const screenDx = (agent.x - rx) - (agent.y - ry);
+    if (stepSq > 0.0001) {
+      agent._movingHoldUntil = now + 150;
+      const screenDx = stepDx - stepDy;
       if (Math.abs(screenDx) > 0.002) {
         agent._facing = screenDx < 0 ? -1 : 1;
       }
+    } else if (hasPath) {
+      agent._movingHoldUntil = now + 100;
     }
 
+    const isMoving = this._simSpeed > 0 && (now < (agent._movingHoldUntil || 0) || hasPath);
+
     if (isMoving) {
-      agent._walkCycle = (agent._walkCycle || 0) + 0.20;
-    } else if (agent._walkCycle) {
+      const walkRate = 9.5 * Math.min(2.4, Math.max(0.85, this._simSpeed || 1));
+      agent._walkCycle = (agent._walkCycle || 0) + this._frameDtSec * walkRate;
+    } else if (this._simSpeed > 0 && agent._walkCycle) {
       const mod = agent._walkCycle % (Math.PI * 2);
-      if (mod > 0.15 && mod < Math.PI * 2 - 0.15) {
-        agent._walkCycle += 0.18;
+      if (mod > 0.18 && mod < Math.PI * 2 - 0.18) {
+        agent._walkCycle += this._frameDtSec * 10;
       } else {
         agent._walkCycle = 0;
       }
@@ -2195,15 +2476,17 @@ export class CanvasRenderer {
       ctx.translate(-screen.x, -screen.y);
     }
 
-    // 3. Legs (uneven stride if wounded)
-    ctx.strokeStyle = "#1e293b";
-    ctx.lineWidth = Math.max(1.5, s * 0.2);
-    ctx.beginPath();
-    ctx.moveTo(screen.x - s * 0.25, screen.y - s * 0.5);
-    ctx.lineTo(screen.x - s * 0.25 + (isWounded ? walk * 1.5 : walk * 3), screen.y);
-    ctx.moveTo(screen.x + s * 0.25, screen.y - s * 0.5);
-    ctx.lineTo(screen.x + s * 0.25 - (isWounded ? walk * 0.5 : walk * 3), screen.y);
-    ctx.stroke();
+    // 3. Legs (hidden inside hull when embarked on a raid vessel)
+    if (!agent.embarked) {
+      ctx.strokeStyle = "#1e293b";
+      ctx.lineWidth = Math.max(1.5, s * 0.2);
+      ctx.beginPath();
+      ctx.moveTo(screen.x - s * 0.25, screen.y - s * 0.5);
+      ctx.lineTo(screen.x - s * 0.25 + (isWounded ? walk * 1.5 : walk * 3), screen.y);
+      ctx.moveTo(screen.x + s * 0.25, screen.y - s * 0.5);
+      ctx.lineTo(screen.x + s * 0.25 - (isWounded ? walk * 0.5 : walk * 3), screen.y);
+      ctx.stroke();
+    }
 
     // 4. Role Tunic Body
     let tunicColor = "#fbbf24";
@@ -2244,15 +2527,32 @@ export class CanvasRenderer {
     ctx.arc(screen.x, screen.y - s * 1.5 + headBob, s * 0.32, 0, Math.PI * 2);
     ctx.fill();
 
-    // Hat / Helmet
-    if (agent.militaryDuty || agent.job === "soldier") {
-      // Iron Helmet with red plume
-      ctx.fillStyle = "#94a3b8";
+    // Hat / Helmet / Royal Crown
+    if (agent.isMonarch) {
+      ctx.fillStyle = "#f59e0b";
+      const cy = screen.y - s * 1.82 + headBob;
+      ctx.beginPath();
+      ctx.moveTo(screen.x - s * 0.3, cy + 2);
+      ctx.lineTo(screen.x - s * 0.25, cy - 4);
+      ctx.lineTo(screen.x - s * 0.08, cy);
+      ctx.lineTo(screen.x, cy - 5);
+      ctx.lineTo(screen.x + s * 0.08, cy);
+      ctx.lineTo(screen.x + s * 0.25, cy - 4);
+      ctx.lineTo(screen.x + s * 0.3, cy + 2);
+      ctx.closePath();
+      ctx.fill();
+    } else if (agent.militaryDuty || agent.job === "soldier") {
+      // Tactical Helmet (modern steel/olive for rifles/artillery, iron with plume for classic)
+      const wt = agent.combat?.weaponType;
+      const isModern = wt === "rifle" || wt === "artillery" || wt === "musket" || wt === "cannon";
+      ctx.fillStyle = wt === "rifle" || wt === "artillery" ? "#334155" : "#94a3b8";
       ctx.beginPath();
       ctx.arc(screen.x, screen.y - s * 1.62 + headBob, s * 0.36, Math.PI, 0);
       ctx.fill();
-      ctx.fillStyle = "#ef4444";
-      ctx.fillRect(screen.x - 1, screen.y - s * 2.05 + headBob, 3, 5);
+      if (!isModern) {
+        ctx.fillStyle = agent.isRebel ? "#f59e0b" : "#ef4444";
+        ctx.fillRect(screen.x - 1, screen.y - s * 2.05 + headBob, 3, 5);
+      }
     } else if (agent.job === "farmer") {
       // Straw Hat
       ctx.fillStyle = "#fef08a";
@@ -2298,21 +2598,47 @@ export class CanvasRenderer {
       ctx.lineTo(screen.x + s * 0.85 + swing * 4, screen.y - s * 1.4);
       ctx.stroke();
     } else if (agent.militaryDuty || agent.job === "soldier") {
-      // Sword & Shield
-      ctx.strokeStyle = "#cbd5e1";
-      ctx.lineWidth = 1.8;
-      ctx.beginPath();
-      ctx.moveTo(screen.x + s * 0.35, screen.y - s * 0.7);
-      ctx.lineTo(screen.x + s * 0.7, screen.y - s * 1.5);
-      ctx.stroke();
-      // Shield
-      ctx.fillStyle = "#1e3a8a";
-      ctx.beginPath();
-      ctx.ellipse(screen.x - s * 0.45, screen.y - s * 0.95, s * 0.22, s * 0.42, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "#f59e0b";
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      const wt = agent.combat?.weaponType;
+      if (wt === "cannon" || wt === "artillery") {
+        // Wheeled Field Artillery Barrel
+        ctx.fillStyle = "#1e293b";
+        ctx.fillRect(screen.x + s * 0.25, screen.y - s * 1.0 + headBob, s * 0.75, 4);
+        ctx.fillStyle = "#78350f";
+        ctx.beginPath();
+        ctx.arc(screen.x + s * 0.35, screen.y - s * 0.7 + headBob, s * 0.24, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (wt === "rifle" || wt === "musket") {
+        // Long Barrel Rifle / Musket
+        ctx.strokeStyle = wt === "rifle" ? "#334155" : "#78350f";
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        ctx.moveTo(screen.x + s * 0.15, screen.y - s * 0.85 + headBob);
+        ctx.lineTo(screen.x + s * 0.95, screen.y - s * 1.05 + headBob);
+        ctx.stroke();
+        ctx.strokeStyle = "#cbd5e1";
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(screen.x + s * 0.5, screen.y - s * 0.95 + headBob);
+        ctx.lineTo(screen.x + s * 1.05, screen.y - s * 1.08 + headBob);
+        ctx.stroke();
+      } else {
+        // Sword & Shield
+        ctx.strokeStyle = "#cbd5e1";
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.moveTo(screen.x + s * 0.35, screen.y - s * 0.7);
+        ctx.lineTo(screen.x + s * 0.7, screen.y - s * 1.5);
+        ctx.stroke();
+        if (agent.hasShield) {
+          ctx.fillStyle = "#1e3a8a";
+          ctx.beginPath();
+          ctx.ellipse(screen.x - s * 0.45, screen.y - s * 0.95, s * 0.22, s * 0.42, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "#f59e0b";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+      }
     }
 
     // 7. Thought / Emotion Bubble
@@ -2350,18 +2676,20 @@ export class CanvasRenderer {
   }
 
   drawThoughtIcon(x, y, icon, facing = 1) {
-    const floatBob = Math.sin(Date.now() * 0.005 + x) * 2.2;
-    this.ctx.save();
+    const floatBob = Math.sin(this._frameNow * 0.005 + x) * 2.2;
+    const ctx = this.ctx;
+    ctx.font = "12px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
     if (facing === -1) {
-      this.ctx.translate(x, y);
-      this.ctx.scale(-1, 1);
-      this.ctx.translate(-x, -y);
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(-1, 1);
+      ctx.fillText(icon, 0, floatBob);
+      ctx.restore();
+    } else {
+      ctx.fillText(icon, x, y + floatBob);
     }
-    this.ctx.font = "12px sans-serif";
-    this.ctx.textAlign = "center";
-    this.ctx.textBaseline = "middle";
-    this.ctx.fillText(icon, x, y + floatBob);
-    this.ctx.restore();
   }
 
   /**
@@ -2438,13 +2766,15 @@ export class CanvasRenderer {
    */
   renderClouds() {
     const ctx = this.ctx;
+    const dtFactor = Math.min(3, (this._frameDtSec || 0.01667) * 60);
+    const screen = this._pN;
+    const ground = this._pE;
     for (const c of this.clouds) {
-      c.x += c.speed;
+      c.x += c.speed * dtFactor;
       if (c.x > this.world.width + 30) c.x = -30;
 
-      const elev = 120; // high above mountains
-      const screen = this.worldToScreen(c.x, c.y, elev);
-      const ground = this.worldToScreen(c.x, c.y, 25);
+      this.worldToScreenFast(c.x, c.y, 120, screen);
+      this.worldToScreenFast(c.x, c.y, 25, ground);
 
       // Cloud shadow cast on terrain
       ctx.fillStyle = `rgba(0, 0, 0, ${c.opacity * 0.4})`;
@@ -2471,7 +2801,7 @@ export class CanvasRenderer {
     const ws = this.simulation?.weatherSystem;
     if (!ws) return;
     const ctx = this.ctx;
-    const now = Date.now();
+    const now = this._frameNow;
     const w = this.canvas.width;
     const h = this.canvas.height;
     const weather = ws.currentWeather;
@@ -2568,7 +2898,7 @@ export class CanvasRenderer {
    * God Power Visual FX (Lightning, Divine Ray, Sparks)
    */
   renderVisualEffects() {
-    const now = Date.now();
+    const now = this._frameNow;
     const ctx = this.ctx;
     if (this.visualEffects.length > 0) {
       let writeIdx = 0;
@@ -2645,7 +2975,7 @@ export class CanvasRenderer {
       this.simulation.selectedEntityId = this.selectedEntity ? this.selectedEntity.id : null;
     }
 
-    const now = Date.now();
+    const now = this._frameNow;
     for (let y = startY; y < endY; y++) {
       for (let x = startX; x < endX; x++) {
         const idx = y * world.width + x;
@@ -2762,6 +3092,14 @@ export class CanvasRenderer {
         this.render25DAnimal(an, screen, 20);
       }
     }
+    if (this.simulation.navalSystem?.vessels) {
+      for (const v of this.simulation.navalSystem.vessels) {
+        if (v.x < startX - 2 || v.x > endX + 2 || v.y < startY - 2 || v.y > endY + 2) continue;
+        const coords = this.getEntityRenderCoords(v);
+        const screen = this.worldToScreen(coords.x, coords.y);
+        this.render25DVessel(v, screen, 20);
+      }
+    }
     if (this.simulation.agents) {
       for (const a of this.simulation.agents) {
         if (!a.alive) continue;
@@ -2800,9 +3138,10 @@ export class CanvasRenderer {
       ctx.font = "bold 11px sans-serif";
       ctx.textAlign = "center";
       const popCount = s.population || s.agents?.length || 0;
+      const tierIcon = s.tierIcon || "🏰";
       const txt = isRuined
         ? `🏚️ ${s.name || "Ruins"} (Abandoned)`
-        : `🏰 ${s.name || "Settlement"} (Pop ${popCount})`;
+        : `${tierIcon} ${s.name || "Settlement"} (Pop ${popCount})`;
       const w = ctx.measureText(txt).width + 16;
       ctx.fillRect(screen.x - w / 2, screen.y - rad - 20, w, 22);
       ctx.strokeStyle = isRuined ? "#64748b" : (s.factionColor || "#f59e0b");
@@ -2904,11 +3243,12 @@ export class CanvasRenderer {
       ctx.fillStyle = morale > 60 ? "#22c55e" : morale > 30 ? "#f59e0b" : "#ef4444";
       ctx.fillRect(screen.x - barW / 2, screen.y - ry - 12, barW * (morale / 100), 4);
 
-      // Banner label: settlement name + size
+      // Banner label: settlement name + size + era emblem
       ctx.font = `bold ${Math.max(9, zoom * 0.45)}px sans-serif`;
       ctx.textAlign = "center";
       ctx.fillStyle = "rgba(248, 250, 252, 0.9)";
-      ctx.fillText(`${wb.settlementName || "Warband"} (${size})`, screen.x, screen.y - ry - 16);
+      const eraTag = (wb.eraId || 1) >= 6 ? " 🚀" : (wb.eraId || 1) === 5 ? " ⚙️" : "";
+      ctx.fillText(`${wb.settlementName || "Warband"}${eraTag} (${size})`, screen.x, screen.y - ry - 16);
 
       // Clash FX for engaged bands: pulsing ⚔️ + rising smoke particles
       if (engaging) {
@@ -2995,6 +3335,30 @@ export class CanvasRenderer {
         ctx.font = `${Math.max(14, this.camera.zoom * 1.3)}px sans-serif`;
         ctx.textAlign = "center";
         ctx.fillText("💀", screen.x, screen.y - 10 - progress * 16);
+      } else if (eff.type === "explosion") {
+        // Artillery blast shockwave & fiery fireball
+        const blastR = 8 + progress * 22;
+        const grad = ctx.createRadialGradient(screen.x, screen.y - 4, 0, screen.x, screen.y - 4, blastR);
+        grad.addColorStop(0, "rgba(255, 251, 235, 0.9)");
+        grad.addColorStop(0.4, "rgba(249, 115, 22, 0.7)");
+        grad.addColorStop(1, "rgba(127, 29, 29, 0)");
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(screen.x, screen.y - 4, blastR, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (eff.type === "musket_shot" || eff.type === "tracer_fire" || eff.type === "artillery_shell") {
+        const pFrom = (eff.fromX !== undefined && eff.fromY !== undefined) ? this.worldToScreen(eff.fromX, eff.fromY) : screen;
+        const pTo = (eff.toX !== undefined && eff.toY !== undefined) ? this.worldToScreen(eff.toX, eff.toY) : screen;
+        ctx.strokeStyle = eff.type === "tracer_fire" ? "#38bdf8" : eff.type === "artillery_shell" ? "#f97316" : "#fbbf24";
+        ctx.lineWidth = eff.type === "artillery_shell" ? 3 : 1.6;
+        ctx.beginPath();
+        ctx.moveTo(pFrom.x, pFrom.y - 8);
+        ctx.lineTo(pTo.x, pTo.y - 8);
+        ctx.stroke();
+        ctx.fillStyle = "#fef08a";
+        ctx.beginPath();
+        ctx.arc(pFrom.x, pFrom.y - 8, 2.5, 0, Math.PI * 2);
+        ctx.fill();
       } else if (eff.type === "arrow") {
         ctx.font = `${Math.max(11, this.camera.zoom * 0.9)}px sans-serif`;
         ctx.textAlign = "center";

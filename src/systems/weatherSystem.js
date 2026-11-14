@@ -126,7 +126,7 @@ export class WeatherSystem {
     if (world.scorchTile) world.scorchTile(fx, fy, 255);
     const biome = world.biome ? world.biome[idx] : 'grassland';
     if (biome === 'forest' || biome === 'jungle' || biome === 'savanna' || biome === 'grassland') {
-      world.startFire(fx, fy, 90);
+      world.startFire(fx, fy, 45);
     }
 
     this.sim.eventBus.emit('LIGHTNING_STRIKE', {

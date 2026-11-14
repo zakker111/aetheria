@@ -85,8 +85,13 @@ export class DynastySystem {
       consortName: null,
       heirId: null,
       heirName: null,
+      pretenderId: null,
+      pretenderName: null,
       legitimacy: 85,
       prestige: 100,
+      crisisTension: 0,
+      civilWar: null,
+      civilWarCount: 0,
       successionLaw: "primogeniture", // primogeniture | elective
       foundedTick: this.sim?.clock?.tick || 0,
       members: [founder.id],
@@ -266,33 +271,101 @@ export class DynastySystem {
     }
   }
 
+  setSuccessionLaw(dynastyId, law) {
+    const dynasty = this.dynasties.get(dynastyId);
+    if (!dynasty || (law !== "primogeniture" && law !== "elective")) return false;
+    if (dynasty.successionLaw === law) return false;
+    dynasty.successionLaw = law;
+    dynasty.legitimacy = Math.max(15, Math.min(100, dynasty.legitimacy + (law === "elective" ? 6 : -4)));
+    this.updateHeir(dynasty);
+    this.updatePretender(dynasty);
+    if (this.sim?.chronicleSystem?.add) {
+      this.sim.chronicleSystem.add(
+        "era",
+        `📜 ${dynasty.name} proclaimed ${law === "elective" ? "an Elective Council" : "Hereditary Primogeniture"} as the law of succession.`
+      );
+    }
+    return true;
+  }
+
+  updatePretender(dynasty) {
+    if (!dynasty) return;
+    if (dynasty.civilWar?.active) return;
+
+    const settlement = this.sim.settlementSystem?.settlements.get(dynasty.settlementId);
+    if (!settlement || settlement.ruined || !settlement.agentIds) {
+      dynasty.pretenderId = null;
+      dynasty.pretenderName = null;
+      return;
+    }
+
+    let best = null;
+    let bestScore = -1;
+    for (const aid of settlement.agentIds) {
+      if (aid === dynasty.monarchId || aid === dynasty.consortId || aid === dynasty.heirId) continue;
+      const a = this.sim._agentById(aid);
+      if (!a || !a.alive || (a.age || 0) < 18) continue;
+      const ambition = (a.personality?.brave ?? 0.5) * 20 + (a.personality?.greedy ?? 0.3) * 15;
+      const martial = (a.kills || 0) * 12 + (a.skills?.combat || 1) * 6;
+      const isNoble = this.agentDynastyMap.get(a.id) === dynasty.id ? 14 : 0;
+      const score = ambition + martial + isNoble;
+      if (score > bestScore || (score === bestScore && best && a.id < best.id)) {
+        bestScore = score;
+        best = a;
+      }
+    }
+
+    dynasty.pretenderId = best ? best.id : null;
+    dynasty.pretenderName = best ? best.name : null;
+  }
+
   /**
    * Called when an agent dies.
    */
   onAgentDied(agent, cause = "natural") {
     if (!agent) return;
     const dynastyId = this.agentDynastyMap.get(agent.id);
-    if (!dynastyId) return;
+    if (dynastyId) {
+      const dynasty = this.dynasties.get(dynastyId);
+      if (dynasty) {
+        const node = dynasty.lineage.find(n => n.id === agent.id);
+        if (node) {
+          node.alive = false;
+          node.deathTick = this.sim?.clock?.tick || 0;
+          node.causeOfDeath = cause;
+          if (node.reignStart && !node.reignEnd) {
+            node.reignEnd = node.deathTick;
+          }
+        }
 
-    const dynasty = this.dynasties.get(dynastyId);
-    if (!dynasty) return;
+        // Check active civil war resolution if claimant or monarch died
+        if (dynasty.civilWar?.active) {
+          if (dynasty.civilWar.claimantId === agent.id) {
+            this.resolveCivilWar(dynasty, "loyalist_victory");
+          } else if (dynasty.monarchId === agent.id) {
+            this.resolveCivilWar(dynasty, "usurpation");
+            return;
+          }
+        }
 
-    const node = dynasty.lineage.find(n => n.id === agent.id);
-    if (node) {
-      node.alive = false;
-      node.deathTick = this.sim?.clock?.tick || 0;
-      node.causeOfDeath = cause;
-      if (node.reignStart && !node.reignEnd) {
-        node.reignEnd = node.deathTick;
+        // Was this agent the reigning monarch?
+        if (dynasty.monarchId === agent.id) {
+          this.handleMonarchDeath(dynasty, agent, cause);
+        } else if (dynasty.heirId === agent.id) {
+          this.updateHeir(dynasty);
+        } else if (dynasty.pretenderId === agent.id) {
+          this.updatePretender(dynasty);
+        }
       }
-    }
-
-    // Was this agent the reigning monarch?
-    if (dynasty.monarchId === agent.id) {
-      this.handleMonarchDeath(dynasty, agent, cause);
-    } else if (dynasty.heirId === agent.id) {
-      // Re-evaluate heir
-      this.updateHeir(dynasty);
+    } else {
+      // A non-dynastic claimant who was leading a rebellion could still die
+      for (const dynasty of this.dynasties.values()) {
+        if (dynasty.civilWar?.active && dynasty.civilWar.claimantId === agent.id) {
+          this.resolveCivilWar(dynasty, "loyalist_victory");
+        } else if (dynasty.pretenderId === agent.id) {
+          this.updatePretender(dynasty);
+        }
+      }
     }
   }
 
@@ -302,37 +375,56 @@ export class DynastySystem {
   handleMonarchDeath(dynasty, oldMonarch, cause) {
     const tick = this.sim?.clock?.tick || 0;
     let successor = null;
+    let disputed = false;
 
-    // 1. Check designated heir
-    if (dynasty.heirId) {
-      const h = this.sim._agentById(dynasty.heirId);
-      if (h && h.alive) successor = h;
-    }
-
-    // 2. Primogeniture fallback: living descendants
-    if (!successor) {
-      const livingLineage = dynasty.lineage.filter(n => n.alive && n.id !== oldMonarch.id);
-      for (const node of livingLineage) {
-        const candidate = this.sim._agentById(node.id);
-        if (candidate && candidate.alive) {
-          successor = candidate;
-          break;
-        }
-      }
-    }
-
-    // 3. Elective fallback: pick best champion/elder in the settlement
-    if (!successor) {
+    if (dynasty.successionLaw === "elective") {
       const settlement = this.sim.settlementSystem?.settlements.get(dynasty.settlementId);
       if (settlement && settlement.agentIds) {
         let bestScore = -1;
         for (const aid of settlement.agentIds) {
           const a = this.sim._agentById(aid);
-          if (a && a.alive && a.id !== oldMonarch.id) {
-            const score = (a.combat?.level || 1) * 2 + (a.age || 20);
-            if (score > bestScore) {
+          if (a && a.alive && a.id !== oldMonarch.id && (a.age || 0) >= 16) {
+            const score = (a.kills || 0) * 15 + (a.combat?.level || 1) * 5 + (a.age || 20) + (this.agentDynastyMap.get(a.id) === dynasty.id ? 10 : 0);
+            if (score > bestScore || (score === bestScore && successor && a.id < successor.id)) {
               bestScore = score;
               successor = a;
+            }
+          }
+        }
+      }
+    } else {
+      // 1. Check designated heir
+      if (dynasty.heirId) {
+        const h = this.sim._agentById(dynasty.heirId);
+        if (h && h.alive) successor = h;
+      }
+
+      // 2. Primogeniture fallback: living descendants
+      if (!successor) {
+        const livingLineage = dynasty.lineage.filter(n => n.alive && n.id !== oldMonarch.id);
+        for (const node of livingLineage) {
+          const candidate = this.sim._agentById(node.id);
+          if (candidate && candidate.alive) {
+            successor = candidate;
+            break;
+          }
+        }
+      }
+
+      // 3. Elective council fallback when bloodline is empty -> disputed succession
+      if (!successor) {
+        disputed = true;
+        const settlement = this.sim.settlementSystem?.settlements.get(dynasty.settlementId);
+        if (settlement && settlement.agentIds) {
+          let bestScore = -1;
+          for (const aid of settlement.agentIds) {
+            const a = this.sim._agentById(aid);
+            if (a && a.alive && a.id !== oldMonarch.id) {
+              const score = (a.combat?.level || 1) * 2 + (a.age || 20);
+              if (score > bestScore || (score === bestScore && successor && a.id < successor.id)) {
+                bestScore = score;
+                successor = a;
+              }
             }
           }
         }
@@ -376,11 +468,19 @@ export class DynastySystem {
         node.title = `${title} ${successor.name}`;
       }
 
-      // Succession legitimacy fluctuation
-      dynasty.legitimacy = Math.max(30, Math.min(100, dynasty.legitimacy + 5));
-      dynasty.prestige += 15;
+      // Succession legitimacy fluctuation & disputed-death crisis escalation
+      const delta = disputed ? -18 : (dynasty.successionLaw === "elective" ? 2 : 5);
+      dynasty.legitimacy = Math.max(15, Math.min(100, dynasty.legitimacy + delta));
+      dynasty.prestige += disputed ? 5 : 15;
+
+      const isViolentDeath = cause === "combat" || cause === "battle" || cause === "murder" || cause === "smite";
+      if (disputed || isViolentDeath || dynasty.legitimacy < 45) {
+        const surge = (disputed ? 65 : 0) + (isViolentDeath ? 35 : 0) + (dynasty.legitimacy < 45 ? 25 : 0);
+        dynasty.crisisTension = Math.min(100, (dynasty.crisisTension || 0) + surge);
+      }
 
       this.updateHeir(dynasty);
+      this.updatePretender(dynasty);
 
       if (this.sim?.eventBus) {
         this.sim.eventBus.emit("CORONATION", {
@@ -389,28 +489,221 @@ export class DynastySystem {
           newMonarchId: successor.id,
           newMonarchName: successor.name,
           title,
-          settlementId: dynasty.settlementId
+          settlementId: dynasty.settlementId,
+          disputed
         });
       }
 
-      if (this.sim?.chronicleSystem?.addEntry) {
-        this.sim.chronicleSystem.addEntry(
-          "CORONATION",
-          `👑 ${oldMonarch.name} has died (${cause}). All hail ${title} ${successor.name} of ${dynasty.name}!`
+      if (this.sim?.chronicleSystem?.add) {
+        this.sim.chronicleSystem.add(
+          "era",
+          `👑 ${oldMonarch.name} has died (${cause}). All hail ${title} ${successor.name} of ${dynasty.name}!${disputed ? ' (Disputed Succession)' : ''}`
+        );
+      }
+
+      if (!dynasty.civilWar?.active && dynasty.pretenderId &&
+          (dynasty.crisisTension >= 100 || (disputed && dynasty.legitimacy <= 40))) {
+        this.sparkSuccessionCrisis(
+          dynasty.id,
+          disputed ? "Disputed Royal Succession" : "Weak Claim Upon Accession"
         );
       }
     } else {
-      // Dynasty collapsed
+      // Dynasty collapsed into Interregnum
       dynasty.monarchId = null;
       dynasty.monarchName = "Interregnum";
       dynasty.legitimacy = 10;
-      if (this.sim?.chronicleSystem?.addEntry) {
-        this.sim.chronicleSystem.addEntry(
-          "DYNASTY_CRISIS",
+      if (this.sim?.chronicleSystem?.add) {
+        this.sim.chronicleSystem.add(
+          "war",
           `⚠️ ${dynasty.name} faces an Interregnum! No living heir to claim the crown.`
         );
       }
     }
+  }
+
+  sparkSuccessionCrisis(dynastyId, reason = "Disputed Legitimacy") {
+    const dynasty = this.dynasties.get(dynastyId);
+    if (!dynasty || dynasty.civilWar?.active) return null;
+
+    this.updatePretender(dynasty);
+    const claimant = dynasty.pretenderId ? this.sim._agentById(dynasty.pretenderId) : null;
+    if (!claimant || !claimant.alive) return null;
+
+    const tick = this.sim?.clock?.tick || 0;
+    const monarch = dynasty.monarchId ? this.sim._agentById(dynasty.monarchId) : null;
+
+    dynasty.crisisTension = 0;
+    dynasty.civilWarCount = (dynasty.civilWarCount || 0) + 1;
+    dynasty.civilWar = {
+      active: true,
+      claimantId: claimant.id,
+      claimantName: claimant.name,
+      loyalistMonarchId: dynasty.monarchId,
+      loyalistMonarchName: dynasty.monarchName || "Regency Council",
+      startTick: tick,
+      reason,
+      rebelCasualties: 0,
+      loyalistCasualties: 0,
+      rebelWarbandId: null,
+      loyalistWarbandId: null
+    };
+
+    if (this.sim?.warfareSystem?.mobilizeCivilWar) {
+      const bands = this.sim.warfareSystem.mobilizeCivilWar(dynasty, claimant, monarch);
+      if (bands) {
+        dynasty.civilWar.rebelWarbandId = bands.rebelWarbandId;
+        dynasty.civilWar.loyalistWarbandId = bands.loyalistWarbandId;
+      }
+    }
+
+    if (this.sim?.eventBus) {
+      this.sim.eventBus.emit("SUCCESSION_CRISIS_STARTED", {
+        dynastyId: dynasty.id,
+        dynastyName: dynasty.name,
+        settlementId: dynasty.settlementId,
+        settlementName: dynasty.settlementName,
+        claimantId: claimant.id,
+        claimantName: claimant.name,
+        monarchName: dynasty.monarchName || "Crown",
+        reason
+      });
+    }
+
+    return dynasty.civilWar;
+  }
+
+  onSettlementMerged(primary, secondary, absorbedLeaderId = null) {
+    if (!primary || !secondary) return null;
+    const secDynId = this.settlementDynastyMap.get(secondary.id);
+    if (secDynId) {
+      const secDyn = this.dynasties.get(secDynId);
+      if (secDyn) {
+        if (secDyn.monarchId) {
+          const oldRuler = this.sim._agentById(secDyn.monarchId);
+          if (oldRuler) oldRuler.isMonarch = false;
+          if (!absorbedLeaderId) absorbedLeaderId = secDyn.monarchId;
+        }
+        secDyn.retired = true;
+      }
+      this.settlementDynastyMap.delete(secondary.id);
+    }
+
+    const priDyn = this.ensureSettlementDynasty(primary);
+    if (!priDyn) return null;
+    priDyn.settlementName = primary.name;
+
+    // Assign absorbed leader as high-ambition rival pretender and heighten tension
+    const rival = absorbedLeaderId ? this.sim._agentById(absorbedLeaderId) : null;
+    if (rival && rival.alive && rival.id !== priDyn.monarchId) {
+      priDyn.pretenderId = rival.id;
+      priDyn.pretenderName = rival.name;
+    } else {
+      this.updatePretender(priDyn);
+    }
+
+    priDyn.legitimacy = Math.max(15, (priDyn.legitimacy || 70) - 18);
+    priDyn.crisisTension = Math.min(100, (priDyn.crisisTension || 0) + 55);
+
+    if (!priDyn.civilWar?.active && priDyn.pretenderId &&
+        (priDyn.crisisTension >= 100 || priDyn.legitimacy <= 38)) {
+      this.sparkSuccessionCrisis(priDyn.id, "Metropolis Union Power Struggle");
+    }
+
+    return priDyn;
+  }
+
+  resolveCivilWar(dynasty, outcome = "loyalist_victory") {
+    if (!dynasty || !dynasty.civilWar?.active) return null;
+    const cw = dynasty.civilWar;
+    const tick = this.sim?.clock?.tick || 0;
+    const claimant = cw.claimantId ? this.sim._agentById(cw.claimantId) : null;
+    const oldMonarch = dynasty.monarchId ? this.sim._agentById(dynasty.monarchId) : null;
+
+    if (this.sim?.warfareSystem?.demobilizeCivilWar) {
+      this.sim.warfareSystem.demobilizeCivilWar(dynasty.id);
+    }
+
+    dynasty.civilWar = null;
+    dynasty.crisisTension = 0;
+
+    if (outcome === "usurpation" && claimant && claimant.alive) {
+      if (oldMonarch) oldMonarch.isMonarch = false;
+      claimant.isMonarch = true;
+      claimant.isRebel = false;
+
+      const settlement = this.sim.settlementSystem?.settlements.get(dynasty.settlementId);
+      const title = (settlement?.population || 1) >= 15 ? "King" : (settlement?.population || 1) >= 8 ? "High Chieftain" : "Lord Elder";
+
+      dynasty.monarchId = claimant.id;
+      dynasty.monarchName = claimant.name;
+      dynasty.monarchTitle = title;
+      dynasty.legitimacy = 68;
+      dynasty.prestige += 25;
+
+      if (!dynasty.members.includes(claimant.id)) {
+        dynasty.members.push(claimant.id);
+      }
+      this.agentDynastyMap.set(claimant.id, dynasty.id);
+      claimant.dynastyId = dynasty.id;
+
+      const oldNode = oldMonarch ? dynasty.lineage.find(n => n.id === oldMonarch.id) : null;
+      if (oldNode && !oldNode.reignEnd) oldNode.reignEnd = tick;
+
+      let cNode = dynasty.lineage.find(n => n.id === claimant.id);
+      if (!cNode) {
+        cNode = {
+          id: claimant.id,
+          name: claimant.name,
+          gender: claimant.gender || "male",
+          generation: 2,
+          parents: [],
+          spouseId: null,
+          birthTick: claimant.birthTick ?? 0,
+          deathTick: null,
+          alive: true,
+          causeOfDeath: null,
+          reignStart: tick,
+          reignEnd: null,
+          title: `${title} ${claimant.name} (Usurper)`
+        };
+        dynasty.lineage.push(cNode);
+      } else {
+        cNode.reignStart = tick;
+        cNode.title = `${title} ${claimant.name} (Usurper)`;
+      }
+
+      this.updateHeir(dynasty);
+      this.updatePretender(dynasty);
+
+      if (this.sim?.eventBus) {
+        this.sim.eventBus.emit("CROWN_USURPED", {
+          dynastyId: dynasty.id,
+          dynastyName: dynasty.name,
+          settlementId: dynasty.settlementId,
+          settlementName: dynasty.settlementName,
+          usurperId: claimant.id,
+          usurperName: claimant.name
+        });
+      }
+      return "usurpation";
+    }
+
+    // Loyalist victory (rebellion crushed)
+    dynasty.legitimacy = Math.min(100, (dynasty.legitimacy || 30) + 28);
+    dynasty.prestige += 20;
+    this.updatePretender(dynasty);
+
+    if (this.sim?.eventBus) {
+      this.sim.eventBus.emit("REBELLION_CRUSHED", {
+        dynastyId: dynasty.id,
+        dynastyName: dynasty.name,
+        settlementId: dynasty.settlementId,
+        settlementName: dynasty.settlementName,
+        claimantName: cw.claimantName
+      });
+    }
+    return "loyalist_victory";
   }
 
   /**
@@ -502,9 +795,9 @@ export class DynastySystem {
       });
     }
 
-    if (this.sim?.chronicleSystem?.addEntry) {
-      this.sim.chronicleSystem.addEntry(
-        "ROYAL_MARRIAGE",
+    if (this.sim?.chronicleSystem?.add) {
+      this.sim.chronicleSystem.add(
+        "peace",
         `💍 Royal Wedding! ${agentA.name} of ${dynA.name} wed ${agentB.name} of ${dynB.name}, sealing a solemn non-aggression alliance.`
       );
     }
@@ -525,19 +818,60 @@ export class DynastySystem {
       }
     }
 
-    // Verify living monarchs
+    // Verify living monarchs, pretenders & succession crisis escalation
     for (const dynasty of this.dynasties.values()) {
       if (dynasty.monarchId) {
         const monarch = this.sim._agentById(dynasty.monarchId);
         if (!monarch || !monarch.alive) {
-          this.handleMonarchDeath(dynasty, { id: dynasty.monarchId, name: dynasty.monarchName }, "natural causes");
+          if (dynasty.civilWar?.active) {
+            this.resolveCivilWar(dynasty, "usurpation");
+          } else {
+            this.handleMonarchDeath(dynasty, { id: dynasty.monarchId, name: dynasty.monarchName }, "natural causes");
+          }
         }
       }
 
-      // Prestige growth from longevity & settlement tier
       const settlement = settlements?.get(dynasty.settlementId);
-      if (settlement && !settlement.ruined) {
-        dynasty.prestige += 0.05;
+      if (!settlement || settlement.ruined) {
+        if (dynasty.civilWar?.active) {
+          this.resolveCivilWar(dynasty, "loyalist_victory");
+        }
+        continue;
+      }
+
+      // Prestige growth from longevity & settlement tier
+      dynasty.prestige += 0.05;
+
+      // Refresh pretender if missing or dead
+      const curPretender = dynasty.pretenderId ? this.sim._agentById(dynasty.pretenderId) : null;
+      if (!curPretender || !curPretender.alive) {
+        this.updatePretender(dynasty);
+      }
+
+      // Active civil war check: if claimant died or rebels collapsed
+      if (dynasty.civilWar?.active) {
+        const claimant = dynasty.civilWar.claimantId ? this.sim._agentById(dynasty.civilWar.claimantId) : null;
+        const rebelBand = dynasty.civilWar.rebelWarbandId ? this.sim.warfareSystem?.warbands?.get(dynasty.civilWar.rebelWarbandId) : null;
+        const loyalBand = dynasty.civilWar.loyalistWarbandId ? this.sim.warfareSystem?.warbands?.get(dynasty.civilWar.loyalistWarbandId) : null;
+
+        if (!claimant || !claimant.alive || (rebelBand && !rebelBand.active)) {
+          this.resolveCivilWar(dynasty, "loyalist_victory");
+        } else if (loyalBand && !loyalBand.active) {
+          this.resolveCivilWar(dynasty, "usurpation");
+        }
+        continue;
+      }
+
+      // Build succession crisis tension on weak legitimacy in sizable realms
+      const pop = settlement.population || settlement.agentIds?.size || 0;
+      if (dynasty.legitimacy < 45 && pop >= 10 && dynasty.pretenderId) {
+        const inc = Math.max(5, Math.round((45 - dynasty.legitimacy) * 0.55));
+        dynasty.crisisTension = Math.min(100, (dynasty.crisisTension || 0) + inc);
+        if (dynasty.crisisTension >= 100) {
+          this.sparkSuccessionCrisis(dynasty.id, "Weak Royal Legitimacy");
+        }
+      } else if (dynasty.crisisTension > 0) {
+        dynasty.crisisTension = Math.max(0, dynasty.crisisTension - 5);
       }
     }
   }
@@ -550,7 +884,11 @@ export class DynastySystem {
         k,
         {
           ...d,
-          members: Array.from(d.members || [])
+          coatOfArms: d.coatOfArms ? { ...d.coatOfArms } : null,
+          civilWar: d.civilWar ? { ...d.civilWar } : null,
+          members: Array.from(d.members || []),
+          lineage: Array.isArray(d.lineage) ? d.lineage.map(n => ({ ...n, parents: [...(n.parents || [])] })) : [],
+          marriages: Array.isArray(d.marriages) ? d.marriages.map(m => ({ ...m })) : []
         }
       ]),
       settlementDynastyMap: Array.from(this.settlementDynastyMap.entries()),
@@ -569,7 +907,11 @@ export class DynastySystem {
       for (const [k, d] of data.dynasties) {
         system.dynasties.set(k, {
           ...d,
-          members: d.members || []
+          coatOfArms: d.coatOfArms ? { ...d.coatOfArms } : null,
+          civilWar: d.civilWar ? { ...d.civilWar } : null,
+          members: d.members || [],
+          lineage: Array.isArray(d.lineage) ? d.lineage.map(n => ({ ...n, parents: [...(n.parents || [])] })) : [],
+          marriages: Array.isArray(d.marriages) ? d.marriages.map(m => ({ ...m })) : []
         });
       }
     }

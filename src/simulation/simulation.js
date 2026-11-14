@@ -3,7 +3,6 @@ import { WorldState } from "../core/worldState.js";
 import { RNG } from "../core/rng.js";
 
 import { SimulationClock } from "./clock.js";
-import { EntityStore } from "./entityStore.js";
 import { EventBus } from "../core/eventBus.js";
 import { IDGenerator } from "../core/idGen.js";
 import { Agent } from "./agent.js";
@@ -31,6 +30,7 @@ import { ChronicleSystem } from "../systems/chronicleSystem.js";
 import { CivilizationAgeSystem } from "../systems/civilizationAgeSystem.js";
 import { WeatherSystem } from "../systems/weatherSystem.js";
 import { DynastySystem } from "../systems/dynastySystem.js";
+import { NavalSystem } from "../systems/navalSystem.js";
 
 export class Simulation {
   // Deterministic RNG helper: always routes through the seeded world RNG.
@@ -117,9 +117,9 @@ export class Simulation {
     this.eventBus = new EventBus({ isolated: true });
     this.clock = new SimulationClock();
     this.world = new WorldState(width, height, seed, { skipTerrain: !!options.skipInit });
-    this.entityStore = new EntityStore();
     
     this.agents = [];
+    this.maxAgents = options.maxAgents ?? 360;
     // Perf: id -> array-slot index for this.agents (kept in sync by addAgent,
     // compactAgents and removeAgent). Backs the O(1) _agentById() lookups that
     // replace the hot-path `agents.find(a => a.id === ...)` linear scans.
@@ -145,6 +145,7 @@ export class Simulation {
     this._jobChangeCount = new Map();
     this.birthsThisSession = 0;
     this.deathsThisSession = 0;
+    this.fallenHeroes = [];
     this.mortalityStats = {
       totalDeaths: 0,
       totalAgeAtDeath: 0,
@@ -246,6 +247,7 @@ export class Simulation {
     this.civilizationAgeSystem = new CivilizationAgeSystem(this);
     this.weatherSystem = new WeatherSystem(this);
     this.dynastySystem = new DynastySystem(this);
+    this.navalSystem = new NavalSystem(this);
     
     // Session statistics
     this.birthsThisSession = 0;
@@ -296,6 +298,31 @@ export class Simulation {
         const cause = data.cause || 'natural';
         this.mortalityStats.causes[cause] = (this.mortalityStats.causes[cause] || 0) + 1;
       }
+      const fallenAgent = this._agentById(data.agentId);
+      if (fallenAgent && ((fallenAgent.kills || 0) >= 1 || fallenAgent.isMonarch || fallenAgent.legendaryWeapon)) {
+        const sName = fallenAgent.settlementId
+          ? (this.settlementSystem?.settlements?.get(fallenAgent.settlementId)?.name || 'Wilds')
+          : 'Wilds';
+        if (!this.fallenHeroes.some(h => h.id === fallenAgent.id)) {
+          this.fallenHeroes.push({
+            id: fallenAgent.id,
+            name: fallenAgent.name,
+            epithet: fallenAgent.epithet || (fallenAgent.isMonarch ? 'Sovereign' : null),
+            legendaryWeapon: fallenAgent.legendaryWeapon || null,
+            kills: fallenAgent.kills || 0,
+            battlesFought: fallenAgent.battlesFought || 0,
+            settlementName: sName,
+            isMonarch: !!fallenAgent.isMonarch,
+            age: Math.floor(fallenAgent.age || data.age || 0),
+            deathTick: this.clock?.tick ?? 0,
+            cause: data.cause || 'natural',
+            x: fallenAgent.x,
+            y: fallenAgent.y
+          });
+          this.fallenHeroes.sort((a, b) => (b.kills - a.kills) || ((b.isMonarch ? 1 : 0) - (a.isMonarch ? 1 : 0)) || (a.id - b.id));
+          if (this.fallenHeroes.length > 24) this.fallenHeroes.length = 24;
+        }
+      }
       if (this.dynastySystem) {
         this.dynastySystem.onAgentDied({ id: data.agentId, name: data.name }, data.cause || "natural");
       }
@@ -339,7 +366,7 @@ export class Simulation {
     const margin = 14;
     const centers = [];
     
-    for (let attempt = 0; attempt < 150 && centers.length < 3; attempt++) {
+    for (let attempt = 0; attempt < 250 && centers.length < 3; attempt++) {
       const cx = margin + this._rng().next() * (this.world.width - margin * 2);
       const cy = margin + this._rng().next() * (this.world.height - margin * 2);
       const tx = Math.floor(cx);
@@ -678,6 +705,7 @@ export class Simulation {
     this.updateConstruction();
     this.updateReligion();
     this.updateInfrastructure(); // NEW: Roads/bridges
+    this.updateNaval(); // Coastal docks, fishing boats, river barges, amphibious raids
 
     // Ecology: wildlife roam/breed/hunt after agents move so prey flee logic
     // sees fresh positions. (Chronicle is event-driven — no per-tick update.)
@@ -690,9 +718,6 @@ export class Simulation {
       this.world.rebuildSpatialIndex(this.agents, this.resources, this.buildings,
         this.animalSystem?.animals || []);
     }
-
-    // Process events
-    this.processEvents();
 
     if (tStart > 0) {
       const elapsed = performance.now() - tStart;
@@ -748,6 +773,12 @@ export class Simulation {
   updateInfrastructure() {
     // Update roads, irrigation, bridges
     this.infrastructureSystem.update();
+  }
+
+  updateNaval() {
+    if (this.navalSystem) {
+      this.navalSystem.update(this.clock.tick);
+    }
   }
   
   updateCombat() {
@@ -904,8 +935,10 @@ export class Simulation {
       this.settlementSystem.pruneAgents(alive);
     }
 
-    // Decay relationships over time
-    this.relationshipSystem.decayRelationships(1);
+    // Decay relationships over time (deterministic 5-tick stride for performance)
+    if (this.clock.tick % 5 === 0) {
+      this.relationshipSystem.decayRelationships(5);
+    }
   }
   
   updateSettlements() {
@@ -921,6 +954,36 @@ export class Simulation {
           if (settlement && !this.settlementSystem.getAgentHome(agent.id)) {
             // Agent claims a home near their position
             this.settlementSystem.claimHome(agent.id, agent.x, agent.y, settlement.id);
+          }
+        }
+      }
+
+      // Close large peaceful cities periodically unite into a Metropolis
+      if (this.clock.tick % 100 === 0) {
+        this.settlementSystem.mergeCloseBigCities?.(this.clock.tick);
+      }
+
+      // Prune ancient ruined buildings to keep late-game structure counts bounded
+      if (this.clock.tick % 200 === 0 && this.buildings.length > 0) {
+        const pruneIds = new Set();
+        let bw = 0;
+        for (let i = 0; i < this.buildings.length; i++) {
+          const b = this.buildings[i];
+          if (b && b.isRuined && b.ruinedAtTick != null && (this.clock.tick - b.ruinedAtTick) > 1200) {
+            pruneIds.add(b.id);
+            this.world.removeFromSpatialIndex(Math.floor(b.x), Math.floor(b.y), b);
+            this.world.entityRegistry?.delete(b.id);
+          } else {
+            this.buildings[bw++] = b;
+          }
+        }
+        if (pruneIds.size > 0) {
+          this.buildings.length = bw;
+          this._occStamp = -1;
+          for (const st of this.settlementSystem.settlements.values()) {
+            if (Array.isArray(st.buildings) && st.buildings.length > 0) {
+              st.buildings = st.buildings.filter(b => b && !pruneIds.has(b.id));
+            }
           }
         }
       }
@@ -979,10 +1042,11 @@ export class Simulation {
         // in practice (every planner/god-built structure carries its owning
         // settlement or sits outside another town's radius), and only the
         // counts feed the deterministic decisions below — never entity order.
-        let houses = 0, workshops = 0, farms = 0, temples = 0, towers = 0, pending = 0;
+        let houses = 0, workshops = 0, farms = 0, temples = 0, towers = 0, pending = 0, nonRuined = 0;
         const owned = bBySettlement.get(settlement.id);
         if (owned) {
           for (const b of owned) {
+            if (!b.isRuined) nonRuined++;
             if (!b.complete) { pending++; continue; }
             switch (b.buildingType) {
               case "house": houses++; break;
@@ -994,8 +1058,9 @@ export class Simulation {
           }
         }
         
-        // Only plan up to 2 active building projects simultaneously
-        if (pending < 2) {
+        // Only plan up to 2 active projects simultaneously, within per-city cap
+        const maxBuildings = Math.min(24, Math.max(8, Math.ceil(pop * 0.65) + 4));
+        if (pending < 2 && nonRuined < maxBuildings) {
           let neededType = null;
           if (houses < Math.max(1, Math.ceil(pop / 3))) {
             neededType = "house";
@@ -1621,8 +1686,10 @@ export class Simulation {
     // mutation path that bypasses addToSpatialIndex/removeFromSpatialIndex.
     this.world.invalidateScanCache();
 
-    // Create newborn agents
+    // Create newborn agents within world carrying-capacity cap
+    const cap = this.maxAgents ?? 360;
     for (const birth of births) {
+      if (this.agents.length >= cap) break;
       if (this.world.isWalkable(Math.floor(birth.x), Math.floor(birth.y))) {
         const baby = new Agent(birth.x, birth.y, this.idGen, 0, this.world.rng); // Newborn baby with age 0 (seeded RNG)
         baby.lifeStage = 'child';
@@ -1640,7 +1707,6 @@ export class Simulation {
         }
         this.addAgent(baby);
         this.world.addToSpatialIndex(Math.floor(birth.x), Math.floor(birth.y), baby);
-        this.birthsThisSession = (this.birthsThisSession || 0) + 1;
         this.eventBus.emit("AGENT_CREATED", { agentId: baby.id, name: baby.name, x: baby.x, y: baby.y, reason: "birth" });
         // Synchronously link parent-child relationships (replaces old setTimeout hack)
         this.relationshipSystem.initializeAgent(baby.id);
@@ -1669,7 +1735,6 @@ export class Simulation {
         if (!agent.alive) deadAgents.push(agent);
       }
       for (const dead of deadAgents) {
-        this.deathsThisSession = (this.deathsThisSession || 0) + 1;
         // Bookkeeping: drop the economy job record so agentJobs never
         // accumulates ghost rows of the dead. Without this, stale ids get
         // re-issued to newborns and inherit a stranger's profession.
@@ -1770,6 +1835,19 @@ export class Simulation {
   }
 
   maintainWorldResources() {
+    if (this.clock.tick % 300 === 0 && this.resources.length > 0) {
+      let rw = 0;
+      for (let i = 0; i < this.resources.length; i++) {
+        const r = this.resources[i];
+        if (!r.destroyed) {
+          this.resources[rw++] = r;
+        } else {
+          this.world.entityRegistry?.delete(r.id);
+        }
+      }
+      this.resources.length = rw;
+    }
+
     let foodCount = 0;
     let woodCount = 0;
     let oreCount = 0;
@@ -1866,17 +1944,28 @@ export class Simulation {
       // strong in spring/summer, poor in autumn, near-frozen in winter.
       const farmInterval = season === 'winter' ? 200 : 50;
       if (building.complete && building.buildingType === "farm" && this.clock.tick % farmInterval === 0) {
-        const fx = Math.floor(building.x + (this._rng().next() - 0.5) * 4);
-        const fy = Math.floor(building.y + (this._rng().next() - 0.5) * 4);
-        if (fx >= 2 && fx < this.world.width - 2 && fy >= 2 && fy < this.world.height - 2 && this.world.isWalkable(fx, fy)) {
-          const entities = this.world.getEntitiesAt(fx, fy);
-          const hasFood = entities.some(e => e.type === "resource" && e.resourceType === "food");
-          if (!hasFood) {
-            const amount = Math.round(30 * fertility);
-            if (amount > 0) {
-              const crop = new Resource(fx, fy, "food", amount, this.idGen);
-              this.resources.push(crop);
-              this.world.addToSpatialIndex(fx, fy, crop);
+        let nearFood = 0;
+        for (let r = 0; r < this.resources.length; r++) {
+          const res = this.resources[r];
+          if (!res.destroyed && !res.depleted && res.resourceType === "food" &&
+              Math.abs(res.x - building.x) <= 4 && Math.abs(res.y - building.y) <= 4) {
+            nearFood++;
+            if (nearFood >= 3) break;
+          }
+        }
+        if (nearFood < 3 && this.resources.length < 700) {
+          const fx = Math.floor(building.x + (this._rng().next() - 0.5) * 4);
+          const fy = Math.floor(building.y + (this._rng().next() - 0.5) * 4);
+          if (fx >= 2 && fx < this.world.width - 2 && fy >= 2 && fy < this.world.height - 2 && this.world.isWalkable(fx, fy)) {
+            const entities = this.world.getEntitiesAt(fx, fy);
+            const hasFood = entities.some(e => e.type === "resource" && e.resourceType === "food");
+            if (!hasFood) {
+              const amount = Math.round(30 * fertility);
+              if (amount > 0) {
+                const crop = new Resource(fx, fy, "food", amount, this.idGen);
+                this.resources.push(crop);
+                this.world.addToSpatialIndex(fx, fy, crop);
+              }
             }
           }
         }
@@ -1884,7 +1973,7 @@ export class Simulation {
     }
   }
 
-  removeAgent(agentId) {
+  removeAgent(agentId, cause = null) {
     // Perf: O(1) slot lookup via the id map instead of a linear findIndex scan.
     let idx = this._agentIdMap.get(agentId);
     if (idx === undefined || !this.agents[idx] || this.agents[idx].id !== agentId) {
@@ -1895,7 +1984,7 @@ export class Simulation {
     if (idx !== undefined && this.agents[idx] && this.agents[idx].id === agentId) {
       const agent = this.agents[idx];
       agent.alive = false;
-      this.deathsThisSession = (this.deathsThisSession || 0) + 1;
+      if (cause && !agent.deathCause) agent.deathCause = cause;
       this.world.removeFromSpatialIndex(Math.floor(agent.x), Math.floor(agent.y), agent);
       this.world.entityRegistry?.delete(agentId);
       this.agents.splice(idx, 1);
@@ -1914,15 +2003,11 @@ export class Simulation {
         x: agent.x, 
         y: agent.y, 
         age: Math.floor(agent.age),
-        cause: "removed"
+        cause: agent.deathCause || cause || "removed"
       });
       return true;
     }
     return false;
-  }
-
-  processEvents() {
-    // Event processing (settlement founding, etc.) would go here
   }
 
   // God powers (doc 01: god as influence, not RTS cursor)
@@ -2059,6 +2144,9 @@ export class Simulation {
       seed: this.seed ?? this.world.seed,
       scenario: this._scenario || 'warring',
       worldSeed: this.world.seed,
+      maxAgents: this.maxAgents ?? 360,
+      birthsThisSession: this.birthsThisSession || 0,
+      deathsThisSession: this.deathsThisSession || 0,
       fireActive: this._fireActive === true,
       burningTileCount: this.burningTileCount || 0,
       rngState: this.world.rng.getState(), // determinism: restore RNG stream on load
@@ -2100,6 +2188,8 @@ export class Simulation {
       civilizationAges: this.civilizationAgeSystem ? this.civilizationAgeSystem.serialize() : null,
       weather: this.weatherSystem ? this.weatherSystem.serialize() : null,
       dynasties: this.dynastySystem ? this.dynastySystem.serialize() : null,
+      naval: this.navalSystem ? this.navalSystem.serialize() : null,
+      fallenHeroes: Array.isArray(this.fallenHeroes) ? this.fallenHeroes.map(h => ({ ...h })) : [],
       mortalityStats: {
         totalDeaths: this.mortalityStats.totalDeaths,
         totalAgeAtDeath: this.mortalityStats.totalAgeAtDeath,
@@ -2128,7 +2218,9 @@ export class Simulation {
     // skipInit: constructing a full sim would run world/entity initialization,
     // consuming RNG draws and creating default entities that then get cleared —
     // both a determinism hazard and wasted work. We restore everything from data.
-    const sim = new Simulation(data.seed, 128, 128, { skipInit: true });
+    const sim = new Simulation(data.seed, 128, 128, { skipInit: true, maxAgents: data.maxAgents ?? 360 });
+    sim.birthsThisSession = data.birthsThisSession || 0;
+    sim.deathsThisSession = data.deathsThisSession || 0;
     // Step H: remember which scenario this save came from (informational;
     // all scenario state — feuds, cultures — is restored from the data).
     if (data.scenario) sim._scenario = data.scenario;
@@ -2324,6 +2416,12 @@ export class Simulation {
     }
     if (data.dynasties && sim.dynastySystem) {
       sim.dynastySystem = DynastySystem.deserialize(data.dynasties, sim);
+    }
+    if (data.naval && sim.navalSystem) {
+      sim.navalSystem = NavalSystem.deserialize(data.naval, sim);
+    }
+    if (Array.isArray(data.fallenHeroes)) {
+      sim.fallenHeroes = data.fallenHeroes.map(h => ({ ...h }));
     }
 
     if (data.mortalityStats) {

@@ -6,6 +6,17 @@ import { RNG } from "./rng.js";
 // fresh array on every miss; callers only read/iterate it).
 const EMPTY_CELL = Object.freeze([]);
 
+// Canonical strict weak ordering for spatial-index entity IDs (numbers before
+// string IDs like animal 'a21', avoiding NaN subtraction that corrupts sort order).
+function _cmpEntityId(a, b) {
+  const ia = a.id;
+  const ib = b.id;
+  if (typeof ia === 'number' && typeof ib === 'number') return ia - ib;
+  if (typeof ia === 'number') return -1;
+  if (typeof ib === 'number') return 1;
+  return ia < ib ? -1 : (ia > ib ? 1 : 0);
+}
+
 export class WorldState {
   constructor(width = 128, height = 128, seed = Date.now(), options = {}) {
     this.width = width;
@@ -225,109 +236,532 @@ export class WorldState {
   }
 
   /**
-   * Milestone 8.4: River carving algorithm - water flows from high to low
+   * Milestone 8.4 + Watershed Hydrology: Major lakes connected naturally by meandering rivers
    */
   carveRivers() {
-    // Find potential river sources (high elevation points with good moisture)
-    const sources = [];
-    const numSources = Math.floor((this.width * this.height) / 500); // ~1 river per 500 tiles
-    
-    for (let attempt = 0; attempt < numSources * 3 && sources.length < numSources; attempt++) {
-      const x = Math.floor(this.rng.next() * this.width);
-      const y = Math.floor(this.rng.next() * this.height);
-      const idx = y * this.width + x;
-      
-      // Source should be in mountains/highlands with moisture
-      if (this.elevation[idx] > 60 && this.moisture[idx] > 0.4) {
-        sources.push({x, y});
-        this.isRiverSource[idx] = 1;
+    const W = this.width;
+    const H = this.height;
+    const lakeGrid = new Uint8Array(W * H);
+
+    // 1. Carve major inland/valley lakes and record their watershed elevations
+    const majorLakes = this.carveMajorLakes(lakeGrid);
+    this.lakes = majorLakes;
+    this.riverConnections = [];
+
+    // Sort lakes from highest basin elevation to lowest so rivers drain naturally downhill
+    const sortedLakes = [...majorLakes].sort((a, b) => b.baseElev - a.baseElev);
+
+    // 2. Connect upper lakes to downstream lower lakes with natural meandering rivers
+    const hasDownstream = new Set();
+    // Track upstream ancestors per lake id so rivers never loop into an upstream feeder lake
+    const upstreamMap = new Map(sortedLakes.map(l => [l.id, new Set()]));
+    for (let i = 0; i < sortedLakes.length - 1; i++) {
+      const upper = sortedLakes[i];
+      let bestTarget = null;
+      let bestScore = Infinity;
+
+      // Prefer the nearest strictly lower lake, or nearest remaining lower-ranked lake
+      for (let j = i + 1; j < sortedLakes.length; j++) {
+        const lower = sortedLakes[j];
+        const dist = Math.hypot(lower.x - upper.x, lower.y - upper.y);
+        const dropBonus = Math.max(0, upper.baseElev - lower.baseElev) * 0.25;
+        const score = dist - dropBonus;
+        if (score < bestScore) {
+          bestScore = score;
+          bestTarget = lower;
+        }
+      }
+
+      if (bestTarget) {
+        const outlet = this.findLakeShorePoint(upper, upper.id, bestTarget.x, bestTarget.y, lakeGrid);
+        const inlet = this.findLakeShorePoint(bestTarget, bestTarget.id, upper.x, upper.y, lakeGrid);
+        const blockedLakes = upstreamMap.get(upper.id);
+        const res = this.carveRiverChannel(outlet.x, outlet.y, inlet.x, inlet.y, {
+          sourceLake: upper,
+          targetLake: bestTarget,
+          lakeGrid,
+          blockedLakeIds: blockedLakes,
+          startHalfWidth: 1.15,
+          endHalfWidth: 1.55,
+          flowStrength: 0.78,
+          meanderRatio: 0.16
+        });
+        if (res && res.connected) {
+          const actualToId = res.reachedLakeId || bestTarget.id;
+          hasDownstream.add(upper.id);
+          this.riverConnections.push({ fromLakeId: upper.id, toLakeId: actualToId });
+          // Propagate upper and all its ancestors into actualToId's upstream set
+          const targetUp = upstreamMap.get(actualToId);
+          if (targetUp) {
+            targetUp.add(upper.id);
+            if (blockedLakes) {
+              for (const ancId of blockedLakes) targetUp.add(ancId);
+            }
+          }
+        }
       }
     }
-    
-    // Carve river paths from each source to map edge or lake
+
+    // 3. Carve natural outflow river(s) from terminal lake(s) toward map edge/sea
+    const terminalLakes = sortedLakes.filter(l => !hasDownstream.has(l.id));
+    if (terminalLakes.length === 0 && sortedLakes.length > 0) {
+      terminalLakes.push(sortedLakes[sortedLakes.length - 1]);
+    }
+    for (const lake of terminalLakes.slice(0, 2)) {
+      const edgeLeft = lake.x;
+      const edgeRight = W - 1 - lake.x;
+      const edgeTop = lake.y;
+      const edgeBottom = H - 1 - lake.y;
+      const minEdge = Math.min(edgeLeft, edgeRight, edgeTop, edgeBottom);
+      let goalX = lake.x;
+      let goalY = lake.y;
+      if (minEdge === edgeLeft) goalX = 1;
+      else if (minEdge === edgeRight) goalX = W - 2;
+      else if (minEdge === edgeTop) goalY = 1;
+      else goalY = H - 2;
+
+      const outlet = this.findLakeShorePoint(lake, lake.id, goalX, goalY, lakeGrid);
+      this.carveRiverChannel(outlet.x, outlet.y, goalX, goalY, {
+        sourceLake: lake,
+        targetLake: null,
+        lakeGrid,
+        startHalfWidth: 1.25,
+        endHalfWidth: 1.85,
+        flowStrength: 0.82,
+        meanderRatio: 0.14
+      });
+    }
+
+    // 4. Carve highland feeder streams that naturally join upper lakes or rivers
+    const sources = [];
+    const numSources = Math.max(4, Math.min(7, Math.floor((W * H) / 2300)));
+    const margin = Math.max(4, Math.floor(Math.min(W, H) * 0.06));
+
+    for (let attempt = 0; attempt < numSources * 8 && sources.length < numSources; attempt++) {
+      const x = margin + Math.floor(this.rng.next() * Math.max(1, W - margin * 2));
+      const y = margin + Math.floor(this.rng.next() * Math.max(1, H - margin * 2));
+      const idx = y * W + x;
+
+      if (this.elevation[idx] > 46 && this.moisture[idx] > 0.30 && this.waterLevel[idx] < 1.0) {
+        const farEnough = sources.every(s => Math.hypot(s.x - x, s.y - y) > Math.min(W, H) * 0.16);
+        if (farEnough) {
+          sources.push({ x, y });
+          this.isRiverSource[idx] = 1;
+        }
+      }
+    }
+
+    if (sources.length < 3) {
+      for (let attempt = 0; attempt < 60 && sources.length < 3; attempt++) {
+        const x = margin + Math.floor(this.rng.next() * Math.max(1, W - margin * 2));
+        const y = margin + Math.floor(this.rng.next() * Math.max(1, H - margin * 2));
+        const idx = y * W + x;
+        if (this.elevation[idx] > 35 && this.waterLevel[idx] < 1.0) {
+          sources.push({ x, y });
+          this.isRiverSource[idx] = 1;
+        }
+      }
+    }
+
     for (const source of sources) {
-      this.carveSingleRiver(source.x, source.y);
+      let targetLake = null;
+      let goalX = source.x < W * 0.5 ? 1 : W - 2;
+      let goalY = source.y;
+      const edgeDist = Math.min(source.x, W - 1 - source.x, source.y, H - 1 - source.y);
+      if (edgeDist === source.x) { goalX = 1; goalY = source.y; }
+      else if (edgeDist === W - 1 - source.x) { goalX = W - 2; goalY = source.y; }
+      else if (edgeDist === source.y) { goalX = source.x; goalY = 1; }
+      else { goalX = source.x; goalY = H - 2; }
+
+      let bestDist = edgeDist * 1.45;
+      for (const lake of majorLakes) {
+        const d = Math.hypot(lake.x - source.x, lake.y - source.y);
+        if (d >= lake.radius + 4 && d < bestDist) {
+          bestDist = d;
+          targetLake = lake;
+        }
+      }
+      if (targetLake) {
+        const inlet = this.findLakeShorePoint(targetLake, targetLake.id, source.x, source.y, lakeGrid);
+        goalX = inlet.x;
+        goalY = inlet.y;
+      }
+
+      this.carveRiverChannel(source.x, source.y, goalX, goalY, {
+        sourceLake: null,
+        targetLake,
+        lakeGrid,
+        startHalfWidth: 0.85,
+        endHalfWidth: 1.45,
+        flowStrength: 0.68,
+        meanderRatio: 0.15,
+        isFeederStream: true
+      });
     }
   }
 
   /**
-   * Carve a single river from source to edge
+   * Carve 2-4 large organic inland lakes scaled to world dimensions.
    */
-  carveSingleRiver(startX, startY) {
+  carveMajorLakes(lakeGrid = null) {
+    const W = this.width;
+    const H = this.height;
+    const minDim = Math.min(W, H);
+    const numLakes = Math.max(2, Math.min(4, Math.floor((W * H) / 3600)));
+    const margin = Math.max(10, Math.floor(minDim * 0.14));
+    const minSpacing = minDim * 0.24;
+    const lakes = [];
+
+    for (let attempt = 0; attempt < 150 && lakes.length < numLakes; attempt++) {
+      const cx = margin + Math.floor(this.rng.next() * Math.max(1, W - margin * 2));
+      const cy = margin + Math.floor(this.rng.next() * Math.max(1, H - margin * 2));
+      const idx = cy * W + cx;
+
+      // Prefer natural lowlands / valley basins
+      if (this.elevation[idx] > 58 && attempt < 95) continue;
+      if (!lakes.every(l => Math.hypot(l.x - cx, l.y - cy) >= minSpacing)) continue;
+
+      const baseR = Math.max(6, Math.floor(minDim * 0.072));
+      const jitterR = Math.floor(this.rng.next() * Math.max(3, Math.floor(minDim * 0.036)));
+      const radius = baseR + jitterR;
+      const lakeId = lakes.length + 1;
+      const baseElev = this.elevation[idx];
+
+      this.createLake(cx, cy, radius, lakeId, lakeGrid);
+      lakes.push({ id: lakeId, x: cx, y: cy, radius, baseElev });
+    }
+
+    return lakes;
+  }
+
+  /**
+   * Locate an actual shoreline water tile on a lake facing a target point, preferring low rim terrain.
+   */
+  findLakeShorePoint(lake, lakeId, targetX, targetY, lakeGrid) {
+    const W = this.width;
+    const H = this.height;
+    const baseAngle = Math.atan2(targetY - lake.y, targetX - lake.x);
+    let bestX = Math.max(2, Math.min(W - 3, Math.round(lake.x + Math.cos(baseAngle) * lake.radius * 0.75)));
+    let bestY = Math.max(2, Math.min(H - 3, Math.round(lake.y + Math.sin(baseAngle) * lake.radius * 0.75)));
+    let bestScore = Infinity;
+
+    const maxStep = Math.ceil(lake.radius * 1.45) + 2;
+    for (let angleIdx = -3; angleIdx <= 3; angleIdx++) {
+      const angle = baseAngle + angleIdx * 0.16;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      let lastWaterX = -1;
+      let lastWaterY = -1;
+
+      for (let step = 1; step <= maxStep; step++) {
+        const px = Math.round(lake.x + cos * step);
+        const py = Math.round(lake.y + sin * step);
+        if (px < 2 || py < 2 || px >= W - 2 || py >= H - 2) break;
+        const idx = py * W + px;
+        const inLake = lakeGrid ? lakeGrid[idx] === lakeId : this.waterLevel[idx] >= 2.0;
+        if (inLake) {
+          lastWaterX = px;
+          lastWaterY = py;
+        } else if (lastWaterX >= 0) {
+          // Found shoreline boundary tile (lastWaterX, lastWaterY is water, px, py is bank)
+          const rimElev = this.elevation[idx];
+          const anglePenalty = Math.abs(angleIdx) * 4.5;
+          const score = rimElev + anglePenalty;
+          if (score < bestScore) {
+            bestScore = score;
+            bestX = lastWaterX;
+            bestY = lastWaterY;
+          }
+          break;
+        }
+      }
+    }
+
+    return { x: bestX, y: bestY };
+  }
+
+  /**
+   * Carve a continuous, organically meandering river channel with soft riparian banks
+   * and flared inlets/outlets so rivers link seamlessly with lakes and coasts.
+   */
+  carveRiverChannel(startX, startY, goalX, goalY, options = {}) {
+    const W = this.width;
+    const H = this.height;
+    const {
+      sourceLake = null,
+      targetLake = null,
+      lakeGrid = null,
+      blockedLakeIds = null,
+      startHalfWidth = 1.0,
+      endHalfWidth = 1.6,
+      flowStrength = 0.75,
+      meanderRatio = 0.15,
+      isFeederStream = false
+    } = options;
+
+    const totalDx = goalX - startX;
+    const totalDy = goalY - startY;
+    const totalDist = Math.max(1, Math.hypot(totalDx, totalDy));
+    const fwdX = totalDx / totalDist;
+    const fwdY = totalDy / totalDist;
+    const perpX = -fwdY;
+    const perpY = fwdX;
+
+    const phase = this.rng.next() * Math.PI * 2;
+    const amp = Math.min(7.5, Math.max(2.0, totalDist * meanderRatio));
+    const cycles = Math.max(1.0, totalDist / 24);
+    const maxSteps = Math.max(40, Math.floor(totalDist * 2.6) + 25);
+
     let x = startX;
     let y = startY;
-    let prevIdx = -1;
-    
-    const maxSteps = this.width * 2; // Prevent infinite loops
+    let lastDx = Math.round(fwdX);
+    let lastDy = Math.round(fwdY);
+    const visited = new Set();
     let steps = 0;
-    
+    let joinedWater = false;
+    let reachedLakeId = 0;
+
+    // Initial cove flare when exiting a source lake so the mouth opens organically
+    if (sourceLake) {
+      this._stampRiverTile(x, y, startHalfWidth + 0.45, Math.min(0.9, flowStrength + 0.06), true);
+    }
+
     while (steps < maxSteps) {
-      const idx = y * this.width + x;
-      
-      // Mark as river
-      this.riverFlow[idx] = Math.max(this.riverFlow[idx], 0.5);
-      this.waterLevel[idx] = Math.max(this.waterLevel[idx], 1.0);
-      
-      // Check if we reached the edge (ocean)
-      if (x <= 1 || x >= this.width - 2 || y <= 1 || y >= this.height - 2) {
+      const idx = y * W + x;
+      visited.add(idx);
+
+      const proj = Math.max(0, Math.min(1, ((x - startX) * fwdX + (y - startY) * fwdY) / totalDist));
+      const baseHalfWidth = startHalfWidth + (endHalfWidth - startHalfWidth) * proj;
+
+      // Check if we hit an allowed destination lake or tributary confluence
+      const hitLakeId = lakeGrid ? lakeGrid[idx] : 0;
+      const isBlockedLake = blockedLakeIds && hitLakeId > 0 && blockedLakeIds.has(hitLakeId);
+      const inOtherLake = hitLakeId > 0 && (!sourceLake || hitLakeId !== sourceLake.id) && !isBlockedLake;
+      const hitExistingRiver = isFeederStream && steps > 6 && this.riverFlow[idx] >= 0.55 && hitLakeId === 0;
+
+      // Stamp water channel and gentle sloped valley banks
+      const isMouthFlare = inOtherLake || (targetLake && Math.hypot(x - goalX, y - goalY) < 2.8);
+      this._stampRiverTile(
+        x,
+        y,
+        isMouthFlare ? baseHalfWidth + 0.45 : baseHalfWidth,
+        flowStrength,
+        true
+      );
+
+      // Stop smoothly after penetrating 2 tiles into the destination lake water (flared inlet)
+      if (inOtherLake && steps >= 3) {
+        reachedLakeId = hitLakeId;
+        const stepX = Math.max(1, Math.min(W - 2, Math.round(x + fwdX)));
+        const stepY = Math.max(1, Math.min(H - 2, Math.round(y + fwdY)));
+        this._stampRiverTile(stepX, stepY, baseHalfWidth + 0.55, flowStrength, false);
+        if (targetLake) {
+          const step2X = Math.max(1, Math.min(W - 2, Math.round(stepX + fwdX)));
+          const step2Y = Math.max(1, Math.min(H - 2, Math.round(stepY + fwdY)));
+          this._stampRiverTile(step2X, step2Y, baseHalfWidth + 0.45, flowStrength * 0.85, false);
+        }
+        joinedWater = true;
         break;
       }
-      
-      // Find lowest neighbor (water flows downhill)
-      let lowestElev = this.elevation[idx];
+
+      if (hitExistingRiver) {
+        // Tributary confluence blends into the main river
+        this._stampRiverTile(x, y, baseHalfWidth + 0.35, flowStrength, false);
+        joinedWater = true;
+        break;
+      }
+
+      // Reached target coordinates or map coastal edge
+      if (x <= 1 || x >= W - 2 || y <= 1 || y >= H - 2) {
+        joinedWater = true;
+        break;
+      }
+      if (!targetLake && Math.hypot(x - goalX, y - goalY) <= 1.5) {
+        joinedWater = true;
+        break;
+      }
+
+      // Compute smooth meandering waypoint slightly ahead along the watershed corridor
+      const lookProj = Math.min(1, proj + Math.min(0.18, 4.5 / totalDist));
+      const envelope = Math.sin(Math.PI * lookProj);
+      const wave = Math.sin(lookProj * Math.PI * 2 * cycles + phase) +
+                   0.4 * Math.sin(lookProj * Math.PI * 4 * cycles + phase * 1.6);
+      const lateralOffset = envelope * amp * wave * 0.65;
+
+      let wpX = startX + fwdX * (lookProj * totalDist) + perpX * lateralOffset;
+      let wpY = startY + fwdY * (lookProj * totalDist) + perpY * lateralOffset;
+      if (targetLake && (lookProj > 0.86 || Math.hypot(goalX - x, goalY - y) < 6)) {
+        wpX = targetLake.x;
+        wpY = targetLake.y;
+      }
+
+      let bestScore = Infinity;
       let nextX = x;
       let nextY = y;
-      
-      // Check 8 neighbors
+
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
           if (dx === 0 && dy === 0) continue;
-          
           const nx = x + dx;
           const ny = y + dy;
-          const nIdx = ny * this.width + nx;
-          
-          // Prefer flowing away from previous tile
-          if (nIdx === prevIdx) continue;
-          
-          const neighborElev = this.elevation[nIdx];
-          if (neighborElev < lowestElev) {
-            lowestElev = neighborElev;
+          if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+          const nIdx = ny * W + nx;
+          if (visited.has(nIdx)) continue;
+
+          // Never turn back into our own source lake once we've exited the shoreline rim
+          const nLakeId = lakeGrid ? lakeGrid[nIdx] : 0;
+          if (sourceLake && steps >= 2 && nLakeId === sourceLake.id) continue;
+
+          const distWp = Math.hypot(wpX - nx, wpY - ny);
+          const elev = this.elevation[nIdx];
+          const dot = dx * lastDx + dy * lastDy;
+
+          // Gently pull toward allowed target lakes or river confluences; skirt around upstream lakes
+          let waterPull = 0;
+          if (nLakeId > 0) {
+            if (blockedLakeIds && blockedLakeIds.has(nLakeId)) {
+              waterPull = 45;
+            } else if (!sourceLake || nLakeId !== sourceLake.id) {
+              waterPull = -24;
+            }
+          } else if (isFeederStream && steps > 6 && this.riverFlow[nIdx] >= 0.55) {
+            waterPull = -14;
+          }
+
+          const score = distWp * 1.15 + elev * 0.22 - dot * 0.85 + waterPull;
+          if (score < bestScore) {
+            bestScore = score;
             nextX = nx;
             nextY = ny;
           }
         }
       }
-      
-      // If no lower neighbor, river ends (forms a lake)
+
       if (nextX === x && nextY === y) {
-        // Create a small lake at this point
-        this.createLake(x, y, 3 + Math.floor(this.rng.next() * 3));
-        break;
+        // Fallback unvisited check directly toward goal so river channels never break mid-valley
+        let fallbackScore = Infinity;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+            const d = Math.hypot(goalX - nx, goalY - ny);
+            const nIdx = ny * W + nx;
+            if (!visited.has(nIdx) && d < fallbackScore) {
+              fallbackScore = d;
+              nextX = nx;
+              nextY = ny;
+            }
+          }
+        }
+        if (nextX === x && nextY === y) break;
       }
-      
-      prevIdx = idx;
+
+      lastDx = nextX - x;
+      lastDy = nextY - y;
       x = nextX;
       y = nextY;
       steps++;
     }
+
+    return { connected: joinedWater || steps > 2, reachedLakeId };
   }
 
   /**
-   * Create a lake at specified location
+   * Stamp a river tile brush with navigable water core and gently sloped riparian banks.
    */
-  createLake(centerX, centerY, radius) {
-    for (let dy = -radius; dy <= radius; dy++) {
-      for (let dx = -radius; dx <= radius; dx++) {
-        if (dx * dx + dy * dy <= radius * radius) {
-          const x = centerX + dx;
-          const y = centerY + dy;
-          
-          if (x >= 0 && x < this.width && y >= 0 && y < this.height) {
-            const idx = y * this.width + x;
-            this.waterLevel[idx] = Math.max(this.waterLevel[idx], 2.0);
-            this.riverFlow[idx] = 0.2; // Stagnant water
-            this.biome[idx] = 'water'; // Mark as lake so it renders & blocks movement
+  _stampRiverTile(cx, cy, halfWidth, flowStrength, gradeBanks = true) {
+    const W = this.width;
+    const H = this.height;
+    const bankOuter = gradeBanks ? halfWidth + 2.2 : halfWidth;
+    const rCeil = Math.ceil(bankOuter);
+    const coreSq = halfWidth * halfWidth;
+    const outerSq = bankOuter * bankOuter;
+
+    for (let dy = -rCeil; dy <= rCeil; dy++) {
+      for (let dx = -rCeil; dx <= rCeil; dx++) {
+        const dSq = dx * dx + dy * dy;
+        if (dSq > outerSq) continue;
+        const tx = cx + dx;
+        const ty = cy + dy;
+        if (tx < 0 || tx >= W || ty < 0 || ty >= H) continue;
+        const idx = ty * W + tx;
+
+        if (dSq <= coreSq) {
+          this.riverFlow[idx] = Math.max(this.riverFlow[idx], flowStrength);
+          this.waterLevel[idx] = Math.max(this.waterLevel[idx], 1.85);
+          this.elevation[idx] = Math.min(this.elevation[idx], 13.0);
+        } else if (gradeBanks && this.waterLevel[idx] < 1.4) {
+          const dist = Math.sqrt(dSq);
+          const bankT = Math.min(1, (dist - halfWidth) / 2.2);
+          const targetBankElev = 17.5 + bankT * 14.5;
+          if (this.elevation[idx] > targetBankElev) {
+            this.elevation[idx] = this.elevation[idx] * 0.35 + targetBankElev * 0.65;
+          }
+          this.moisture[idx] = Math.min(1, this.moisture[idx] + (1 - bankT) * 0.25);
+        }
+      }
+    }
+  }
+
+  /**
+   * Legacy compatibility alias for single-river callers.
+   */
+  carveSingleRiver(startX, startY, majorLakes = [], isOutflow = false) {
+    const W = this.width;
+    const H = this.height;
+    let goalX = startX < W * 0.5 ? 1 : W - 2;
+    let goalY = startY;
+    let targetLake = null;
+    if (!isOutflow && majorLakes.length > 0) {
+      let bestD = Infinity;
+      for (const l of majorLakes) {
+        const d = Math.hypot(l.x - startX, l.y - startY);
+        if (d >= 10 && d < bestD) {
+          bestD = d;
+          targetLake = l;
+          goalX = l.x;
+          goalY = l.y;
+        }
+      }
+    }
+    return this.carveRiverChannel(startX, startY, goalX, goalY, { targetLake });
+  }
+
+  /**
+   * Create an organic-shoreline lake at specified location with gently sloped banks.
+   */
+  createLake(centerX, centerY, radius, lakeId = 0, lakeGrid = null) {
+    const outer = Math.ceil(radius * 1.35) + 3;
+    for (let dy = -outer; dy <= outer; dy++) {
+      for (let dx = -outer; dx <= outer; dx++) {
+        const x = centerX + dx;
+        const y = centerY + dy;
+        if (x < 0 || x >= this.width || y < 0 || y >= this.height) continue;
+
+        const dist = Math.hypot(dx, dy);
+        // Layered organic shore variation via deterministic smoothNoise
+        const n1 = this.smoothNoise(x * 0.18, y * 0.18);
+        const n2 = this.smoothNoise(x * 0.36 + 73, y * 0.36 + 73);
+        const effRadius = radius * (0.76 + 0.32 * n1 + 0.14 * n2);
+        const idx = y * this.width + x;
+
+        if (dist <= effRadius) {
+          this.waterLevel[idx] = Math.max(this.waterLevel[idx], 2.2);
+          this.riverFlow[idx] = Math.max(this.riverFlow[idx], 0.22);
+          this.elevation[idx] = Math.min(this.elevation[idx], 12.5);
+          this.biome[idx] = 'water';
+          if (lakeGrid && lakeId > 0) lakeGrid[idx] = lakeId;
+        } else if (dist <= effRadius + 3.0) {
+          // Fertile gently sloped lakeshore rim
+          const rimT = Math.min(1, (dist - effRadius) / 3.0);
+          this.moisture[idx] = Math.min(1, this.moisture[idx] + (1 - rimT * 0.4) * 0.32);
+          if (this.waterLevel[idx] < 1.4) {
+            const targetBank = 16.5 + rimT * 15.0;
+            if (this.elevation[idx] > targetBank) {
+              this.elevation[idx] = this.elevation[idx] * 0.4 + targetBank * 0.6;
+            }
           }
         }
       }
@@ -345,11 +779,12 @@ export class WorldState {
         const moist = this.moisture[idx];
         const temp = this.temperature[idx];
         const water = this.waterLevel[idx];
-        
-        // Determine biome based on factors
-        if (water > 1.5) {
+        const flow = this.riverFlow[idx];
+
+        // Wide rivers and lakes both resolve to navigable 'water' biome
+        if (water > 1.4 || flow >= 0.45) {
           this.biome[idx] = 'water';
-        } else if (elev < 15) {
+        } else if (elev < 16) {
           this.biome[idx] = 'beach';
         } else if (elev > 80) {
           this.biome[idx] = temp < 0.3 ? 'snow' : 'mountain';
@@ -567,6 +1002,14 @@ export class WorldState {
     const w = this.width, h = this.height;
     const ft = this.fireTiles;
     const st = this.scorchedTiles;
+    const moist = this.moisture;
+    const water = this.waterLevel;
+    const roads = this.roadTiles;
+    const bridges = this.bridgeTiles;
+    const weather = this.simulation?.weatherSystem?.currentWeather || 'clear';
+    const isDrought = weather === 'drought';
+    const isWet = weather === 'rain' || weather === 'storm';
+
     let burning = 0;
     // Perf: reuse scratch buffers instead of allocating arrays/objects per tick.
     if (!this._fireScratch || this._fireScratchCap !== ft.length) {
@@ -575,10 +1018,17 @@ export class WorldState {
     }
     const cand = this._fireScratch;
     let candCount = 0;
-    const spread = (tick & 1) === 0; // spread every other tick to slow propagation
+    // Slower spread cadence (every 6 ticks normally, 4 in drought; never in rain/storm)
+    const spreadInterval = isDrought ? 4 : 6;
+    const spread = !isWet && (tick % spreadInterval) === 0;
     const weatherTick = (tick & 31) === 0;
-    // Global cap so fires creep instead of consuming the map / tanking perf.
-    const MAX_BURNING = 512;
+    // Tight global cap so wildfires remain small localized patches rather than consuming the map.
+    const MAX_BURNING = isDrought ? 36 : 20;
+    const forestThreshold = isDrought ? 56 : 30; // ~12% normal, ~22% drought
+    const grassThreshold = isDrought ? 28 : 10;  // ~4% normal, ~11% drought
+    const maxForestMoisture = isDrought ? 0.92 : 0.78;
+    const maxGrassMoisture = isDrought ? 0.65 : 0.40;
+
     for (let y = 0; y < h; y++) {
       const row = y * w;
       for (let x = 0; x < w; x++) {
@@ -595,43 +1045,68 @@ export class WorldState {
         if (st) {
           st[idx] = Math.min(255, st[idx] + 2);
         }
-        if (spread && burning < MAX_BURNING) {
-          // Inline 4-neighbor check (no array-of-pairs allocation)
+        // Only actively blazing tiles (burn >= 10) can throw sparks
+        if (spread && burn >= 10 && burning < MAX_BURNING) {
           if (x > 0) {
             const nidx = idx - 1;
-            if (ft[nidx] <= 0) {
+            if (ft[nidx] <= 0 && (!st || st[nidx] < 45) && (!water || water[nidx] <= 0) && (!roads || !roads[nidx]) && (!bridges || !bridges[nidx])) {
               const b = this.biome[nidx];
-              if (b === 'forest' || b === 'jungle' || b === 'grassland' || b === 'plains' || b === 'savanna') cand[candCount++] = nidx;
+              const m = moist ? moist[nidx] : 0.5;
+              const hash = ((nidx * 73856093) ^ (tick * 19349663)) & 255;
+              if ((b === 'forest' || b === 'jungle' || b === 'savanna') && m < maxForestMoisture && hash < forestThreshold) {
+                cand[candCount++] = nidx;
+              } else if ((b === 'grassland' || b === 'plains') && m < maxGrassMoisture && hash < grassThreshold) {
+                cand[candCount++] = nidx;
+              }
             }
           }
           if (x < w - 1) {
             const nidx = idx + 1;
-            if (ft[nidx] <= 0) {
+            if (ft[nidx] <= 0 && (!st || st[nidx] < 45) && (!water || water[nidx] <= 0) && (!roads || !roads[nidx]) && (!bridges || !bridges[nidx])) {
               const b = this.biome[nidx];
-              if (b === 'forest' || b === 'jungle' || b === 'grassland' || b === 'plains' || b === 'savanna') cand[candCount++] = nidx;
+              const m = moist ? moist[nidx] : 0.5;
+              const hash = ((nidx * 73856093) ^ (tick * 19349663)) & 255;
+              if ((b === 'forest' || b === 'jungle' || b === 'savanna') && m < maxForestMoisture && hash < forestThreshold) {
+                cand[candCount++] = nidx;
+              } else if ((b === 'grassland' || b === 'plains') && m < maxGrassMoisture && hash < grassThreshold) {
+                cand[candCount++] = nidx;
+              }
             }
           }
           if (y > 0) {
             const nidx = idx - w;
-            if (ft[nidx] <= 0) {
+            if (ft[nidx] <= 0 && (!st || st[nidx] < 45) && (!water || water[nidx] <= 0) && (!roads || !roads[nidx]) && (!bridges || !bridges[nidx])) {
               const b = this.biome[nidx];
-              if (b === 'forest' || b === 'jungle' || b === 'grassland' || b === 'plains' || b === 'savanna') cand[candCount++] = nidx;
+              const m = moist ? moist[nidx] : 0.5;
+              const hash = ((nidx * 73856093) ^ (tick * 19349663)) & 255;
+              if ((b === 'forest' || b === 'jungle' || b === 'savanna') && m < maxForestMoisture && hash < forestThreshold) {
+                cand[candCount++] = nidx;
+              } else if ((b === 'grassland' || b === 'plains') && m < maxGrassMoisture && hash < grassThreshold) {
+                cand[candCount++] = nidx;
+              }
             }
           }
           if (y < h - 1) {
             const nidx = idx + w;
-            if (ft[nidx] <= 0) {
+            if (ft[nidx] <= 0 && (!st || st[nidx] < 45) && (!water || water[nidx] <= 0) && (!roads || !roads[nidx]) && (!bridges || !bridges[nidx])) {
               const b = this.biome[nidx];
-              if (b === 'forest' || b === 'jungle' || b === 'grassland' || b === 'plains' || b === 'savanna') cand[candCount++] = nidx;
+              const m = moist ? moist[nidx] : 0.5;
+              const hash = ((nidx * 73856093) ^ (tick * 19349663)) & 255;
+              if ((b === 'forest' || b === 'jungle' || b === 'savanna') && m < maxForestMoisture && hash < forestThreshold) {
+                cand[candCount++] = nidx;
+              } else if ((b === 'grassland' || b === 'plains') && m < maxGrassMoisture && hash < grassThreshold) {
+                cand[candCount++] = nidx;
+              }
             }
           }
         }
       }
     }
+    const newBurnDuration = isDrought ? 22 : 16;
     for (let i = 0; i < candCount && burning < MAX_BURNING; i++) {
       const nidx = cand[i];
       if (ft[nidx] <= 0) {
-        ft[nidx] = 40;
+        ft[nidx] = newBurnDuration;
         if (st) st[nidx] = Math.min(255, (st[nidx] || 0) + 90);
         burning++;
       }
@@ -817,7 +1292,7 @@ export class WorldState {
     // Consumers that pick "the first match" would then diverge. Return cells
     // in canonical id order (ids are numeric — never string-compare).
     if (cell.length > 1 && !cell._sorted) {
-      cell.sort((a, b) => a.id - b.id);
+      cell.sort(_cmpEntityId);
       cell._sorted = true;
     }
     return cell;
@@ -843,7 +1318,7 @@ export class WorldState {
         const cell = grid[rowOffset + cx];
         if (cell && cell.length > 0) {
           if (cell.length > 1 && !cell._sorted) {
-            cell.sort((a, b) => a.id - b.id);
+            cell.sort(_cmpEntityId);
             cell._sorted = true;
           }
           for (let i = 0; i < cell.length; i++) entities.push(cell[i]);
@@ -877,7 +1352,7 @@ export class WorldState {
     // survivor set must not depend on iteration order. Sorting here (once
     // per tile/radius per tick, shared by every observing agent) replaces
     // the old per-agent copy+sort that dominated the tick loop.
-    pair = list.length > 1 ? list.sort((a, b) => a.id - b.id) : list; // numeric ids
+    pair = list.length > 1 ? list.sort(_cmpEntityId) : list;
     this._scanCache.set(key, pair);
     return pair;
   }

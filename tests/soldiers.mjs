@@ -16,30 +16,30 @@ const sim = new Simulation(777, 128, 128);
 for (let t = 0; t < 4000; t++) sim.tick();
 
 const soldiers = [...sim.agents].filter(a => a.alive && a.job === 'soldier');
-check('soldier profession exists and is filled', soldiers.length >= 1, `count=${soldiers.length} at t4000`);
+const standingSoldiers = soldiers.filter(a => !a.militaryDuty);
+check('soldier profession exists and is filled', soldiers.length >= 1, `count=${soldiers.length} (standing=${standingSoldiers.length}) at t4000`);
 
-// Cap check: no settlement exceeds floor(pop/8)+1 soldiers
+// Cap check: standing professional soldiers per settlement do not exceed floor(pop/8)+1
 let capOk = true, capInfo = '';
 for (const st of sim.settlementSystem.settlements.values()) {
   let n = 0;
   for (const id of st.agentIds) {
     const a = sim._agentById(id);
-    if (a && a.alive && a.job === 'soldier') n++;
+    if (a && a.alive && a.job === 'soldier' && !a.militaryDuty) n++;
   }
   const max = Math.floor(st.agentIds.size / 8) + 1;
   if (n > max) { capOk = false; capInfo = `${st.name}: ${n} > ${max}`; break; }
 }
-check('soldier count capped near pop/8 per settlement', capOk, capInfo);
+check('standing soldier count capped near pop/8 per settlement', capOk, capInfo);
 
-// Economy records agree with agent jobs (no ghost soldiers among the living)
+// Economy records agree with standing professional soldier agents
+// (conscripts retain their peacetime economy job record while militaryDuty=true).
 let recOk = true, recInfo = '';
-for (const s of soldiers) {
+for (const s of standingSoldiers) {
   const rec = sim.economySystem.getAgentJob?.(s.id);
-  // Conscripts get job='soldier' from mustering without an economy row —
-  // only veterans enlisted through assignJob carry a 'soldier' record.
   if (rec && rec.job !== 'soldier') { recOk = false; recInfo = `${s.name}: rec=${rec.job}`; break; }
 }
-check('economy job records match soldier agents', recOk, recInfo);
+check('economy job records match standing soldier agents', recOk, recInfo);
 
 // No dead-agent ghost rows in the job ledger
 let ghostOk = true, ghostCount = 0;
