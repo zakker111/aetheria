@@ -77,7 +77,10 @@ export class AnimalSystem {
       breedCooldown: 200 + Math.floor(rng.next() * 200),
       wanderTicks: 0,
       fleeingTicks: 0,
-      attackCooldown: 0
+      attackCooldown: 0,
+      migrateTargetX: null,
+      migrateTargetY: null,
+      migrateTicks: 0
     };
     this.animals.push(animal);
     if (this.sim?.world) {
@@ -210,15 +213,37 @@ export class AnimalSystem {
           ny = a.y + (rng.next() - 0.5) * a.speed * 2;
         }
       } else {
-        // Graze/wander with occasional directional persistence
+        // Herd & Migration Roaming across plains, savannas, and forest borderlands
+        if ((a.migrateTicks || 0) <= 0 || a.migrateTargetX == null || a.migrateTargetY == null) {
+          a.migrateTicks = 60 + Math.floor(rng.next() * 90);
+          const roamSpan = 26;
+          a.migrateTargetX = Math.max(4, Math.min(world.width - 4, a.x + (rng.next() - 0.5) * roamSpan * 2));
+          a.migrateTargetY = Math.max(4, Math.min(world.height - 4, a.y + (rng.next() - 0.5) * roamSpan * 2));
+        } else {
+          a.migrateTicks--;
+        }
+
+        const mdx = a.migrateTargetX - a.x;
+        const mdy = a.migrateTargetY - a.y;
+        const mDist = Math.hypot(mdx, mdy);
+        if (mDist < 2.2) {
+          a.migrateTicks = 0;
+        }
+
         a.wanderTicks--;
         if (a.wanderTicks <= 0) {
-          a.wanderTicks = 10 + Math.floor(rng.next() * 30);
-          a.dirX = (rng.next() - 0.5);
-          a.dirY = (rng.next() - 0.5);
+          a.wanderTicks = 12 + Math.floor(rng.next() * 26);
+          if (mDist > 2.5) {
+            const inv = 1 / mDist;
+            a.dirX = mdx * inv * 0.65 + (rng.next() - 0.5) * 0.45;
+            a.dirY = mdy * inv * 0.65 + (rng.next() - 0.5) * 0.45;
+          } else {
+            a.dirX = (rng.next() - 0.5);
+            a.dirY = (rng.next() - 0.5);
+          }
         }
-        nx = a.x + (a.dirX || 0) * a.speed + (rng.next() - 0.5) * 0.1;
-        ny = a.y + (a.dirY || 0) * a.speed + (rng.next() - 0.5) * 0.1;
+        nx = a.x + (a.dirX || 0) * a.speed + (rng.next() - 0.5) * 0.08;
+        ny = a.y + (a.dirY || 0) * a.speed + (rng.next() - 0.5) * 0.08;
       }
 
       // Terrain constraints: stay in habitable biomes, avoid water/fire/buildings
@@ -311,7 +336,10 @@ export class AnimalSystem {
         maxAge: a.maxAge ?? 1200,
         wanderTicks: a.wanderTicks || 0,
         fleeingTicks: a.fleeingTicks || 0,
-        attackCooldown: a.attackCooldown || 0
+        attackCooldown: a.attackCooldown || 0,
+        migrateTargetX: a.migrateTargetX ?? null,
+        migrateTargetY: a.migrateTargetY ?? null,
+        migrateTicks: a.migrateTicks || 0
       }))
     };
   }
@@ -322,9 +350,7 @@ export class AnimalSystem {
     system.nextId = data.nextId || 1;
     for (const ad of (data.animals || [])) {
       // Restore ALL timer state exactly as saved (serialize() persists
-      // maxAge/wanderTicks/fleeingTicks/attackCooldown). Re-deriving or
-      // zeroing them made the first resumed tick branch differently and
-      // desynced the RNG stream from an uninterrupted run.
+      // maxAge/wanderTicks/fleeingTicks/attackCooldown/migration state).
       const a = {
         ...ad,
         type: 'animal',
@@ -333,7 +359,10 @@ export class AnimalSystem {
         speed: SPECIES[ad.species]?.speed || 0.3,
         wanderTicks: ad.wanderTicks || 0,
         fleeingTicks: ad.fleeingTicks || 0,
-        attackCooldown: ad.attackCooldown || 0
+        attackCooldown: ad.attackCooldown || 0,
+        migrateTargetX: ad.migrateTargetX ?? null,
+        migrateTargetY: ad.migrateTargetY ?? null,
+        migrateTicks: ad.migrateTicks || 0
       };
       system.animals.push(a);
       if (sim?.world) {

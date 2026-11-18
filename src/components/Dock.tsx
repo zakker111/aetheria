@@ -118,6 +118,20 @@ export const Dock: React.FC<DockProps> = ({ currentTool, onSelectTool }) => {
         >
           🌉 Bridge
         </button>
+        <button
+          style={getToolBtnStyle('build_wall')}
+          onClick={() => onSelectTool('build_wall')}
+          title="Place fortified Wall/Gatehouse (click again to toggle Gate or repair Breach)"
+        >
+          🧱 Wall
+        </button>
+        <button
+          style={getToolBtnStyle('build_tower')}
+          onClick={() => onSelectTool('build_tower')}
+          title="Build active defensive Watchtower firing arrows/gunfire at raiders"
+        >
+          🗼 Tower
+        </button>
 
         <div style={dividerStyle} />
 
@@ -171,6 +185,13 @@ export const Dock: React.FC<DockProps> = ({ currentTool, onSelectTool }) => {
 
         <button style={getToolBtnStyle('bless')} onClick={() => onSelectTool('bless')}>
           ✨ Bless (0)
+        </button>
+        <button
+          style={getToolBtnStyle('nuke')}
+          onClick={() => onSelectTool('nuke')}
+          title="Detonate an atomic strike with crater, blast shockwave, and fallout"
+        >
+          ☢️ Nuke
         </button>
         <button style={getToolBtnStyle('smite')} onClick={() => onSelectTool('smite')}>
           💥 Smite

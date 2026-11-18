@@ -15,8 +15,20 @@ export class Building {
     // Storage capacity: settlements are limited in how much food/wood/stone/
     // ore/water they can keep — warehouses expand this (see STORAGE_CAPACITY).
     this.capacity = 0;
-    this.health = 100;
-    this.maxHealth = 100;
+    const BUILDING_HEALTH = {
+      castle: 240,
+      tower: 160,
+      barracks: 150,
+      granary: 130,
+      warehouse: 150,
+      factory: 190,
+      research_lab: 160,
+      nuclear_plant: 240,
+      missile_silo: 260,
+    };
+    const baseHp = BUILDING_HEALTH[buildingType] || 100;
+    this.health = baseHp;
+    this.maxHealth = baseHp;
     this.isRuined = false;
     this.ruinedAtTick = null;
     this.originalType = buildingType;

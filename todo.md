@@ -75,7 +75,22 @@
 - [x] **Lethal Wars & Era 5–6 Tactical Combat**: Combat regen suppression (`_lastCombatTick`), slower wounded retreats, critical/execute strikes, commander rally auras, siege storming fatalities, **Industrial & Gunpowder Era** (`musket`, `cannon` AOE), **Modern Tactical Era** (`rifle`, heavy `artillery` AOE), tactical ranged standoff/kiting, shieldbearer screening, and 2.5D weapon/explosion rendering.
 - [x] **Metropolis Tier & City Mergers**: Neighboring large peaceful towns unite into a `Metropolis` (`🌆`, `pop >= 40`), consolidating citizens, stockpiles, buildings, and territories while escalating union dynasty tension into occasional succession civil wars.
 
-## 🚧 Upcoming Pipeline Candidates
-- [ ] **Cultural Wonders & Great Monuments**: Multi-stage civilization mega-projects (Great Lighthouse, Stonehenge, Grand Citadel) yielding regional buffs.
-- [ ] **Espionage, Sabotage & Guild Factions**: Spy networks, bridge/granary sabotage, and merchant guild charters.
-- [ ] **Save Slot Export / Replay Highlights**: Downloadable JSON chronicle/world snapshots and era-by-era history timeline filters.
+## ✅ Phase 9 — Cultural Wonders, Espionage Guilds & Era Archives (COMPLETE)
+- [x] **Cultural Wonders & Great Monuments**: 3-stage civilization mega-projects (`Ancestral Cairn`, `Great Maritime Lighthouse`, `Colosseum of Champions`, `Grand Imperial Citadel`, `Grand Iron Foundry Bastion`, `Atomic Reactor Complex`) yielding real gameplay buffs across trade, morale, siege defense, armory output, and nuclear enrichment.
+- [x] **Espionage, Sabotage & Guild Factions**: Autonomous and player-directed covert operations (`sabotage_granary`, `sabotage_bridge`, `sabotage_warhead`, `steal_blueprints`, `incite_revolt`, `counter_espionage`) plus Merchant Guild, Masons & Engineers Guild, and Shadow Syndicate charters.
+- [x] **Save Slot Export / Import & Era-by-Era Replay Highlights**: Downloadable JSON world snapshots and chronicle archives, save file import, and Era 1–6 timeline filters in both World Chronicle and Chancellery Archives.
+- [x] **16 Automated Test Suites** (`tests/chaos_diplomacy_nukes_history.mjs`, `tests/wonders_espionage_archive.mjs`).
+
+## ✅ Phase 10 — City Walls, Watchtowers & Physical Siege Breaches (COMPLETE)
+- [x] **Perimeter City Walls & Gatehouses (`fortificationSystem.js`)**: 4-connected octagonal defense rings with Era-scaled tiers (`Timber Palisade`, `Stone Curtain Wall`, `Reinforced Bastion Wall`) stacked with the `Grand Imperial Citadel` Wonder (`1.35x` HP).
+- [x] **Physical Blocking & Gate Funneling**: Solid walls block traversal for all agents while gatehouses open for friendly citizens/caravans and slam shut against hostile warbands.
+- [x] **Active Defensive Watchtowers**: Corner bastions and castles actively fire era-scaled arrows, muskets, and tracers at approaching invaders with full combat FX and kill attribution.
+- [x] **Physical Siege Breaches**: Besieging warbands enter `"breaching"` state against intact perimeters, pound walls with catapults/artillery/rams until `hp === 0`, carve open scorched `"breach"` rubble gaps (`WALL_BREACHED`), and storm into the city center.
+- [x] **Divine Fortification Tools & UI**: `🧱 Wall` & `🗼 Tower` dock powers plus Settlement Fortifications inspector telemetry and `"Fortify Perimeter"` / `"Repair Breaches"` actions.
+- [x] **17 Automated Test Suites** (`tests/fortifications_siege_breach.mjs`).
+
+## ✅ Phase 11 — Modern & Nuclear Age Total Wars (COMPLETE)
+- [x] **Modern & Nuclear Dev Starter Scenario (`modern_nuclear`)**: Live app boots into fortified Era 6–7 powers with workshops, farms, granaries, barracks, bastion walls, armed nuclear warheads, and an active devastating Total War (with a header selector to switch between `☢️ Modern & Nuclear` and `⚔️ Tribal Kingdoms`).
+- [x] **Era 7 `Nuclear Age` (`☢️`)**: Automatic progression from Modern Era via resources/Atomic Reactor/warheads, expanding warhead capacity to 5, boosting enrichment, mobilizing up to 12-troop squads with dual heavy rocket artillery (`dmg 72+`, `splash 3.8`) and upgraded rifles (`dmg 52+`).
+- [x] **Devastating Total Wars & MAD Retaliation**: `totalWar` flag propagation on high-stakes & Nuclear Age wars with higher casualty tolerance (`78%` pop / `125` weariness), brutal siege bombardment/urban destruction, autonomous nuclear escalation, atomic casualty tracking in war ledgers, and automatic Mutual Assured Destruction (MAD) nuclear counter-strikes.
+- [x] **18 Automated Test Suites** (`tests/modern_nuclear_total_war.mjs`).

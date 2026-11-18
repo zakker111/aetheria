@@ -665,6 +665,7 @@ export class NavalSystem {
    */
   tryEmbarkWarband(warband, commander, destPos) {
     if (!warband || !commander || !destPos || warband.embarked) return false;
+    if (commander.combatRole === 'plane' || commander.combat?.isFlying) return false;
     const dx = destPos.x - commander.x;
     const dy = destPos.y - commander.y;
     const dist = Math.hypot(dx, dy);
@@ -719,6 +720,7 @@ export class NavalSystem {
     for (let i = 0; i < warband.soldiers.length; i++) {
       const s = this.sim._agentById(warband.soldiers[i]);
       if (!s || !s.alive) continue;
+      if (s.combatRole === 'plane' || s.combat?.isFlying) continue; // Strike aircraft fly air escort over water
       const oldTx = Math.floor(s.x), oldTy = Math.floor(s.y);
       const newTx = Math.floor(vessel.x), newTy = Math.floor(vessel.y);
       if (oldTx !== newTx || oldTy !== newTy) {

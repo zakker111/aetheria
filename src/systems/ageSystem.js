@@ -71,6 +71,10 @@ export class AgeSystem {
             const availableJobs = ['gatherer', 'farmer', 'lumberjack', 'miner', 'builder', 'craftsman'];
             this.sim.economySystem.assignJob(agent, availableJobs);
         }
+
+        if (typeof agent.addLifeEvent === 'function') {
+            agent.addLifeEvent('ADULT', 'Came of age and entered adulthood', this.sim?.clock?.tick ?? 0, '🎓', true);
+        }
         
         this.eventBus.emit('agent:adult', { 
             id: agent.id, 
@@ -87,6 +91,10 @@ export class AgeSystem {
         
         if (agent.personality && agent.personality.wisdom) {
             agent.personality.wisdom += 2;
+        }
+
+        if (typeof agent.addLifeEvent === 'function') {
+            agent.addLifeEvent('ELDER', 'Entered elderhood as a respected sage', this.sim?.clock?.tick ?? 0, '🕯️', true);
         }
         
         this.eventBus.emit('agent:elder', { 

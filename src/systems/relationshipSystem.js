@@ -174,6 +174,8 @@ export class RelationshipSystem {
   
   // Parent-child relationship
   addParentChild(parentId, childId) {
+    this.initializeAgent(parentId);
+    this.initializeAgent(childId);
     const parentFamily = this.familyTrees.get(parentId);
     const childFamily = this.familyTrees.get(childId);
     
@@ -207,6 +209,8 @@ export class RelationshipSystem {
   
   // Marriage system
   marry(agentId1, agentId2) {
+    this.initializeAgent(agentId1);
+    this.initializeAgent(agentId2);
     const coupleKey = this.getCoupleKey(agentId1, agentId2);
     
     if (this.marriages.has(coupleKey)) {
@@ -253,6 +257,22 @@ export class RelationshipSystem {
       familial: true,
       relationType: 'spouse'
     });
+
+    const tick = this.sim?.clock?.tick ?? 0;
+    const spouse1 = this.sim?._agentById?.(agentId1);
+    const spouse2 = this.sim?._agentById?.(agentId2);
+    if (spouse1) {
+      spouse1.partnerId = agentId2;
+      if (typeof spouse1.addLifeEvent === 'function') {
+        spouse1.addLifeEvent('MARRIAGE', `Wed ${spouse2?.name || 'a companion'}`, tick, '💍', true);
+      }
+    }
+    if (spouse2) {
+      spouse2.partnerId = agentId1;
+      if (typeof spouse2.addLifeEvent === 'function') {
+        spouse2.addLifeEvent('MARRIAGE', `Wed ${spouse1?.name || 'a companion'}`, tick, '💍', true);
+      }
+    }
     
     return true;
   }

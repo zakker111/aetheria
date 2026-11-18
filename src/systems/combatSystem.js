@@ -88,6 +88,11 @@ export class CombatSystem {
         entity.state = 'dead';
         entity.deathCause = 'combat';
 
+        const tick = this.worldState?.simulation?.clock?.tick ?? 0;
+        if (typeof entity.addLifeEvent === 'function') {
+            entity.addLifeEvent('DEATH', `Fell in combat against ${killer?.name || 'an enemy'}`, tick, '💀', true);
+        }
+
         // Credit killer and assign heroic slayer epithet
         if (killer && (killer.type === 'agent' || killer.role || killer.alive !== undefined)) {
             killer.kills = (killer.kills || 0) + 1;
@@ -103,13 +108,20 @@ export class CombatSystem {
                     killer.epithet = 'the Blooded';
                 }
             }
+            const hadWeapon = !!killer.legendaryWeapon;
             if (killer.kills >= 3 && !killer.legendaryWeapon) {
                 const relicNames = ['Oathkeeper', 'Dawnbreaker', 'Bloodthorn', 'Ashfang', 'Kingsbane', 'Ironcrown', 'Stormbrand', 'Grimfang'];
                 killer.legendaryWeapon = relicNames[(Number(killer.id) || 0) % relicNames.length];
             }
 
+            if (typeof killer.addLifeEvent === 'function') {
+                killer.addLifeEvent('KILL', `Slew ${entity.name || 'a foe'} in combat`, tick, '⚔️', killer.kills <= 2);
+                if (!hadWeapon && killer.legendaryWeapon) {
+                    killer.addLifeEvent('RELIC', `Forged famed weapon ${killer.legendaryWeapon}`, tick, '🗡️', true);
+                }
+            }
+
             if (typeof killer.remember === 'function') {
-                const tick = this.worldState?.simulation?.clock?.tick ?? 0;
                 killer.remember('KILLED_ENEMY', tick, {
                     victimId: entity.id,
                     victimName: entity.name || 'Enemy'

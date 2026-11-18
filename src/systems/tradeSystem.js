@@ -241,7 +241,9 @@ export class TradeSystem {
                     const trader = this.getAgent(caravan.agents[0]);
                     if (trader && trader.cargo && trader.cargo.amount > 0) {
                         const cargoResource = trader.cargo.resource;
-                        const cargoAmount = trader.cargo.amount;
+                        const guildMult = this.sim?.espionageSystem?.getTradeYieldMultiplier?.(fromSettlement.id) || 1.0;
+                        const wonderMult = this.sim?.civilizationAgeSystem?.getWonderBuffs?.(fromSettlement.id)?.tradeMultiplier || 1.0;
+                        const cargoAmount = Math.max(trader.cargo.amount, Math.round(trader.cargo.amount * Math.max(guildMult, wonderMult)));
                         toSettlement.stockpile[cargoResource] = (toSettlement.stockpile[cargoResource] || 0) + cargoAmount;
                         trader.cargo.amount = 0;
                         this.eventBus.emit('trade:completed', {

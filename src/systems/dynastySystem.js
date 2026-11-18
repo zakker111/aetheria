@@ -482,6 +482,10 @@ export class DynastySystem {
       this.updateHeir(dynasty);
       this.updatePretender(dynasty);
 
+      if (typeof successor.addLifeEvent === 'function') {
+        successor.addLifeEvent('CROWN', `Crowned ${title} of ${dynasty.name}${disputed ? ' (Disputed)' : ''}`, tick, '👑', true);
+      }
+
       if (this.sim?.eventBus) {
         this.sim.eventBus.emit("CORONATION", {
           dynastyId: dynasty.id,
@@ -676,6 +680,10 @@ export class DynastySystem {
       this.updateHeir(dynasty);
       this.updatePretender(dynasty);
 
+      if (typeof claimant.addLifeEvent === 'function') {
+        claimant.addLifeEvent('USURPATION', `Seized the crown of ${dynasty.name}`, tick, '👑', true);
+      }
+
       if (this.sim?.eventBus) {
         this.sim.eventBus.emit("CROWN_USURPED", {
           dynastyId: dynasty.id,
@@ -766,6 +774,13 @@ export class DynastySystem {
     const nodeB = dynB.lineage.find(n => n.id === agentB.id);
     if (nodeA) nodeA.spouseId = agentB.id;
     if (nodeB) nodeB.spouseId = agentA.id;
+
+    if (typeof agentA.addLifeEvent === 'function') {
+      agentA.addLifeEvent('ROYAL_MARRIAGE', `Royal marriage with ${agentB.name} (${dynB.name})`, tick, '💍', true);
+    }
+    if (typeof agentB.addLifeEvent === 'function') {
+      agentB.addLifeEvent('ROYAL_MARRIAGE', `Royal marriage with ${agentA.name} (${dynA.name})`, tick, '💍', true);
+    }
 
     // Diplomatic pact in diplomacy system
     if (this.sim?.diplomacySystem) {

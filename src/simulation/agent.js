@@ -17,6 +17,7 @@ function tickOf(simulation) {
 export class Agent {
   // Memory tuning constants (shared by remember()/chooseAction()).
   static MEMORIES_MAX = 8;               // personal salient-event window
+  static LIFE_HISTORY_MAX = 30;          // chronological biography timeline entries
   static MEMORY_RECENCY_TICKS = 400;     // ~2 sim years of "fresh" feeling
   static SPATIAL_MEMORY_MAX = 12;        // remembered resource nodes per agent
   static SOCIAL_ACTION_TYPES = new Set([
@@ -133,6 +134,7 @@ export class Agent {
     };
     
     this.memories = [];        // personal life events (bounded to MEMORIES_MAX)
+    this.lifeHistory = [];     // structured chronological biography milestones
     this.reputation = 0;         // -100..100 standing earned via remembered deeds
     // Second-hand opinions about others, spread by gossip: subjectId -> score
     // (-10..10). Kept separate from `memories` so hearsay never masquerades as
@@ -439,18 +441,61 @@ export class Agent {
     // later wide-radius query. Every consumer below re-applies its own exact
     // circle test and caps, so results match a fresh scan bit-for-bit.
     // Determinism: pure memoization — no RNG draws, same iteration order.
-    let nearby;
-    if (world && typeof world._getScan === "function") {
-      nearby = world._getScan(Math.floor(this.x), Math.floor(this.y), r);
-    } else {
-      nearby = world.getEntitiesNear(Math.floor(this.x), Math.floor(this.y), r);
+    const rSq = radius * radius;
+    const fx = Math.floor(this.x);
+    const fy = Math.floor(this.y);
+    const ax = this.x;
+    const ay = this.y;
+    const selfId = this.id;
+
+    if (world && typeof world._getScanBuckets === "function") {
+      const buckets = world._getScanBuckets(fx, fy, r);
+      const bAgents = buckets.agents;
+      const outAgents = perception.nearbyAgents;
+      for (let i = 0; i < bAgents.length && outAgents.length < MAX_NEARBY_AGENTS; i++) {
+        const entity = bAgents[i];
+        if (entity.id === selfId) continue;
+        const dx = entity.x - ax;
+        const dy = entity.y - ay;
+        if (dx * dx + dy * dy <= rSq) outAgents.push(entity);
+      }
+
+      const bRes = buckets.resources;
+      const outRes = perception.nearbyResources;
+      for (let i = 0; i < bRes.length && outRes.length < MAX_NEARBY_RESOURCES; i++) {
+        const entity = bRes[i];
+        const dx = entity.x - ax;
+        const dy = entity.y - ay;
+        if (dx * dx + dy * dy <= rSq) outRes.push(entity);
+      }
+
+      const bBld = buckets.buildings;
+      const outBld = perception.nearbyBuildings;
+      for (let i = 0; i < bBld.length && outBld.length < MAX_NEARBY_BUILDINGS; i++) {
+        const entity = bBld[i];
+        const dx = entity.x - ax;
+        const dy = entity.y - ay;
+        if (dx * dx + dy * dy <= rSq) outBld.push(entity);
+      }
+
+      const bAni = buckets.animals;
+      const outAni = perception.nearbyAnimals;
+      for (let i = 0; i < bAni.length && outAni.length < MAX_NEARBY_ANIMALS; i++) {
+        const entity = bAni[i];
+        if (entity.alive === false) continue;
+        const dx = entity.x - ax;
+        const dy = entity.y - ay;
+        if (dx * dx + dy * dy <= rSq) outAni.push(entity);
+      }
+      return perception;
     }
 
-    // Determinism: spatial-index insertion order differs between a fresh run
-    // and a save/load resume (entities are re-registered in deserialize order).
-    // When the scan is larger than the MAX_NEARBY_* caps, which entities get
-    // truncated depends on iteration order — so iterate in canonical ID order.
-    // (Sorting happens once per shared scan inside world._getScan.)
+    let nearby;
+    if (world && typeof world._getScan === "function") {
+      nearby = world._getScan(fx, fy, r);
+    } else {
+      nearby = world.getEntitiesNear(fx, fy, r);
+    }
 
     for (const entity of nearby) {
       if (
@@ -462,13 +507,13 @@ export class Agent {
         break;
       }
 
-      if (entity.id === this.id) continue;
+      if (entity.id === selfId) continue;
 
-      const dx = entity.x - this.x;
-      const dy = entity.y - this.y;
+      const dx = entity.x - ax;
+      const dy = entity.y - ay;
       const distSq = dx * dx + dy * dy;
 
-      if (distSq <= radius * radius) {
+      if (distSq <= rSq) {
         if (entity.type === "agent") {
           if (perception.nearbyAgents.length < MAX_NEARBY_AGENTS) perception.nearbyAgents.push(entity);
         } else if (entity.type === "resource") {
@@ -701,6 +746,8 @@ export class Agent {
       this.goals.push({ type: "mine_ore", priority: 75 });
     } else if (job === 'farmer') {
       this.goals.push({ type: "farm", priority: 75 });
+    } else if (job === 'hunter') {
+      this.goals.push({ type: "hunt_patrol", priority: 78 });
     } else if (job === 'gatherer') {
       this.goals.push({ type: "gather_resources", priority: 70 });
     } else if (job === 'craftsman') {
@@ -806,7 +853,7 @@ export class Agent {
         const jobName = simulation.economySystem?.getAgentJob?.(this.id)?.job;
         const isCraftsman = this.job === 'craftsman' || jobName === 'craftsman';
         if (!isCraftsman) {
-          const surplus = (this.inventory.wood_log || 0) + (this.inventory.ore_iron || 0) + (this.inventory.wheat || 0);
+          const surplus = (this.inventory.wood_log || 0) + (this.inventory.ore_iron || 0) + (this.inventory.wheat || 0) + (this.inventory.meat || 0) + (this.inventory.hide || 0);
           if (surplus >= 2) {
             // Workshop feeder route: raw gatherers (lumberjacks/miners/
             // farmers) used to dump EVERYTHING into the town stockpile, so
@@ -1464,6 +1511,41 @@ export class Agent {
           }
           break;
 
+        case "hunt_patrol": {
+          // Hunters scan nearby perception first, then track wild herds up to 34 tiles away
+          let targetPrey = null;
+          let bestDist = Infinity;
+          needScan();
+          for (const an of perception.nearbyAnimals) {
+            if (!an || an.alive === false || an.species === 'wolf') continue;
+            const d = this.distanceTo(an);
+            if (d < bestDist || (d === bestDist && targetPrey && String(an.id) < String(targetPrey.id))) {
+              bestDist = d;
+              targetPrey = an;
+            }
+          }
+          if (!targetPrey && simulation?.animalSystem?.animals) {
+            const animals = simulation.animalSystem.animals;
+            for (let i = 0; i < animals.length; i++) {
+              const an = animals[i];
+              if (!an || an.alive === false || an.species === 'wolf') continue;
+              const d = this.distanceTo(an);
+              if (d <= 34 && (d < bestDist || (d === bestDist && targetPrey && String(an.id) < String(targetPrey.id)))) {
+                bestDist = d;
+                targetPrey = an;
+              }
+            }
+          }
+          if (targetPrey) {
+            actions.push({
+              type: "hunt",
+              target: targetPrey,
+              score: goal.priority + (12 - Math.min(11, bestDist * 0.35))
+            });
+          }
+          break;
+        }
+
         case "flee":
           actions.push({
             type: "flee",
@@ -1595,6 +1677,26 @@ export class Agent {
         description: type.replace(/_/g, " ").toLowerCase(),
         impact: Math.max(-5, -(Math.abs(delta) || 1))
       });
+    }
+    return this;
+  }
+
+  // Chronological life-history biography entry. Pure data write — consumes zero
+  // RNG and never touches _feltAbout(), so simulation behavior is unaffected.
+  addLifeEvent(kind, text, tick = 0, icon = "📜", milestone = false) {
+    if (!text) return this;
+    if (!Array.isArray(this.lifeHistory)) this.lifeHistory = [];
+    const safeTick = Number.isFinite(tick) ? tick : 0;
+    const prev = this.lifeHistory[this.lifeHistory.length - 1];
+    if (prev && prev.kind === kind && prev.text === text && (safeTick - (prev.tick || 0)) < 15) {
+      return this;
+    }
+    const year = Math.floor(safeTick / 100) + 1;
+    this.lifeHistory.push({ tick: safeTick, year, kind, icon, text, milestone: Boolean(milestone) });
+    if (this.lifeHistory.length > Agent.LIFE_HISTORY_MAX) {
+      // Evict oldest non-milestone entry first so key biography anchors stay intact
+      const evictIdx = this.lifeHistory.findIndex((e, idx) => idx > 0 && !e.milestone);
+      this.lifeHistory.splice(evictIdx >= 0 ? evictIdx : 1, 1);
     }
     return this;
   }
@@ -2438,7 +2540,7 @@ export class Agent {
         if (this.distanceTo(action.target) < 1.8) {
           if (action.target.normalLabel) action.target.label = action.target.normalLabel;
           const isGemNode = action.target.resourceType === "gem";
-          const harvestUnits = isGemNode ? 2.0 : 3.5;
+          const harvestUnits = isGemNode ? 3.5 : 6.0;
           if (typeof action.target.consume === 'function') {
             action.target.consume(harvestUnits, world);
           } else {
@@ -2784,6 +2886,14 @@ export class Agent {
                 simulation.settlementSystem.depositToStockpile(sid, "food", donate);
                 this.inventory.wheat = 1;
               }
+              if (this.inventory.meat > 0) {
+                simulation.settlementSystem.depositToStockpile(sid, "food", this.inventory.meat * 6);
+                this.inventory.meat = 0;
+              }
+              if (this.inventory.hide > 0) {
+                simulation.settlementSystem.depositToStockpile(sid, "hide", this.inventory.hide);
+                this.inventory.hide = 0;
+              }
             }
           }
           this.currentAction = null;
@@ -2992,17 +3102,25 @@ export class Agent {
     const dist = Math.sqrt(dx * dx + dy * dy);
     
     if (dist > 0.1) {
+      const isFlyingUnit = Boolean(this.militaryDuty && (this.combatRole === "plane" || this.combat?.isFlying));
+      const isArmoredTank = Boolean(this.militaryDuty && (this.combatRole === "tank" || this.combat?.weaponType === "tank"));
       let effectiveSpeed = this.speed * speedBoost;
-      // Elder agents move slightly slower, urgent needs move faster
-      if (this.lifeStage === "elder") {
-        effectiveSpeed *= 0.75;
-      }
-      if (this.needs.food < 30 || this.needs.water < 30) {
-        effectiveSpeed *= 1.35;
-      }
-      // Roads: agents standing on a road tile stride 60% faster
-      if (world.isRoad && world.isRoad(Math.floor(this.x), Math.floor(this.y))) {
-        effectiveSpeed *= 1.6;
+      if (isFlyingUnit) {
+        effectiveSpeed *= (this.combat?.speedMultiplier || 2.2);
+      } else if (isArmoredTank) {
+        effectiveSpeed *= (this.combat?.speedMultiplier || 1.35);
+      } else {
+        // Elder agents move slightly slower, urgent needs move faster
+        if (this.lifeStage === "elder") {
+          effectiveSpeed *= 0.75;
+        }
+        if (this.needs.food < 30 || this.needs.water < 30) {
+          effectiveSpeed *= 1.35;
+        }
+        // Roads: ground units standing on a road tile stride 60% faster
+        if (world.isRoad && world.isRoad(Math.floor(this.x), Math.floor(this.y))) {
+          effectiveSpeed *= 1.6;
+        }
       }
       
       const step = Math.min(dist, effectiveSpeed);
@@ -3016,10 +3134,16 @@ export class Agent {
       const newTileX = Math.floor(newX);
       const newTileY = Math.floor(newY);
       
-      if (world.isWalkable(newTileX, newTileY)) {
-        // Emergent paths: repeated foot traffic tramples desire-paths into roads
-        // (deterministic — no RNG involved).
-        if (world.footTraffic) {
+      const canStep = (tx, ty) => isFlyingUnit
+        ? (tx >= 1 && ty >= 1 && tx < world.width - 1 && ty < world.height - 1)
+        : (world.isTilePassableForAgent
+          ? world.isTilePassableForAgent(tx, ty, this)
+          : world.isWalkable(tx, ty));
+
+      if (canStep(newTileX, newTileY)) {
+        // Emergent paths: repeated ground foot traffic tramples desire-paths into roads
+        // (deterministic — no RNG involved). Flying aircraft do not trample ground roads.
+        if (!isFlyingUnit && world.footTraffic) {
           const wIdx = newTileY * world.width + newTileX;
           const heat = (world.footTraffic[wIdx] || 0) + 1;
           world.footTraffic[wIdx] = heat;
@@ -3036,15 +3160,27 @@ export class Agent {
         this.y = newY;
         this.stuckTicks = 0;
       } else {
-        // Multi-directional obstacle avoidance
-        const candidates = [
+        // Multi-directional obstacle avoidance (with gate-funneling for walls)
+        const fort = world.simulation?.fortificationSystem;
+        const blockingSeg = fort?.getSegmentAt?.(newTileX, newTileY);
+        const candidates = [];
+        if (blockingSeg && blockingSeg.state !== 'breach' && blockingSeg.settlementId && !fort.isHostileAgentToSettlement(this, blockingSeg.settlementId)) {
+          const gate = fort.getNearestGateOrBreach(this.x, this.y, blockingSeg.settlementId);
+          if (gate) {
+            const gdx = (gate.x + 0.5) - this.x;
+            const gdy = (gate.y + 0.5) - this.y;
+            const gd = Math.hypot(gdx, gdy) || 1;
+            candidates.push({ x: this.x + (gdx / gd) * step, y: this.y + (gdy / gd) * step });
+          }
+        }
+        candidates.push(
           // Perpendicular clockwise
           { x: this.x + (-dy / dist) * step * 0.7, y: this.y + (dx / dist) * step * 0.7 },
           // Perpendicular counter-clockwise
           { x: this.x + (dy / dist) * step * 0.7, y: this.y + (-dx / dist) * step * 0.7 },
           // Inward toward map center
           { x: this.x + Math.sign(world.width / 2 - this.x) * step * 0.6, y: this.y + Math.sign(world.height / 2 - this.y) * step * 0.6 }
-        ];
+        );
         
         let moved = false;
         for (const cand of candidates) {
@@ -3053,7 +3189,7 @@ export class Agent {
           const tileX = Math.floor(clampedX);
           const tileY = Math.floor(clampedY);
           
-          if (world.isWalkable(tileX, tileY)) {
+          if (canStep(tileX, tileY)) {
             // Index update deferred to Simulation's batched flush (see above).
             this.x = clampedX;
             this.y = clampedY;
@@ -3154,6 +3290,9 @@ export class Agent {
       // accumulation order (float sums) and desyncing gossip determinism.
       memories: Array.isArray(this.memories)
         ? this.memories.slice(Math.max(0, this.memories.length - Agent.MEMORIES_MAX))
+        : [],
+      lifeHistory: Array.isArray(this.lifeHistory)
+        ? this.lifeHistory.slice(0, Agent.LIFE_HISTORY_MAX).map(e => ({ ...e }))
         : [],
       reputation: this.reputation || 0,
       gossipViews: this.gossipViews ? Array.from(this.gossipViews.entries()) : [],
@@ -3332,6 +3471,9 @@ export class Agent {
     // fresh run still holds, reordering _feltAbout() float accumulation.
     agent.memories = Array.isArray(data.memories)
       ? data.memories.slice(Math.max(0, data.memories.length - Agent.MEMORIES_MAX))
+      : [];
+    agent.lifeHistory = Array.isArray(data.lifeHistory)
+      ? data.lifeHistory.slice(0, Agent.LIFE_HISTORY_MAX).map(e => ({ ...e }))
       : [];
     agent.reputation = data.reputation || 0;
     agent.gossipViews = new Map(Array.isArray(data.gossipViews) ? data.gossipViews : []);

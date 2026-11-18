@@ -64,11 +64,13 @@ export class SettlementSystem {
       bannerColor: banner.color,
       bannerSymbol: banner.symbol,
       population: pop,
+      peakPopulation: pop,
       agentIds: new Set(foundingAgents.map(a => a.id)),
       foundedAt: this.sim?.clock?.tick ?? Date.now(),
       abandonedTicks: 0,
       ruined: false,
       ruinsTicks: 0,
+      collapseReason: null,
       growthTrend: 'stable',
       previousPopulation: pop,
       buildings: [],
@@ -111,6 +113,7 @@ export class SettlementSystem {
       for (const agent of foundingAgents) {
         this.agentSettlementMap.set(agent.id, id);
         agent.settlementId = id;
+        agent.pioneer = false;
       }
     }
 
@@ -219,11 +222,19 @@ export class SettlementSystem {
           }
           this.agentSettlementMap.set(a.id, matchedSettlement.id);
           a.settlementId = matchedSettlement.id;
+          a.pioneer = false;
           matchedSettlement.agentIds.add(a.id);
         }
       } else {
         // New settlement cluster found far from existing towns
-        this.foundSettlement(centerX, centerY, cluster);
+        const created = this.foundSettlement(centerX, centerY, cluster);
+        if (created && this.sim?.diplomacySystem) {
+          for (const other of this.settlements.values()) {
+            if (other.id !== created.id && !other.ruined) {
+              this.sim.diplomacySystem.initRelation(created.id, other.id);
+            }
+          }
+        }
       }
     }
     
@@ -251,6 +262,7 @@ export class SettlementSystem {
           if (dist <= 16) {
             this.agentSettlementMap.set(a.id, id);
             a.settlementId = id;
+            a.pioneer = false;
             activeIds.add(a.id);
           }
         }
@@ -268,6 +280,7 @@ export class SettlementSystem {
       }
       settlement.previousPopulation = currentPop;
       settlement.population = currentPop;
+      settlement.peakPopulation = Math.max(settlement.peakPopulation || 0, currentPop);
 
       // Update tier & title
       const tierInfo = this.getTierInfo(currentPop);
@@ -320,32 +333,120 @@ export class SettlementSystem {
       };
     }
 
-    // 3. Ruins decay gradually: buildings crumble one by one, then the
-    // settlement is forgotten entirely (removed from map + chronicle).
+    // 3. Ruins decay gradually: buildings crumble one by one, leaving craters,
+    // skull cairns, and permanent scars before the settlement collapses.
+    const tickNow = this.sim?.clock?.tick ?? 0;
     for (const [id, settlement] of Array.from(this.settlements.entries())) {
       if (!settlement.ruined) continue;
       const bs = settlement.buildings || [];
-      // Every ~25 ticks a structure collapses until none remain.
-      if (bs.length > 0 && (settlement.ruinsTicks % 25 === 0)) {
+      // Every ~20 ticks a structure collapses until none remain.
+      if (bs.length > 0 && (settlement.ruinsTicks % 20 === 0)) {
         const gone = bs.shift();
         if (gone) {
           gone.isRuined = true;
           gone.health = 0;
           if (this.sim?.world?.scorchTile) {
-            this.sim.world.scorchTile(Math.floor(gone.x), Math.floor(gone.y), 180);
+            this.sim.world.scorchTile(Math.floor(gone.x), Math.floor(gone.y), 200);
+          }
+          if (this.sim?.world?.addCrater) {
+            this.sim.world.addCrater(gone.x, gone.y, 1, 150);
           }
         }
         this.sim?.eventBus?.emit('BUILDING_COLLAPSED', {
           name: settlement.name, buildingType: gone?.type || gone?.buildingType || 'structure'
         });
       }
-      // Once fully collapsed and long abandoned, erase it from memory.
-      if (bs.length === 0 && settlement.abandonedTicks > 600) {
-        this.settlements.delete(id);
-        this.territories.delete(id);
-        this.sim?.eventBus?.emit('SETTLEMENT_FORGOTTEN', { id, name: settlement.name });
+      // Once fully collapsed, stamp ruins monument & clean up diplomacy/wars cleanly.
+      const remainingIntact = bs.filter(b => b && !b.isRuined).length;
+      if (remainingIntact === 0 && (settlement.ruinsTicks >= 45 || settlement.abandonedTicks > 240)) {
+        this.collapseSettlement(id, settlement.collapseReason || 'Abandoned & crumbled into ash', null, tickNow);
       }
     }
+  }
+
+  // Total city collapse: stamps crater + ruin monument, ends dangling diplomacy/wars, emits events.
+  collapseSettlement(settlementId, reason = 'Razed to total ruin', attackerSettlementId = null, tickOverride = null) {
+    const settlement = this.settlements.get(settlementId);
+    if (!settlement) return false;
+    const tick = tickOverride ?? (this.sim?.clock?.tick ?? 0);
+    const cx = settlement.center?.x ?? 0;
+    const cy = settlement.center?.y ?? 0;
+
+    if (this.sim?.world) {
+      this.sim.world.addCrater?.(cx, cy, 2, 200);
+      this.sim.world.addSkullMonument?.(
+        `Ruins of ${settlement.name}`,
+        cx,
+        cy,
+        Math.max(2, settlement.peakPopulation || settlement.population || 4),
+        'city_ruin',
+        tick
+      );
+    }
+
+    // Reassign any stray surviving agent references and flee as pioneers if alive
+    for (const aid of Array.from(settlement.agentIds || [])) {
+      this.agentSettlementMap.delete(aid);
+      const a = this.sim?._agentById?.(aid);
+      if (a && a.alive) {
+        a.settlementId = null;
+        a.pioneer = true;
+        a.addLifeEvent?.('EXILE', `Fled the total collapse of ${settlement.name}`, tick, '🏚️', true);
+      }
+    }
+
+    // Mark remaining structures ruined
+    if (Array.isArray(settlement.buildings)) {
+      for (const b of settlement.buildings) {
+        if (b) {
+          b.isRuined = true;
+          b.health = 0;
+          b.ruinedAtTick = b.ruinedAtTick ?? tick;
+        }
+      }
+    }
+
+    // Clean up diplomacy, wars, trade routes, and age/nuclear records
+    if (this.sim?.diplomacySystem?.cleanupSettlement) {
+      this.sim.diplomacySystem.cleanupSettlement(settlementId, reason, attackerSettlementId, tick);
+    } else if (this.sim?.diplomacySystem?.relations) {
+      for (const key of Array.from(this.sim.diplomacySystem.relations.keys())) {
+        if (String(key).split(/[_-]/).includes(String(settlementId))) {
+          this.sim.diplomacySystem.relations.delete(key);
+        }
+      }
+    }
+    if (this.sim?.tradeSystem?.tradeRoutes) {
+      this.sim.tradeSystem.tradeRoutes = this.sim.tradeSystem.tradeRoutes.filter(
+        r => r.from !== settlementId && r.to !== settlementId
+      );
+    }
+    this.sim?.civilizationAgeSystem?.settlementAges?.delete(settlementId);
+    this.sim?.civilizationAgeSystem?.nuclearPrograms?.delete(settlementId);
+    this.sim?.civilizationAgeSystem?.wonders?.delete(settlementId);
+    this.sim?.civilizationAgeSystem?.completedWonders?.delete(settlementId);
+    this.sim?.espionageSystem?.cleanupSettlement?.(settlementId);
+    this.sim?.fortificationSystem?.cleanupSettlement?.(settlementId);
+
+    this.settlements.delete(settlementId);
+    this.territories.delete(settlementId);
+
+    const attackerName = attackerSettlementId
+      ? (this.settlements.get(attackerSettlementId)?.name || 'Enemy Forces')
+      : null;
+
+    this.sim?.eventBus?.emit('SETTLEMENT_COLLAPSED', {
+      id: settlementId,
+      name: settlement.name,
+      x: cx,
+      y: cy,
+      reason,
+      attackerId: attackerSettlementId,
+      attackerName,
+      tick
+    });
+    this.sim?.eventBus?.emit('SETTLEMENT_FORGOTTEN', { id: settlementId, name: settlement.name });
+    return true;
   }
 
   // Merge neighboring large peaceful cities into a Metropolis union
@@ -483,6 +584,7 @@ export class SettlementSystem {
         a1.unlockedAt = a2.unlockedAt;
       }
       ageSys.settlementAges.delete(secondary.id);
+      ageSys.nuclearPrograms?.delete(secondary.id);
     }
 
     // Redirect naval docks/vessels, trade routes, and end dangling secondary diplomacy
@@ -512,7 +614,7 @@ export class SettlementSystem {
     }
     if (this.sim?.diplomacySystem?.relations) {
       for (const key of Array.from(this.sim.diplomacySystem.relations.keys())) {
-        if (String(key).split('-').includes(String(secondary.id))) {
+        if (String(key).split(/[_-]/).includes(String(secondary.id))) {
           this.sim.diplomacySystem.relations.delete(key);
         }
       }
@@ -528,6 +630,10 @@ export class SettlementSystem {
     primary.leadershipTitle = newPop >= 40 ? "Archon" : newPop >= 15 ? "Mayor" : "Chieftain";
     primary.recentlyMergedUntil = tick + 400;
     this.claimTerritory(primary.id, primary.center.x, primary.center.y, tierInfo.radius);
+
+    // Clean up absorbed city walls & covert espionage records before deleting settlement
+    this.sim?.espionageSystem?.cleanupSettlement?.(secondary.id);
+    this.sim?.fortificationSystem?.cleanupSettlement?.(secondary.id);
 
     // Delete absorbed settlement record
     this.settlements.delete(secondary.id);

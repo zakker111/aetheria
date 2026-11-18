@@ -6,6 +6,15 @@ interface CivilizationModalProps {
   onClose: () => void;
   simulation: any;
   onSelectAgent?: (id: number) => void;
+  onImposeSanctions?: (fromId: number, targetId: number) => void;
+  onIssueUltimatum?: (fromId: number, targetId: number, demand?: string) => void;
+  onLaunchNuke?: (attackerId: number, targetId: number) => void;
+  onLaunchSpyOp?: (fromId: number, targetId: number, opType?: string) => void;
+  onAdvanceWonder?: (settlementId: number) => void;
+  onCommissionWonder?: (settlementId: number, wonderKey: string) => void;
+  onExportWorld?: () => void;
+  onExportChronicle?: () => void;
+  onImportWorld?: (file: File) => void;
   onPanTo?: (x: number, y: number) => void;
 }
 
@@ -14,14 +23,27 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
   onClose,
   simulation,
   onSelectAgent,
+  onImposeSanctions,
+  onIssueUltimatum,
+  onLaunchNuke,
+  onLaunchSpyOp,
+  onAdvanceWonder,
+  onCommissionWonder,
+  onExportWorld,
+  onExportChronicle,
+  onImportWorld,
   onPanTo,
 }) => {
-  const [activeTab, setActiveTab] = useState<'dynasties' | 'diplomacy' | 'warroom' | 'heroes'>('dynasties');
+  const [activeTab, setActiveTab] = useState<'dynasties' | 'diplomacy' | 'warroom' | 'wonders' | 'heroes'>('dynasties');
   const [selectedDynastyId, setSelectedDynastyId] = useState<number | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
   const [selectedSettlementId, setSelectedSettlementId] = useState<number | null>(null);
   const [marriageTargetDynastyId, setMarriageTargetDynastyId] = useState<number | null>(null);
+  const [spyFromId, setSpyFromId] = useState<number | null>(null);
+  const [spyTargetId, setSpyTargetId] = useState<number | null>(null);
+  const [archiveEraFilter, setArchiveEraFilter] = useState<number | null>(null);
   const [, setUiRevision] = useState(0);
+  const archiveFileInputRef = React.useRef<HTMLInputElement | null>(null);
 
   if (!isOpen || !simulation) return null;
 
@@ -241,9 +263,32 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
           </button>
 
           <button
+            onClick={() => setActiveTab('wonders')}
+            style={{
+              padding: '8px 14px',
+              borderRadius: '8px',
+              border: 'none',
+              background: activeTab === 'wonders' ? '#10b981' : 'transparent',
+              color: activeTab === 'wonders' ? '#0f172a' : '#cbd5e1',
+              fontWeight: 600,
+              fontSize: '13px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <span>🏛️</span>
+            <span>Wonders & Guilds</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab('heroes')}
             style={{
-              padding: '8px 16px',
+              padding: '8px 14px',
               borderRadius: '8px',
               border: 'none',
               background: activeTab === 'heroes' ? '#f59e0b' : 'transparent',
@@ -255,11 +300,12 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
               alignItems: 'center',
               gap: '6px',
               whiteSpace: 'nowrap',
+              flexShrink: 0,
               transition: 'all 0.15s ease',
             }}
           >
             <span>🏆</span>
-            <span>Hall of Heroes</span>
+            <span>Hall & Archives</span>
           </button>
         </div>
 
@@ -838,10 +884,10 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
               </div>
             </div>
 
-            {/* Right Zone: Treaties & Active Ledgers */}
+            {/* Right Zone: Bilateral Controls, Treaties & Causal Diplomatic Feed */}
             <div
               style={{
-                width: '380px',
+                width: '410px',
                 padding: '20px',
                 overflowY: 'auto',
                 background: 'rgba(15, 23, 42, 0.4)',
@@ -850,48 +896,182 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
                 gap: '16px',
               }}
             >
-              <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#f8fafc' }}>
-                Active Treaties & Concordats ({treaties.length})
-              </h3>
+              {(() => {
+                const diplomaticHistory: any[] = Array.isArray(sim.diplomacySystem?.diplomaticHistory)
+                  ? sim.diplomacySystem.diplomaticHistory.slice().reverse().slice(0, 24)
+                  : [];
+                const activeSettlement = selectedSettlementId
+                  ? settlements.find((s: any) => s.id === selectedSettlementId)
+                  : settlements[0];
+                const activeNukes = activeSettlement
+                  ? (sim.civilizationAgeSystem?.getNuclearProgram?.(activeSettlement.id)?.warheads || 0)
+                  : 0;
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {treaties.length > 0 ? (
-                  treaties.map((t, idx) => {
-                    const s1 = settlements.find(s => s.id === t.settlements?.[0]);
-                    const s2 = settlements.find(s => s.id === t.settlements?.[1]);
-                    return (
+                return (
+                  <>
+                    {activeSettlement && settlements.length > 1 && (
                       <div
-                        key={t.id || idx}
                         style={{
                           padding: '12px',
                           borderRadius: '8px',
-                          background: 'rgba(30, 41, 59, 0.6)',
-                          border: '1px solid rgba(255, 255, 255, 0.08)',
+                          background: 'rgba(30, 41, 59, 0.7)',
+                          border: '1px solid rgba(56, 189, 248, 0.25)',
                         }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontWeight: 600, color: '#38bdf8', fontSize: '12px' }}>
-                            {t.type || 'Peace Treaty'}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                          <span style={{ fontSize: '12px', fontWeight: 700, color: '#38bdf8' }}>
+                            Enact Policy as {activeSettlement.name}
                           </span>
-                          <span style={{ fontSize: '10px', color: '#94a3b8' }}>
-                            {t.duration ? `${t.duration} days remaining` : 'Permanent'}
-                          </span>
+                          {activeNukes > 0 && (
+                            <span style={{ fontSize: '11px', color: '#bef264', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                              ☢️ {activeNukes} Warheads
+                            </span>
+                          )}
                         </div>
-                        <div style={{ fontSize: '13px', fontWeight: 600, color: '#f8fafc', marginTop: '4px' }}>
-                          {s1?.name || 'Realm'} & {s2?.name || 'Realm'}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {settlements.filter((other: any) => other.id !== activeSettlement.id && !other.ruined).map((other: any) => {
+                            const rel = sim.diplomacySystem?.getRelation(activeSettlement.id, other.id);
+                            return (
+                              <div
+                                key={`pol_${other.id}`}
+                                style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                  padding: '6px 8px',
+                                  borderRadius: '6px',
+                                  background: 'rgba(15, 23, 42, 0.55)',
+                                }}
+                              >
+                                <div style={{ fontSize: '11px', color: '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
+                                  <div>{other.name}</div>
+                                  <div style={{ fontSize: '10px', color: '#94a3b8' }}>
+                                    {rel?.status || 'peace'} · {Math.round(rel?.score ?? 50)}/100
+                                  </div>
+                                </div>
+                                <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                  {onImposeSanctions && rel?.status !== 'war' && (
+                                    <button
+                                      onClick={() => { onImposeSanctions(activeSettlement.id, other.id); bumpUi(); }}
+                                      style={{ padding: '3px 6px', fontSize: '10px', borderRadius: '4px', border: 'none', background: '#78350f', color: '#fde68a', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                                    >
+                                      Sanction
+                                    </button>
+                                  )}
+                                  {onIssueUltimatum && rel?.status !== 'war' && (
+                                    <button
+                                      onClick={() => { onIssueUltimatum(activeSettlement.id, other.id, activeNukes > 0 ? 'nuclear_stand_down' : 'tribute'); bumpUi(); }}
+                                      style={{ padding: '3px 6px', fontSize: '10px', borderRadius: '4px', border: 'none', background: '#334155', color: '#f8fafc', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                                    >
+                                      Ultimatum
+                                    </button>
+                                  )}
+                                  {onLaunchNuke && activeNukes > 0 && (
+                                    <button
+                                      onClick={() => { onLaunchNuke(activeSettlement.id, other.id); bumpUi(); }}
+                                      style={{ padding: '3px 6px', fontSize: '10px', borderRadius: '4px', border: '1px solid #84cc16', background: '#3f6212', color: '#ecfccb', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                                    >
+                                      ☢️ Nuke
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
-                        {t.terms && (
-                          <div style={{ fontSize: '11px', color: '#cbd5e1', marginTop: '4px' }}>
-                            {t.terms}
-                          </div>
+                      </div>
+                    )}
+
+                    <div>
+                      <h3 style={{ margin: '0 0 8px', fontSize: '14px', fontWeight: 700, color: '#f8fafc' }}>
+                        What Occurred & Why ({diplomaticHistory.length})
+                      </h3>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {diplomaticHistory.length > 0 ? (
+                          diplomaticHistory.map((ev: any) => (
+                            <div
+                              key={ev.id}
+                              style={{
+                                padding: '10px 12px',
+                                borderRadius: '8px',
+                                background: ev.type === 'nuclear_strike' || ev.type === 'nuke' || ev.type === 'proliferation'
+                                  ? 'rgba(132, 204, 22, 0.12)'
+                                  : ev.type === 'war' || ev.type === 'betrayal'
+                                    ? 'rgba(239, 68, 68, 0.1)'
+                                    : 'rgba(30, 41, 59, 0.65)',
+                                border: '1px solid rgba(255, 255, 255, 0.08)',
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ fontWeight: 700, fontSize: '12px', color: '#f8fafc' }}>{ev.title}</span>
+                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
+                                  <span style={{ fontSize: '10px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>T{ev.tick}</span>
+                                  {onPanTo && typeof ev.x === 'number' && typeof ev.y === 'number' && (
+                                    <button
+                                      onClick={() => { onPanTo(ev.x, ev.y); onClose(); }}
+                                      style={{ padding: '2px 6px', background: 'rgba(56, 189, 248, 0.15)', border: 'none', borderRadius: '4px', color: '#38bdf8', fontSize: '10px', cursor: 'pointer' }}
+                                    >
+                                      Locate
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                              <div style={{ fontSize: '11px', color: '#e2e8f0', marginTop: '3px' }}>{ev.what}</div>
+                              <div style={{ fontSize: '11px', color: '#fbbf24', marginTop: '3px' }}>Why: {ev.why}</div>
+                              {Array.isArray(ev.drivers) && ev.drivers.length > 0 && (
+                                <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '3px' }}>
+                                  {ev.drivers.join(' · ')}
+                                </div>
+                              )}
+                            </div>
+                          ))
+                        ) : (
+                          <div style={{ color: '#64748b', fontSize: '12px' }}>No diplomatic crises recorded yet.</div>
                         )}
                       </div>
-                    );
-                  })
-                ) : (
-                  <div style={{ color: '#64748b', fontSize: '12px' }}>No formal treaties currently active.</div>
-                )}
-              </div>
+                    </div>
+
+                    <h3 style={{ margin: '4px 0 0', fontSize: '14px', fontWeight: 700, color: '#f8fafc' }}>
+                      Active Treaties & Concordats ({treaties.length})
+                    </h3>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {treaties.length > 0 ? (
+                        treaties.map((t, idx) => {
+                          const s1 = settlements.find(s => s.id === t.settlements?.[0]);
+                          const s2 = settlements.find(s => s.id === t.settlements?.[1]);
+                          return (
+                            <div
+                              key={t.id || idx}
+                              style={{
+                                padding: '10px 12px',
+                                borderRadius: '8px',
+                                background: 'rgba(30, 41, 59, 0.6)',
+                                border: '1px solid rgba(255, 255, 255, 0.08)',
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ fontWeight: 600, color: '#38bdf8', fontSize: '12px' }}>
+                                  {t.type || 'Peace Treaty'}
+                                </span>
+                                <span style={{ fontSize: '10px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+                                  {t.duration ? `${t.duration} ticks` : 'Permanent'}
+                                </span>
+                              </div>
+                              <div style={{ fontSize: '12px', fontWeight: 600, color: '#f8fafc', marginTop: '4px' }}>
+                                {s1?.name || 'Realm'} & {s2?.name || 'Realm'}
+                              </div>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div style={{ color: '#64748b', fontSize: '12px' }}>No formal treaties currently active.</div>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           </div>
         )}
@@ -1010,7 +1190,9 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
                           </div>
                         </div>
 
-                        <span style={{ fontWeight: 800, color: '#ef4444', fontSize: '14px' }}>VS</span>
+                        <span style={{ fontWeight: 800, color: w.totalWar ? '#f97316' : '#ef4444', fontSize: '14px' }}>
+                          {w.totalWar ? '🔥 TOTAL WAR' : 'VS'}
+                        </span>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                           <div style={{ textAlign: 'right' }}>
@@ -1021,10 +1203,23 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
                         </div>
                       </div>
 
-                      {/* Casus Belli */}
-                      <div style={{ fontSize: '12px', color: '#cbd5e1', background: 'rgba(15, 23, 42, 0.5)', padding: '6px 10px', borderRadius: '6px' }}>
-                        <span style={{ color: '#94a3b8' }}>Casus Belli: </span>
-                        <span style={{ fontWeight: 600 }}>{w.casusBelli}</span>
+                      {/* Casus Belli & Causal Drivers */}
+                      <div style={{ fontSize: '12px', color: '#cbd5e1', background: 'rgba(15, 23, 42, 0.5)', padding: '8px 10px', borderRadius: '6px' }}>
+                        <div>
+                          <span style={{ color: '#94a3b8' }}>Casus Belli: </span>
+                          <span style={{ fontWeight: 600 }}>{w.casusBelli}</span>
+                        </div>
+                        {w.whySummary && (
+                          <div style={{ fontSize: '11px', color: '#fbbf24', marginTop: '3px' }}>
+                            Why: {w.whySummary}
+                          </div>
+                        )}
+                        <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '3px', fontVariantNumeric: 'tabular-nums' }}>
+                          War Weariness: {w.attackerName} {Math.round(w.weariness?.[w.attackerId] || 0)}% · {w.defenderName} {Math.round(w.weariness?.[w.defenderId] || 0)}%
+                          {((sim.civilizationAgeSystem?.getNuclearProgram?.(w.attackerId)?.warheads || 0) > 0 ||
+                            (sim.civilizationAgeSystem?.getNuclearProgram?.(w.defenderId)?.warheads || 0) > 0) &&
+                            ` · ☢️ Warheads: ${sim.civilizationAgeSystem?.getNuclearProgram?.(w.attackerId)?.warheads || 0} vs ${sim.civilizationAgeSystem?.getNuclearProgram?.(w.defenderId)?.warheads || 0}`}
+                        </div>
                       </div>
 
                       {/* Dynamic War Score Bar */}
@@ -1225,18 +1420,390 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
         )}
 
         {/* ========================================================== */}
-        {/* TAB 4: HALL OF HEROES, RELICS & HISTORIC BATTLEFIELDS */}
+        {/* TAB 4: CULTURAL WONDERS, GUILDS & COVERT ESPIONAGE */}
+        {/* ========================================================== */}
+        {activeTab === 'wonders' && (
+          <div style={{ display: 'flex', width: '100%', height: '100%' }}>
+            {/* Left: Multi-Stage Cultural Wonders & Civic Guilds */}
+            <div style={{ flex: 1, padding: '24px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#f8fafc' }}>
+                  Cultural Wonders & Civic Guilds ({settlements.length} Realms)
+                </h2>
+                <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+                  Settlements raise three-stage monuments granting permanent economic, martial, and scientific mastery alongside Merchant, Masons, and Shadow guilds.
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '12px' }}>
+                {settlements.map((s: any) => {
+                  const ageSum = sim.civilizationAgeSystem?.getSettlementAgeSummary?.(s.id);
+                  const wonder = ageSum?.wonder;
+                  const guilds = sim.espionageSystem?.getSettlementGuilds?.(s.id);
+                  return (
+                    <div
+                      key={`wonder_${s.id}`}
+                      style={{
+                        padding: '14px',
+                        borderRadius: '10px',
+                        background: 'rgba(30, 41, 59, 0.65)',
+                        border: '1px solid rgba(255, 255, 255, 0.08)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '8px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontWeight: 700, fontSize: '14px', color: '#f8fafc' }}>
+                          {s.tierIcon || '🏡'} {s.name}
+                        </span>
+                        <span style={{ fontSize: '11px', color: ageSum?.color || '#38bdf8', fontVariantNumeric: 'tabular-nums' }}>
+                          {ageSum?.icon || ''} Era {ageSum?.id || 1}
+                        </span>
+                      </div>
+
+                      {wonder ? (
+                        <div style={{ fontSize: '12px', color: '#cbd5e1', fontVariantNumeric: 'tabular-nums' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, color: '#86efac' }}>
+                            <span>{wonder.icon} {wonder.name}</span>
+                            <span>{wonder.complete ? 'Completed' : `Stage ${wonder.stage}/${wonder.maxStage} · ${Math.round(wonder.progress || 0)}%`}</span>
+                          </div>
+                          <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>
+                            Regional Buff: {wonder.buffLabel}
+                          </div>
+                          {!wonder.complete && (
+                            <button
+                              onClick={() => {
+                                if (onAdvanceWonder) onAdvanceWonder(s.id);
+                                else sim.civilizationAgeSystem?.advanceWonderProgress?.(s.id, 50, sim.clock?.tick || 0);
+                                bumpUi();
+                              }}
+                              style={{
+                                marginTop: '6px',
+                                padding: '4px 10px',
+                                background: 'rgba(16, 185, 129, 0.16)',
+                                border: '1px solid rgba(16, 185, 129, 0.4)',
+                                borderRadius: '6px',
+                                color: '#6ee7b7',
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Accelerate Construction
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+                          No Great Wonder commissioned yet.{' '}
+                          <button
+                            onClick={() => {
+                              if (onCommissionWonder) onCommissionWonder(s.id, 'great_lighthouse');
+                              else sim.civilizationAgeSystem?.commissionWonder?.(s.id, null, sim.clock?.tick || 0);
+                              bumpUi();
+                            }}
+                            style={{
+                              padding: '3px 8px',
+                              background: 'rgba(56, 189, 248, 0.14)',
+                              border: '1px solid rgba(56, 189, 248, 0.35)',
+                              borderRadius: '5px',
+                              color: '#38bdf8',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Commission Wonder
+                          </button>
+                        </div>
+                      )}
+
+                      {guilds && (
+                        <div style={{ fontSize: '11px', color: '#cbd5e1', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '6px', fontVariantNumeric: 'tabular-nums' }}>
+                          <div>⚖️ Merchant Guild: {guilds.unlocked?.merchant ? 'Active (+25% Trade)' : 'Unformed'}</div>
+                          <div>📐 Masons Guild: {guilds.unlocked?.masons ? 'Active (+25% Wonders)' : 'Unformed'}</div>
+                          <div>🗡️ Shadow Syndicate: {guilds.unlocked?.shadows ? `Active · ${guilds.opsSuccess || 0} Ops` : 'Unformed'}</div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Right: Covert Espionage & Sabotage Command */}
+            <div
+              style={{
+                width: '430px',
+                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+                background: 'rgba(15, 23, 42, 0.45)',
+                padding: '20px',
+                overflowY: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '12px',
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#f8fafc' }}>
+                Espionage & Sabotage Operations
+              </h3>
+
+              {settlements.length >= 2 && (() => {
+                const origin = settlements.find((s: any) => s.id === spyFromId) || settlements[0];
+                const targets = settlements.filter((s: any) => s.id !== origin.id);
+                const target = targets.find((s: any) => s.id === spyTargetId) || targets[0];
+                const runOp = (opType: string) => {
+                  if (!origin || !target) return;
+                  if (onLaunchSpyOp) onLaunchSpyOp(origin.id, opType === 'counter_espionage' ? origin.id : target.id, opType);
+                  else sim.espionageSystem?.launchOperation?.(origin.id, opType === 'counter_espionage' ? origin.id : target.id, opType, sim.clock?.tick || 0);
+                  bumpUi();
+                };
+                return (
+                  <div style={{ padding: '12px', borderRadius: '8px', background: 'rgba(30, 41, 59, 0.7)', border: '1px solid rgba(255, 255, 255, 0.08)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <label style={{ flex: 1, fontSize: '11px', color: '#94a3b8' }}>
+                        Handler Realm
+                        <select
+                          value={origin.id}
+                          onChange={(e) => setSpyFromId(Number(e.target.value))}
+                          style={{ width: '100%', marginTop: '3px', background: '#0f172a', color: '#f8fafc', border: '1px solid #334155', borderRadius: '5px', padding: '5px', fontSize: '12px' }}
+                        >
+                          {settlements.map((s: any) => (
+                            <option key={s.id} value={s.id}>{s.name}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label style={{ flex: 1, fontSize: '11px', color: '#94a3b8' }}>
+                        Target Rival
+                        <select
+                          value={target?.id ?? ''}
+                          onChange={(e) => setSpyTargetId(Number(e.target.value))}
+                          style={{ width: '100%', marginTop: '3px', background: '#0f172a', color: '#f8fafc', border: '1px solid #334155', borderRadius: '5px', padding: '5px', fontSize: '12px' }}
+                        >
+                          {targets.map((s: any) => (
+                            <option key={s.id} value={s.id}>{s.name}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      <button onClick={() => runOp('sabotage_granary')} style={{ padding: '5px 8px', background: '#7c2d12', border: 'none', borderRadius: '5px', color: '#fed7aa', fontSize: '11px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        Burn Granary
+                      </button>
+                      <button onClick={() => runOp('sabotage_bridge')} style={{ padding: '5px 8px', background: '#7f1d1d', border: 'none', borderRadius: '5px', color: '#fecaca', fontSize: '11px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        Blow Bridge
+                      </button>
+                      <button onClick={() => runOp('sabotage_warhead')} style={{ padding: '5px 8px', background: '#3f6212', border: 'none', borderRadius: '5px', color: '#ecfccb', fontSize: '11px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        Disarm Warhead
+                      </button>
+                      <button onClick={() => runOp('steal_blueprints')} style={{ padding: '5px 8px', background: '#1e3a8a', border: 'none', borderRadius: '5px', color: '#bfdbfe', fontSize: '11px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        Steal Blueprints
+                      </button>
+                      <button onClick={() => runOp('incite_revolt')} style={{ padding: '5px 8px', background: '#701a75', border: 'none', borderRadius: '5px', color: '#f5d0fe', fontSize: '11px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        Incite Revolt
+                      </button>
+                      <button onClick={() => runOp('counter_espionage')} style={{ padding: '5px 8px', background: '#0f766e', border: 'none', borderRadius: '5px', color: '#ccfbf1', fontSize: '11px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        Counter-Intel Sweep
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {((sim.espionageSystem?.operationsLog || []).slice().reverse().slice(0, 18)).map((op: any) => (
+                  <div
+                    key={op.id}
+                    style={{
+                      padding: '10px',
+                      borderRadius: '8px',
+                      background: op.success ? 'rgba(30, 41, 59, 0.7)' : 'rgba(127, 29, 29, 0.25)',
+                      border: '1px solid rgba(255, 255, 255, 0.08)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontWeight: 700, fontSize: '12px', color: '#f8fafc' }}>{op.title}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                        <span style={{ fontSize: '10px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>T{op.tick}</span>
+                        {onPanTo && typeof op.x === 'number' && typeof op.y === 'number' && (
+                          <button
+                            onClick={() => {
+                              onPanTo(op.x, op.y);
+                              onClose();
+                            }}
+                            style={{ background: 'rgba(56, 189, 248, 0.15)', border: 'none', color: '#38bdf8', borderRadius: '4px', fontSize: '10px', padding: '2px 6px', cursor: 'pointer' }}
+                          >
+                            Locate
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#cbd5e1', marginTop: '3px' }}>{op.what}</div>
+                    <div style={{ fontSize: '10px', color: '#fbbf24', marginTop: '2px' }}>Why: {op.why}</div>
+                  </div>
+                ))}
+                {(!sim.espionageSystem?.operationsLog || sim.espionageSystem.operationsLog.length === 0) && (
+                  <div style={{ color: '#64748b', fontSize: '12px' }}>No covert spy operations conducted yet.</div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================== */}
+        {/* TAB 5: HALL OF HEROES, ERA REPLAY HIGHLIGHTS & SNAPSHOT ARCHIVES */}
         {/* ========================================================== */}
         {activeTab === 'heroes' && (
           <div style={{ display: 'flex', width: '100%', height: '100%' }}>
             {/* Living Champions & Fallen Legends */}
             <div style={{ flex: 1, padding: '24px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <div>
-                <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#f8fafc' }}>
-                  Living Champions & Relic Bearers ({livingHeroes.length})
-                </h2>
-                <div style={{ fontSize: '12px', color: '#94a3b8' }}>
-                  Warriors earn epithets on the field and forge named blades at three or more victories.
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#f8fafc' }}>
+                    Living Champions & Relic Bearers ({livingHeroes.length})
+                  </h2>
+                  <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+                    Warriors earn epithets on the field and forge named blades at three or more victories.
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  {onExportChronicle && (
+                    <button
+                      onClick={onExportChronicle}
+                      style={{
+                        padding: '6px 12px',
+                        background: 'rgba(56, 189, 248, 0.15)',
+                        border: '1px solid rgba(56, 189, 248, 0.35)',
+                        borderRadius: '6px',
+                        color: '#38bdf8',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      Download Chronicle JSON
+                    </button>
+                  )}
+                  {onExportWorld && (
+                    <button
+                      onClick={onExportWorld}
+                      style={{
+                        padding: '6px 12px',
+                        background: 'rgba(245, 158, 11, 0.16)',
+                        border: '1px solid rgba(245, 158, 11, 0.4)',
+                        borderRadius: '6px',
+                        color: '#fbbf24',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      Export World Snapshot
+                    </button>
+                  )}
+                  {onImportWorld && (
+                    <>
+                      <input
+                        ref={archiveFileInputRef}
+                        type="file"
+                        accept=".json,application/json"
+                        style={{ display: 'none' }}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            onImportWorld(file);
+                            onClose();
+                          }
+                          e.target.value = '';
+                        }}
+                      />
+                      <button
+                        onClick={() => archiveFileInputRef.current?.click()}
+                        style={{
+                          padding: '6px 12px',
+                          background: 'rgba(16, 185, 129, 0.16)',
+                          border: '1px solid rgba(16, 185, 129, 0.4)',
+                          borderRadius: '6px',
+                          color: '#6ee7b7',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        Import Save File
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Era-by-Era World History Timeline Filter */}
+              <div style={{ padding: '14px', borderRadius: '10px', background: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
+                  <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#f8fafc' }}>
+                    Era-by-Era Replay Highlights
+                  </h3>
+                  <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                    {[
+                      { id: null, label: 'All Eras' },
+                      { id: 1, label: 'Era 1 Tribal' },
+                      { id: 2, label: 'Era 2 Bronze' },
+                      { id: 3, label: 'Era 3 Classical' },
+                      { id: 4, label: 'Era 4 Imperial' },
+                      { id: 5, label: 'Era 5 Industrial' },
+                      { id: 6, label: 'Era 6 Modern' },
+                      { id: 7, label: 'Era 7 Nuclear' },
+                    ].map((ef) => (
+                      <button
+                        key={String(ef.id ?? 'all')}
+                        onClick={() => setArchiveEraFilter(ef.id)}
+                        style={{
+                          padding: '4px 8px',
+                          borderRadius: '5px',
+                          border: 'none',
+                          background: archiveEraFilter === ef.id ? '#38bdf8' : 'rgba(30, 41, 59, 0.8)',
+                          color: archiveEraFilter === ef.id ? '#0f172a' : '#cbd5e1',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {ef.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ maxHeight: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {(() => {
+                    const items = sim.chronicleSystem?.getHighlights?.(40, archiveEraFilter) || [];
+                    if (items.length === 0) {
+                      return <div style={{ fontSize: '12px', color: '#64748b' }}>No highlights recorded for this era yet.</div>;
+                    }
+                    return items.map((ev: any) => (
+                      <div key={ev.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', fontSize: '12px', padding: '4px 6px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                        <span style={{ color: '#e2e8f0' }}>
+                          <span style={{ color: '#94a3b8', fontSize: '10px', marginRight: '6px', fontVariantNumeric: 'tabular-nums' }}>{ev.date}</span>
+                          {ev.text}
+                        </span>
+                        {onPanTo && typeof ev.x === 'number' && typeof ev.y === 'number' && (
+                          <button
+                            onClick={() => {
+                              onPanTo(ev.x, ev.y);
+                              onClose();
+                            }}
+                            style={{ background: 'transparent', border: 'none', color: '#38bdf8', fontSize: '11px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                          >
+                            Locate
+                          </button>
+                        )}
+                      </div>
+                    ));
+                  })()}
                 </div>
               </div>
 

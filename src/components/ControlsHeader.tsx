@@ -10,11 +10,14 @@ interface ControlsHeaderProps {
   onTogglePause: () => void;
   onCycleSpeed: () => void;
   onCenterCamera: () => void;
+  onNextBattle?: () => void;
   onSpawnResources: () => void;
   onToggleSocieties: () => void;
   onToggleDiplomacy: () => void;
   onSave: () => void;
   onLoad: () => void;
+  onExportWorld?: () => void;
+  onImportWorld?: (file: File) => void;
   onToggleHelp: () => void;
   societiesOpen: boolean;
   diplomacyOpen: boolean;
@@ -22,6 +25,10 @@ interface ControlsHeaderProps {
   onToggleCivilization?: () => void;
   isMuted?: boolean;
   onToggleMute?: () => void;
+  warsCount?: number;
+  treatiesCount?: number;
+  scenario?: 'modern_nuclear' | 'warring';
+  onChangeScenario?: (next: 'modern_nuclear' | 'warring') => void;
 }
 
 export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
@@ -34,11 +41,14 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
   onTogglePause,
   onCycleSpeed,
   onCenterCamera,
+  onNextBattle,
   onSpawnResources,
   onToggleSocieties,
   onToggleDiplomacy,
   onSave,
   onLoad,
+  onExportWorld,
+  onImportWorld,
   onToggleHelp,
   societiesOpen,
   diplomacyOpen,
@@ -46,7 +56,12 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
   onToggleCivilization,
   isMuted = false,
   onToggleMute,
+  warsCount = 0,
+  treatiesCount = 0,
+  scenario = 'warring',
+  onChangeScenario,
 }) => {
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const buttonStyle: React.CSSProperties = {
     padding: '6px 12px',
     background: '#1e293b',
@@ -60,6 +75,8 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
     display: 'inline-flex',
     alignItems: 'center',
     gap: '4px',
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
   };
 
   return (
@@ -107,6 +124,21 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
         🎯 Center
       </button>
 
+      {onNextBattle && (
+        <button
+          style={{
+            ...buttonStyle,
+            background: 'rgba(239, 68, 68, 0.22)',
+            borderColor: 'rgba(239, 68, 68, 0.45)',
+            color: '#fecaca',
+          }}
+          onClick={onNextBattle}
+          title="Jump camera to next active battle, siege, or blast site"
+        >
+          ⚔️ Next Battle
+        </button>
+      )}
+
       <button
         style={{
           ...buttonStyle,
@@ -135,13 +167,19 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
       <button
         style={{
           ...buttonStyle,
-          background: diplomacyOpen ? '#334155' : '#1e293b',
-          borderColor: diplomacyOpen ? '#ef4444' : '#334155',
+          background: diplomacyOpen ? '#334155' : (warsCount > 0 ? 'rgba(239, 68, 68, 0.16)' : '#1e293b'),
+          borderColor: diplomacyOpen ? '#ef4444' : (warsCount > 0 ? 'rgba(239, 68, 68, 0.5)' : '#334155'),
+          fontVariantNumeric: 'tabular-nums',
         }}
         onClick={onToggleDiplomacy}
-        title="Toggle Diplomacy & Treaties"
+        title="Toggle Diplomacy, Wars, Alliances & Treaties (W)"
       >
         ⚔️ Diplomacy
+        {(warsCount > 0 || treatiesCount > 0) && (
+          <span style={{ fontSize: '10px', color: warsCount > 0 ? '#fca5a5' : '#86efac', fontWeight: 700 }}>
+            ({warsCount > 0 ? `${warsCount}⚔️` : ''}{warsCount > 0 && treatiesCount > 0 ? ' ' : ''}{treatiesCount > 0 ? `${treatiesCount}🤝` : ''})
+          </span>
+        )}
       </button>
 
       {onToggleCivilization && (
@@ -153,9 +191,9 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
             color: '#fbbf24',
           }}
           onClick={onToggleCivilization}
-          title="Open Full-Screen Civilization, Dynasties & War Room (C)"
+          title="Open Full-Screen Civilization, Dynasties, Wonders & War Room (C)"
         >
-          👑 Dynasties & War
+          👑 Chancellery
         </button>
       )}
 
@@ -166,6 +204,35 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
       <button style={buttonStyle} onClick={onLoad} title="Load world state from local storage">
         📂 Load
       </button>
+
+      {onExportWorld && (
+        <button style={buttonStyle} onClick={onExportWorld} title="Export full world snapshot as JSON">
+          Export JSON
+        </button>
+      )}
+
+      {onImportWorld && (
+        <>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) onImportWorld(file);
+              e.target.value = '';
+            }}
+          />
+          <button
+            style={buttonStyle}
+            onClick={() => fileInputRef.current?.click()}
+            title="Import exported world JSON snapshot"
+          >
+            Import JSON
+          </button>
+        </>
+      )}
 
       {onToggleMute && (
         <button
@@ -179,6 +246,27 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
         >
           {isMuted ? '🔇 Muted' : '🔊 Sound'}
         </button>
+      )}
+
+      {onChangeScenario && (
+        <select
+          value={scenario}
+          onChange={(e) => onChangeScenario(e.target.value as 'modern_nuclear' | 'warring')}
+          title="Start a fresh world in Modern & Nuclear Age or Tribal Warring Kingdoms"
+          style={{
+            ...buttonStyle,
+            background: scenario === 'modern_nuclear' ? 'rgba(132, 204, 22, 0.16)' : '#1e293b',
+            borderColor: scenario === 'modern_nuclear' ? 'rgba(132, 204, 22, 0.5)' : '#334155',
+            color: scenario === 'modern_nuclear' ? '#bef264' : '#e2e8f0',
+          }}
+        >
+          <option value="warring" style={{ background: '#0f172a', color: '#f8fafc' }}>
+            ⚔️ Tribal Kingdoms
+          </option>
+          <option value="modern_nuclear" style={{ background: '#0f172a', color: '#f8fafc' }}>
+            ☢️ Modern &amp; Nuclear
+          </option>
+        </select>
       )}
 
       <button style={buttonStyle} onClick={onToggleHelp} title="Divine Instructions Guide">

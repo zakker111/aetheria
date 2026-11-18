@@ -1,6 +1,6 @@
 # 🌍 Aetheria — 2.5D Emergent Civilization & History Simulator
 
-[![Build & Tests](https://img.shields.io/badge/tests-14%2F14%20passing-brightgreen)](#-automated-test-suites)
+[![Build & Tests](https://img.shields.io/badge/tests-20%2F20%20passing-brightgreen)](#-automated-test-suites)
 [![React 19](https://img.shields.io/badge/React-19.3-blue)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7.x-blue)](https://www.typescriptlang.org/)
 [![Vite](https://img.shields.io/badge/Vite-8.x-purple)](https://vitejs.dev/)
@@ -19,7 +19,7 @@
 - **Dual Viewport Perspectives**: Seamlessly toggle between **2.5D Isometric View** (with depth sorting and terrain height projection) and **2D Top-Down View**.
 - **Adjustable Terrain Relief**: Cycle elevation heights from gentle rolling hills to dramatic alpine peaks.
 - **Cinematic Day/Night Cycle**: Smooth sinusoidal ambient lighting and smoothstep sky color gradients transitioning across dawn, noon, golden sunset, and starry midnight.
-- **Dynamic Resource Depletion & Recovery**: Chopped forests leave stumps, mined veins leave spent seams, and harvested grain leaves fallow patches that regenerate over natural seasons.
+- **Dynamic Resource Lifecycle & Living Ecology**: Trees grow naturally (`sapling → young → mature → ancient`), finite mineral veins exhaust permanently after depletion, wild herds roam the landscape, and settlement **Hunters** actively track prey and haul meat back to town stockpiles.
 
 ### 👤 Autonomous Citizens & Social Dynamics
 - **Needs & Psychology Hierarchy**: Food, Water, Rest, and Social fulfillment driving real-time agent decisions.
@@ -37,8 +37,11 @@
 - **Succession Crises & Civil Wars**: Disputed royal claims, weak legitimacy, and sudden monarch deaths escalate tension into civil wars with loyalist and rebel warbands vying to defend or usurp the throne.
 - **Hall of Heroes & Legendary Relics**: Veteran champions forge named relic weapons and are memorialized in the Hall of Heroes upon falling in battle.
 - **Royal Marriages & Casus Belli**: Dynastic weddings forge treaties while territorial friction and grudges ignite justified wars.
-- **Tactical Modernized Warfare & Amphibious Raids**: Armies advance across 6 civilization eras from shields & spears to muskets, field cannons, rifles, and AOE heavy artillery—with tactical ranged standoff/kiting, shieldbearer screening, focus-fire, commander rally auras, and amphibious longboat assaults.
+- **Combined-Arms Warfare, Nuclear Infrastructure & Last-Resort Escalation (Eras 1–7)**: Armies advance across 7 eras from spears & shields to muskets, cannons, rifles, **Battle Tanks**, **Strike Aircraft** with air overflight, and dual rocket artillery—while warhead enrichment requires operational **Factory + Nuclear Plant + Ore** (boosted by **Research Labs** & **Missile Silos**), and autonomous nuclear strikes fire only as an extreme last resort after conventional war and diplomatic ultimatums fail. The app starts in **Tribal Kingdoms** (`warring`) with a header switcher for **Modern & Nuclear**.
+- **Deep Diplomacy & Grand Strategy**: Bilateral Relation Scores, Casus Belli grievances, Resource Trade & Non-Aggression Pacts, nuclear proliferation sanctions, coerced ultimatums, Tributary Vassalage (15% seasonal tribute), Defensive Alliances, and neutral third-party Peace Mediation.
 - **Lethal Sieges, City Mergers & Union Civil Wars**: Clashes and storming assaults generate real mortal casualties and named historic battles; close large peaceful cities can unite into a **Metropolis** (`🌆`), occasionally sparking dynastic union power struggles and civil wars.
+- **Cultural Wonders, Espionage Guilds & JSON Archives**: Multi-stage Wonders (`Great Maritime Lighthouse`, `Colosseum of Champions`, `Atomic Reactor Complex`), Merchant/Masons/Shadow guilds, covert sabotage (`granary`, `bridge`, `warhead`, `revolt`), Era 1–7 chronicle filtering, and downloadable JSON World & Chronicle export/import.
+- **City Walls, Active Watchtowers & Physical Siege Breaches**: Towns fortify with 4-connected octagonal walls (`Timber Palisade` → `Stone Curtain Wall` → `Reinforced Bastion Wall`), friendly/hostile gatehouses, arrow/musket/tracer-firing corner watchtowers, and physical wall breaching where besiegers blast open passable rubble gaps before storming the city.
 
 ### ⚓ Coastal, River & Bridge Engineering
 - **Great Lakes & Connected River Watersheds**: Procedural worlds carve expansive organic lakes (up to 28 tiles across) linked naturally high-to-low by meandering 2–4 tile wide rivers, flared lake inlets/outlets, highland feeder tributaries, and gentle riparian valley banks.
@@ -78,7 +81,7 @@
 - **`2` Citizen**: Spawn a new autonomous citizen with randomized traits.
 - **`3` Food / `4` Water**: Create fertile berry bushes or freshwater springs.
 - **`5` Wood / `6` Ore**: Plant ancient groves or seed rich iron veins.
-- **`7` House / `8` Workshop / `9` Farm / `⚓` Dock / `🌉` Bridge**: Place building foundations (`⚓ Dock` snaps to shorelines; `🌉 Bridge` spans 1–10 tile rivers).
+- **`7` House / `8` Workshop / `9` Farm / `⚓` Dock / `🌉` Bridge / `🧱` Wall / `🗼` Tower**: Place building foundations (`⚓ Dock` snaps to shorelines; `🌉 Bridge` spans 1–10 tile rivers; `🧱 Wall` builds/toggles gates or repairs breaches; `🗼 Tower` erects active defensive watchtowers).
 - **`0` Bless / Smite**: Bestow divine abundance or cast lightning down upon heretics.
 - **Provoke War / Enforce Peace**: Instigate casus belli or compel belligerents to sign a peace concordat.
 
@@ -110,10 +113,10 @@ Open your browser and navigate to `http://localhost:3000`.
 
 ## 🧪 Automated Test Suites
 
-Aetheria maintains 14 comprehensive automated test suites enforcing 100% save/load determinism, economic loops, warfare rules, maritime logistics, bridge engineering, carrying capacity, and high-population performance:
+Aetheria maintains 20 comprehensive automated test suites enforcing 100% save/load determinism, economic loops, living ecology, deeper structures, warfare rules, Nuclear Age deterrence, fortifications, maritime logistics, bridge engineering, espionage/wonders, carrying capacity, and high-population performance:
 
 ```bash
-# Run all 14 automated test suites
+# Run all 20 automated test suites
 npm test
 
 # Run code style and lint check
@@ -139,6 +142,12 @@ npm run build
 | **Coastal & River Gameplay** | `tests/phase6_coastal_river.mjs` | Shoreline docks, fishing boats, river barges, amphibious raids, and mid-voyage determinism |
 | **Lakes, Rivers & Bridges** | `tests/phase7_lakes_bridges.mjs` | Major inland lakes, wide rivers, autonomous/divine bridge spanning, and boat-vs-bridge routing |
 | **Carrying Capacity, Tactical Warfare & Mergers** | `tests/phase8_tactical_mergers.mjs` | `maxAgents` cap, exact birth/death metrics, lethal clashes, Era 5–6 muskets/rifles/artillery, and Metropolis mergers/civil wars |
+| **Chaos Warfare, Diplomacy, Nukes & Dossiers** | `tests/chaos_diplomacy_nukes_history.mjs` | Multi-front wars, catapults, urban rebellions, total collapse, causal diplomacy, nuclear strikes/fallout, and Fallen Memorials |
+| **Wonders, Espionage & Era Archives** | `tests/wonders_espionage_archive.mjs` | 3-stage Cultural Wonders, guild buffs, bridge/granary/warhead sabotage, Era 1–6 chronicle filters, and save/load parity |
+| **Walls, Watchtowers & Siege Breaches** | `tests/fortifications_siege_breach.mjs` | 4-connected walls, era wall tiers & Citadel stacking, gate funneling, active watchtower fire, physical siege breaches, and save/load parity |
+| **Modern & Nuclear Age Total Wars** | `tests/modern_nuclear_total_war.mjs` | `modern_nuclear` preset, Era 7 progression, dual rocket artillery, devastating Total Wars, MAD counter-strikes, and save/load parity |
+| **Citizen Spawning & Active Diplomacy** | `tests/spawning_and_diplomacy.mjs` | Wall-safe citizen spawning, pioneer colonization, cap expansion, alliance intervention, and causal diplomatic logging |
+| **Deep Structures, Ecology & Diplomacy** | `tests/deep_structures_ecology_diplomacy.mjs` | Tanks/aircraft air overflight, nuclear Factory+Plant+Silo gate, growing trees, finite mines, hunters, resource pacts, proliferation sanctions, mediation & vassalage |
 
 ---
 
@@ -193,7 +202,7 @@ git push -u origin main
 │   │   ├── chronicleSystem.js  # Living historical chronicle and event logger
 │   │   └── religionSystem.js   # Beliefs, temples, missionaries, and inquisitions
 │   └── utils/             # Deterministic PRNG, math, and spatial hashing
-├── tests/                 # 14 core automated test suites + 2 extra regression suites
+├── tests/                 # 20 automated regression & determinism test suites
 ├── index.html             # HTML5 entry point
 ├── package.json           # Scripts and dependencies
 └── vite.config.ts         # Vite bundler configuration (relative base for Pages)

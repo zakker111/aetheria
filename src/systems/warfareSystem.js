@@ -32,42 +32,65 @@ export class WarfareSystem {
       return null;
     }
 
-    // Check if settlement already has an active warband
+    // Support multi-front warbands (up to 3 concurrent bands per settlement: 1 defense + up to 2 assault fronts)
+    const activeBands = [];
     for (const wb of this.warbands.values()) {
-      if (wb.settlementId === settlementId && wb.active) {
-        if (targetSettlementId && !wb.targetSettlementId) {
+      if (wb.settlementId === settlementId && wb.active && !wb.isCivilWar && !wb.isRebellion) {
+        activeBands.push(wb);
+        if (role === "defense" && wb.role === "defense") {
+          if (targetSettlementId && !wb.targetSettlementId) wb.targetSettlementId = targetSettlementId;
+          return wb;
+        }
+        if (targetSettlementId != null && wb.targetSettlementId === targetSettlementId) {
+          return wb;
+        }
+        if (!wb.targetSettlementId && targetSettlementId != null) {
           wb.targetSettlementId = targetSettlementId;
           wb.role = role;
           wb.state = role === "defense" ? "defending" : "marching";
+          return wb;
         }
-        return wb;
       }
     }
+    if (activeBands.length >= 3) return activeBands[0];
 
-    // Find eligible adult citizens to recruit. Professional soldiers are
-    // preferred over raw conscripts (Phase 3b Step 2): they drilled at the
-    // barracks and carry combat XP, so they fill the warband first.
+    // Find eligible unassigned adult citizens to recruit. Professional soldiers are
+    // preferred over raw conscripts (Phase 3b Step 2). Never steal soldiers already
+    // assigned to another active warband.
     const veterans = [];
     const eligible = [];
     for (const aId of settlement.agentIds) {
-      // Perf: O(1) id lookup instead of a linear roster scan per citizen.
       const a = this.sim._agentById(aId);
-      if (a && a.alive && a.age >= 18 && a.age <= 55 && (a.needs.health || 100) > 40 && !a.wounded) {
-        if (a.job === 'soldier' && !a.militaryDuty) veterans.push(a);
+      if (a && a.alive && a.age >= 18 && a.age <= 55 && (a.needs.health || 100) > 40 && !a.wounded && !a.militaryDuty && a.warbandId == null) {
+        if (a.job === 'soldier') veterans.push(a);
         else eligible.push(a);
       }
     }
 
-    if (veterans.length === 0 && eligible.length === 0) return null;
-
-    // Determine squad size: 30% to 50% of eligible population, minimum 1, maximum 8
+    if (veterans.length === 0 && eligible.length === 0) return activeBands[0] || null;
     const poolSize = veterans.length + eligible.length;
-    const squadSize = Math.max(1, Math.min(8, Math.max(1, Math.floor(poolSize * 0.45))));
-    // Soldiers first (stable insertion order = deterministic), then civilians.
+    if (activeBands.length > 0 && poolSize < 2) return activeBands[0];
+
+    // Era military doctrine (Eras 1-7: Stone -> Modern Tactical -> Nuclear Age)
+    const eraInfo = this.sim.civilizationAgeSystem?.getEraCombatDoctrine?.(settlementId) || { ageId: 1, doctrine: 'skirmish' };
+    const eraId = eraInfo.ageId || 1;
+    const doctrine = eraInfo.doctrine || 'skirmish';
+
+    const activeTotalWar = targetSettlementId != null && Boolean(
+      this.sim.diplomacySystem?.activeWars?.some(w =>
+        w.active && w.totalWar &&
+        ((w.attackerId === settlementId && w.defenderId === targetSettlementId) ||
+         (w.defenderId === settlementId && w.attackerId === targetSettlementId))
+      )
+    );
+
+    // Determine squad size: massive mobilization in Modern / Nuclear Age or Total Wars (up to 12)
+    const maxSquad = (eraId >= 6 || activeTotalWar) ? 12 : 8;
+    const recruitShare = (eraId >= 6 || activeTotalWar) ? 0.62 : (activeBands.length > 0 ? 0.5 : 0.45);
+    const squadSize = Math.max(1, Math.min(maxSquad, Math.floor(poolSize * recruitShare)));
     const recruited = veterans.concat(eligible).slice(0, squadSize);
 
     // Pick commander: prefer the most experienced soldier, else highest brave.
-    // Deterministic tie-break by id so save/load resumes behave identically.
     recruited.sort((a, b) => {
       const aSoldier = a.job === 'soldier' ? 1 : 0;
       const bSoldier = b.job === 'soldier' ? 1 : 0;
@@ -80,11 +103,6 @@ export class WarfareSystem {
 
     const warbandId = this.nextWarbandId++;
     const formationType = role === "defense" ? "shield" : "wedge";
-
-    // Era military doctrine (Eras 1-6: Stone -> Modern Tactical)
-    const eraInfo = this.sim.civilizationAgeSystem?.getEraCombatDoctrine?.(settlementId) || { ageId: 1, doctrine: 'skirmish' };
-    const eraId = eraInfo.ageId || 1;
-    const doctrine = eraInfo.doctrine || 'skirmish';
 
     // Equip soldiers with weapons and gear from settlement stockpile
     const hasOre = (settlement.stockpile?.ore ?? 0) >= 2;
@@ -110,29 +128,91 @@ export class WarfareSystem {
       soldier.job = "soldier";
       soldier.veteranCampaigns = (soldier.veteranCampaigns ?? 0) + 1;
 
+      const isCatapultSlot = (eraId >= 2 && eraId < 5 && recruited.length >= 5 && idx === recruited.length - 1);
       const isArtillerySlot = (eraId === 5 && recruited.length >= 4 && idx === recruited.length - 1) ||
+                              (eraId >= 6 && recruited.length >= 6 && idx >= recruited.length - 2) ||
                               (eraId >= 6 && recruited.length >= 3 && idx === recruited.length - 1);
+      const isTankSlot = !isArtillerySlot && eraId >= 6 && (
+        (recruited.length >= 4 && idx === 1) ||
+        (recruited.length >= 9 && idx === 3)
+      );
+      const isPlaneSlot = !isArtillerySlot && !isTankSlot && eraId >= 6 && (
+        (recruited.length >= 5 && idx === 2) ||
+        (eraId >= 7 && recruited.length >= 11 && idx === 4)
+      );
 
       // Draw weaponry (stockpiles first, then era-modernized standard kit)
       let weaponType = "unarmed";
       let weaponDamage = 13 + (eraId - 1) * 3;
       let weaponRange = 1.9;
-      let attackSpeed = Math.max(24, 38 - (eraId - 1) * 2);
+      let attackSpeed = Math.max(22, 38 - (eraId - 1) * 2);
       let splashRadius = 0;
+      let unitMaxHealth = 100;
+      let speedMultiplier = 1.0;
+      let isFlying = false;
+      let isArmored = false;
 
-      if (isArtillerySlot) {
-        if (eraId >= 6) {
+      if (isCatapultSlot) {
+        weaponType = "catapult";
+        weaponDamage = 38;
+        weaponRange = 10.5;
+        attackSpeed = 52;
+        splashRadius = 2.0;
+      } else if (isArtillerySlot) {
+        if (eraId >= 7) {
           weaponType = "artillery";
-          weaponDamage = 56;
-          weaponRange = 13.5;
-          attackSpeed = 42;
-          splashRadius = 3.0;
+          weaponDamage = 72;
+          weaponRange = 15.0;
+          attackSpeed = 36;
+          splashRadius = 3.8;
+        } else if (eraId >= 6) {
+          weaponType = "artillery";
+          weaponDamage = 64;
+          weaponRange = 14.0;
+          attackSpeed = 38;
+          splashRadius = 3.4;
         } else {
           weaponType = "cannon";
           weaponDamage = 46;
           weaponRange = 11.5;
           attackSpeed = 50;
           splashRadius = 2.2;
+        }
+      } else if (isTankSlot) {
+        weaponType = "tank";
+        isArmored = true;
+        if (eraId >= 7) {
+          weaponDamage = 78;
+          weaponRange = 12.2;
+          attackSpeed = 30;
+          splashRadius = 2.8;
+          unitMaxHealth = 260;
+          speedMultiplier = 1.4;
+        } else {
+          weaponDamage = 68;
+          weaponRange = 11.2;
+          attackSpeed = 32;
+          splashRadius = 2.5;
+          unitMaxHealth = 220;
+          speedMultiplier = 1.35;
+        }
+      } else if (isPlaneSlot) {
+        weaponType = "plane";
+        isFlying = true;
+        if (eraId >= 7) {
+          weaponDamage = 66;
+          weaponRange = 16.0;
+          attackSpeed = 20;
+          splashRadius = 3.2;
+          unitMaxHealth = 165;
+          speedMultiplier = 2.4;
+        } else {
+          weaponDamage = 58;
+          weaponRange = 14.5;
+          attackSpeed = 22;
+          splashRadius = 2.6;
+          unitMaxHealth = 145;
+          speedMultiplier = 2.2;
         }
       } else if (swordStock > 0) {
         swordStock--;
@@ -154,11 +234,16 @@ export class WarfareSystem {
         bowStock--;
         settlement.stockpile.weapon_bow = (settlement.stockpile.weapon_bow || 0) - 1;
         soldier.inventory.weapon_bow = (soldier.inventory.weapon_bow || 0) + 1;
-        if (eraId >= 6) {
+        if (eraId >= 7) {
           weaponType = "rifle";
-          weaponDamage = 44;
-          weaponRange = 10.5;
-          attackSpeed = 22;
+          weaponDamage = 52;
+          weaponRange = 11.5;
+          attackSpeed = 19;
+        } else if (eraId >= 6) {
+          weaponType = "rifle";
+          weaponDamage = 48;
+          weaponRange = 10.8;
+          attackSpeed = 20;
         } else if (eraId === 5) {
           weaponType = "musket";
           weaponDamage = 38;
@@ -170,11 +255,16 @@ export class WarfareSystem {
           weaponRange = 5.8;
           attackSpeed = 40;
         }
+      } else if (eraId >= 7) {
+        weaponType = "rifle";
+        weaponDamage = 52;
+        weaponRange = 11.5;
+        attackSpeed = 19;
       } else if (eraId >= 6) {
         weaponType = "rifle";
-        weaponDamage = 44;
-        weaponRange = 10.5;
-        attackSpeed = 22;
+        weaponDamage = 48;
+        weaponRange = 10.8;
+        attackSpeed = 20;
       } else if (eraId === 5) {
         weaponType = "musket";
         weaponDamage = 38;
@@ -194,7 +284,10 @@ export class WarfareSystem {
       let hasShield = false;
       let shieldDef = eraId >= 6 ? 0.16 : 0.0;
       let blockChance = 0.0;
-      if (shieldStock > 0) {
+      if (isTankSlot || isPlaneSlot) {
+        hasShield = false;
+        blockChance = 0.0;
+      } else if (shieldStock > 0) {
         shieldStock--;
         settlement.stockpile.armor_shield = (settlement.stockpile.armor_shield || 0) - 1;
         soldier.inventory.armor_shield = (soldier.inventory.armor_shield || 0) + 1;
@@ -213,7 +306,11 @@ export class WarfareSystem {
       // Assign tactical combat role
       if (idx === 0) {
         soldier.combatRole = "commander";
-      } else if (weaponType === "cannon" || weaponType === "artillery") {
+      } else if (weaponType === "tank") {
+        soldier.combatRole = "tank";
+      } else if (weaponType === "plane") {
+        soldier.combatRole = "plane";
+      } else if (weaponType === "cannon" || weaponType === "artillery" || weaponType === "catapult") {
         soldier.combatRole = "artillery";
       } else if (weaponType === "rifle") {
         soldier.combatRole = "rifleman";
@@ -225,6 +322,19 @@ export class WarfareSystem {
         soldier.combatRole = "shieldbearer";
       } else {
         soldier.combatRole = "vanguard";
+      }
+
+      if (typeof soldier.addLifeEvent === "function") {
+        const oppName = targetSettlementId ? (this.sim.settlementSystem?.settlements?.get(targetSettlementId)?.name || "rivals") : "home defense";
+        soldier.addLifeEvent(
+          "WAR",
+          role === "defense"
+            ? `Mustered as ${soldier.combatRole} to defend ${settlement.name}`
+            : `Marched as ${soldier.combatRole} against ${oppName}`,
+          this.sim.clock?.tick ?? 0,
+          weaponType === "plane" ? "✈️" : weaponType === "tank" ? "🛡️" : "⚔️",
+          soldier.veteranCampaigns === 1
+        );
       }
 
       // Phase 3b Step 6: check if mobilizing for a Holy War crusade
@@ -239,11 +349,23 @@ export class WarfareSystem {
       const hardening = 1 + Math.min(0.18, (soldier.veteranCampaigns ?? 1) > 1 ? ((soldier.veteranCampaigns ?? 1) - 1) * 0.06 : 0);
       let dmg = Math.round(weaponDamage * (0.85 + 0.2 * training) * hardening);
       if (isHolyWar) dmg = Math.round(dmg * 1.25); // Sacred zealot fervor!
-      const def = Math.min(0.70, (hasShield ? (0.18 + shieldDef) : (0.08 + shieldDef)) + Math.min(0.15, (training - 1) * 0.05) + ((soldier.veteranCampaigns ?? 1) - 1) * 0.02);
+      let def = Math.min(0.70, (hasShield ? (0.18 + shieldDef) : (0.08 + shieldDef)) + Math.min(0.15, (training - 1) * 0.05) + ((soldier.veteranCampaigns ?? 1) - 1) * 0.02);
+      if (isTankSlot) {
+        def = Math.min(0.72, (eraId >= 7 ? 0.62 : 0.56) + Math.min(0.08, (training - 1) * 0.03));
+      } else if (isPlaneSlot) {
+        def = Math.min(0.55, (eraId >= 7 ? 0.42 : 0.38) + Math.min(0.08, (training - 1) * 0.03));
+      }
+
+      soldier.maxHealth = unitMaxHealth;
+      if (unitMaxHealth > 100) {
+        const hpRatio = Math.max(0.5, Math.min(1, (soldier.health ?? 100) / 100));
+        soldier.health = Math.round(unitMaxHealth * hpRatio);
+        if (soldier.needs) soldier.needs.health = soldier.health;
+      }
 
       soldier.combat = {
-        health: soldier.health ?? 100,
-        maxHealth: 100,
+        health: soldier.health ?? unitMaxHealth,
+        maxHealth: unitMaxHealth,
         damage: dmg,
         defense: def,
         range: weaponRange,
@@ -253,7 +375,10 @@ export class WarfareSystem {
         splashRadius,
         hasShield,
         blockChance,
-        zealotFervor: isHolyWar
+        zealotFervor: isHolyWar,
+        speedMultiplier,
+        isFlying,
+        isArmored
       };
     });
 
@@ -266,6 +391,7 @@ export class WarfareSystem {
     );
     const bandHolyWar = !!(activeWarForBand?.isHolyWar || activeWarForBand?.casusBelli?.includes("Holy War"));
 
+    const wonderMorale = this.sim.civilizationAgeSystem?.getWonderBuffs?.(settlementId)?.moraleBonus || 0;
     const warband = {
       id: warbandId,
       settlementId,
@@ -281,7 +407,7 @@ export class WarfareSystem {
       targetSettlementId,
       marchTarget,
       isHolyWar: bandHolyWar,
-      morale: bandHolyWar ? 120 : 100,
+      morale: (bandHolyWar ? 120 : 100) + wonderMorale,
       initialSize: recruited.length,
       active: true,
       plunderCargo: { food: 0, wood: 0, ore: 0 }
@@ -440,6 +566,15 @@ export class WarfareSystem {
             soldier.warbandId = null;
             soldier.combatRole = null;
             soldier.isRebel = false;
+            soldier.maxHealth = 100;
+            soldier.health = Math.min(100, soldier.health ?? 100);
+            if (soldier.needs) soldier.needs.health = soldier.health;
+            if (soldier.combat) {
+              soldier.combat.isFlying = false;
+              soldier.combat.isArmored = false;
+              soldier.combat.maxHealth = 100;
+              soldier.combat.health = soldier.health;
+            }
             const rec = this.sim.economySystem?.getAgentJob?.(sId);
             if (rec && rec.job !== 'soldier') {
               soldier.job = rec.job;
@@ -469,10 +604,19 @@ export class WarfareSystem {
     }
   }
 
-  // Demobilize warbands for a settlement when peace is signed
-  demobilizeSettlement(settlementId) {
+  // Demobilize warbands for a settlement when peace is signed (front-aware when targetId provided)
+  demobilizeSettlement(settlementId, targetId = null) {
+    const remainingEnemies = targetId != null
+      ? (this.sim.diplomacySystem?.getEnemies?.(settlementId) || []).filter(eid => eid !== targetId)
+      : [];
+
     for (const wb of this.warbands.values()) {
-      if (wb.settlementId === settlementId && wb.active) {
+      if (wb.settlementId === settlementId && wb.active && !wb.isCivilWar && !wb.isRebellion) {
+        if (targetId != null) {
+          const matchesTarget = wb.targetSettlementId === targetId;
+          const isIdleDefense = wb.role === "defense" && remainingEnemies.length === 0;
+          if (!matchesTarget && !isIdleDefense) continue;
+        }
         wb.active = false;
         wb.state = "disbanded";
         for (const sId of wb.soldiers) {
@@ -483,23 +627,24 @@ export class WarfareSystem {
             soldier.combatRole = null;
             soldier.embarked = false;
             soldier.vesselId = null;
-            // Veterans keep their 'soldier' profession after the muster —
-            // they return to barracks drills and answer the next war call
-            // first (Phase 3b Step 2). Conscripts return to the civilian
-            // profession recorded on the economy ledger at muster time.
-            // IMPORTANT: mustering a *professional* soldier does not touch
-            // his economy record (it stays 'soldier'), so rec.job alone can
-            // never distinguish veteran from conscript here — consult the
-            // agent's own job field as well, otherwise veterans get demoted
-            // to whatever stale record predates their enlistment (Phase 3b
-            // Step 3 regression: 0 professionals survived any campaign).
+            soldier.maxHealth = 100;
+            soldier.health = Math.min(100, soldier.health ?? 100);
+            if (soldier.needs) soldier.needs.health = soldier.health;
+            if (soldier.combat) {
+              soldier.combat.isFlying = false;
+              soldier.combat.isArmored = false;
+              soldier.combat.speedMultiplier = 1.0;
+              soldier.combat.weaponType = "unarmed";
+              soldier.combat.splashRadius = 0;
+              soldier.combat.range = 1.8;
+              soldier.combat.maxHealth = 100;
+              soldier.combat.health = soldier.health;
+            }
             const rec = this.sim.economySystem?.getAgentJob?.(sId);
             const isProfessional = soldier.job === 'soldier' || (rec && rec.job === 'soldier');
             if (isProfessional) {
               soldier.job = 'soldier';
               soldier.jobTitle = this.sim.economySystem.jobDefinitions.soldier?.name || 'Soldier';
-              // Keep the two ledgers in sync so the career-change guard and
-              // job-assignment pass both see him as enlisted content.
               if (rec && rec.job !== 'soldier') {
                 this.sim.economySystem.assignJob?.(soldier, ['soldier']);
               }
@@ -510,7 +655,6 @@ export class WarfareSystem {
               soldier.job = "unemployed";
             }
 
-            // Return surviving military equipment to settlement stockpile
             const sHome = this.sim.settlementSystem?.settlements.get(settlementId);
             if (sHome?.stockpile && soldier.inventory) {
               for (const gearKey of ['weapon_sword', 'weapon_spear', 'weapon_bow', 'armor_shield']) {
@@ -526,6 +670,217 @@ export class WarfareSystem {
     }
   }
 
+  // Urban rebellion uprisings inside weakened, starving, war-weary, or irradiated settlements
+  evaluateRebellions(tick) {
+    if (!this.sim.settlementSystem?.settlements || (tick % 50) !== 0) return;
+    const settlements = Array.from(this.sim.settlementSystem.settlements.values())
+      .filter(s => s && !s.ruined && (s.population || s.agentIds?.size || 0) >= 6)
+      .sort((a, b) => a.id - b.id);
+
+    for (const s of settlements) {
+      // Skip if an internal conflict is already raging here
+      let hasInternalStrife = false;
+      for (const wb of this.warbands.values()) {
+        if (wb.active && wb.settlementId === s.id && (wb.isCivilWar || wb.isRebellion)) {
+          hasInternalStrife = true;
+          break;
+        }
+      }
+      if (hasInternalStrife) continue;
+
+      let unrest = 0;
+      const drivers = [];
+      if (s.tributeTo) {
+        unrest += 25;
+        drivers.push("Resentment over foreign tribute");
+      }
+      if (s.status === "annexed") {
+        unrest += 15;
+        drivers.push("Occupation under foreign governor");
+      }
+      if ((s.stockpile?.food ?? 20) <= 3) {
+        unrest += 25;
+        drivers.push("Severe granary famine");
+      }
+      const maxWear = this.sim.diplomacySystem?.activeWars?.reduce((mx, w) => {
+        if (!w.active) return mx;
+        if (w.attackerId === s.id || w.defenderId === s.id) {
+          return Math.max(mx, w.weariness?.[s.id] || 0);
+        }
+        return mx;
+      }, 0) || 0;
+      if (maxWear >= 50) {
+        unrest += 25;
+        drivers.push(`War exhaustion (${Math.round(maxWear)}%)`);
+      }
+      const radLevel = s.center ? (this.sim.world?.getRadiation?.(s.center.x, s.center.y) || 0) : 0;
+      if (radLevel >= 40) {
+        unrest += 25;
+        drivers.push("Atomic fallout panic & collapse of order");
+      }
+
+      if (unrest < 45) continue;
+      if (((s.id * 19 + Math.floor(tick / 50)) % 3) !== 0) continue;
+
+      this.spawnUrbanRebellion(s.id, drivers.join(" · "), tick, drivers);
+    }
+  }
+
+  spawnUrbanRebellion(settlementId, reason = "Popular revolt inside the walls", tick = null, customDrivers = null) {
+    const s = this.sim.settlementSystem?.settlements?.get(settlementId);
+    if (!s || s.ruined) return null;
+    const now = tick ?? (this.sim.clock?.tick ?? 0);
+
+    for (const wb of this.warbands.values()) {
+      if (wb.active && wb.settlementId === s.id && (wb.isCivilWar || wb.isRebellion)) {
+        return null;
+      }
+    }
+
+    const drivers = Array.isArray(customDrivers) && customDrivers.length > 0 ? customDrivers : [reason];
+
+    // Gather idle adult rebels + loyalists inside settlement
+    const candidates = [];
+    for (const aid of s.agentIds || []) {
+      const a = this.sim._agentById(aid);
+      if (a && a.alive && (a.age || 0) >= 18 && !a.wounded && !a.militaryDuty && a.warbandId == null) {
+        candidates.push(a);
+      }
+    }
+    if (candidates.length < 2) return null;
+    candidates.sort((a, b) => a.id - b.id);
+
+    const rebels = [];
+    const loyalists = [];
+    for (let i = 0; i < candidates.length && (rebels.length < 3 || loyalists.length < 3); i++) {
+      if (i % 2 === 0 && rebels.length < 3) rebels.push(candidates[i]);
+      else if (loyalists.length < 3) loyalists.push(candidates[i]);
+    }
+    if (rebels.length === 0 || loyalists.length === 0) return null;
+
+    const eraId = this.sim.civilizationAgeSystem?.getSettlementAge?.(s.id)?.ageId || 1;
+    const rebelGroupId = `reb_${s.id}_${now}`;
+    const outfit = (soldier, wbId, isRebel) => {
+      soldier.militaryDuty = true;
+      soldier.warbandId = wbId;
+      soldier.isRebel = isRebel;
+      soldier.job = "soldier";
+      soldier.hasWeapon = true;
+      soldier.hasShield = eraId < 5;
+      const wType = eraId >= 6 ? "rifle" : eraId === 5 ? "musket" : "sword";
+      soldier.combatRole = eraId >= 6 ? "rifleman" : eraId === 5 ? "musketeer" : "vanguard";
+      soldier.combat = {
+        health: soldier.health ?? 100,
+        maxHealth: 100,
+        damage: eraId >= 6 ? 38 : eraId === 5 ? 32 : 24,
+        defense: 0.16,
+        range: eraId >= 6 ? 10 : eraId === 5 ? 8 : 1.9,
+        attackCooldown: 0,
+        attackSpeed: eraId >= 6 ? 24 : 32,
+        weaponType: wType,
+        splashRadius: 0,
+        hasShield: eraId < 5,
+        blockChance: eraId < 5 ? 0.2 : 0,
+        zealotFervor: false
+      };
+      if (typeof soldier.addLifeEvent === "function") {
+        soldier.addLifeEvent(
+          "REBELLION",
+          isRebel ? `Joined armed uprising in ${s.name}` : `Defended order against rebels in ${s.name}`,
+          now,
+          isRebel ? "✊" : "🛡️",
+          true
+        );
+      }
+    };
+
+    const rebBandId = this.nextWarbandId++;
+    rebels.forEach(a => outfit(a, rebBandId, true));
+    const rebelWarband = {
+      id: rebBandId,
+      settlementId: s.id,
+      settlementName: `${s.name} Insurgents`,
+      bannerColor: "#dc2626",
+      commanderId: rebels[0].id,
+      soldiers: rebels.map(a => a.id),
+      role: "assault",
+      formation: "wedge",
+      eraId,
+      doctrine: "uprising",
+      state: "defending",
+      targetSettlementId: s.id,
+      marchTarget: { ...s.center },
+      isRebellion: true,
+      rebelGroupId,
+      rebelSide: "rebel",
+      startedAtTick: now,
+      morale: 100,
+      initialSize: rebels.length,
+      active: true,
+      plunderCargo: { food: 0, wood: 0, ore: 0 }
+    };
+    this.warbands.set(rebBandId, rebelWarband);
+
+    const loyBandId = this.nextWarbandId++;
+    loyalists.forEach(a => outfit(a, loyBandId, false));
+    this.warbands.set(loyBandId, {
+      id: loyBandId,
+      settlementId: s.id,
+      settlementName: `${s.name} Garrison`,
+      bannerColor: s.bannerColor || "#38bdf8",
+      commanderId: loyalists[0].id,
+      soldiers: loyalists.map(a => a.id),
+      role: "defense",
+      formation: "shield",
+      eraId,
+      doctrine: "garrison",
+      state: "defending",
+      targetSettlementId: s.id,
+      marchTarget: { ...s.center },
+      isRebellion: true,
+      rebelGroupId,
+      rebelSide: "loyalist",
+      startedAtTick: now,
+      morale: 100,
+      initialSize: loyalists.length,
+      active: true,
+      plunderCargo: { food: 0, wood: 0, ore: 0 }
+    });
+
+    // Ignite minor street riot sparks
+    if (this.sim.world?.startFire && s.center) {
+      this.sim.world.startFire(Math.floor(s.center.x + 1), Math.floor(s.center.y), 18);
+    }
+
+    const whySummary = drivers.join(" · ");
+    if (this.sim.diplomacySystem?.recordDiplomaticEvent) {
+      this.sim.diplomacySystem.recordDiplomaticEvent({
+        tick: now,
+        type: "rebellion",
+        outcome: "uprising",
+        title: `Urban Rebellion in ${s.name}`,
+        what: `Armed insurgents clashed with the town garrison inside ${s.name}.`,
+        why: whySummary,
+        drivers,
+        actors: [s.id],
+        actorNames: [s.name],
+        x: s.center?.x ?? null,
+        y: s.center?.y ?? null
+      });
+    }
+    this.sim.eventBus?.emit("URBAN_REBELLION", {
+      settlementId: s.id,
+      settlementName: s.name,
+      rebels: rebels.length,
+      reason: whySummary,
+      drivers,
+      x: s.center?.x ?? 0,
+      y: s.center?.y ?? 0,
+      tick: now
+    });
+    return rebelWarband;
+  }
+
   // Update warfare engine each tick
   update() {
     // 1. Update visual combat effects
@@ -535,6 +890,9 @@ export class WarfareSystem {
         this.combatEffects.splice(i, 1);
       }
     }
+
+    // Periodic urban rebellion check inside stressed settlements
+    this.evaluateRebellions(this.sim.clock?.tick ?? 0);
 
     // Perf: invalidate the per-tick enemy snapshot cache so the first
     // getAllNearbyEnemies() call of this tick rebuilds it.
@@ -614,14 +972,78 @@ export class WarfareSystem {
     if (soldiers.length === 0) {
       warband.active = false;
       warband.state = "destroyed";
+      if (warband.isRebellion) {
+        const tickNow = this.sim.clock?.tick ?? 0;
+        for (const other of this.warbands.values()) {
+          if (other.active && other.isRebellion && other.rebelGroupId === warband.rebelGroupId) {
+            other.active = false;
+            other.state = "disbanded";
+            for (const sid of other.soldiers) {
+              const a = this.sim._agentById(sid);
+              if (a) {
+                a.militaryDuty = false;
+                a.warbandId = null;
+                a.combatRole = null;
+                a.isRebel = false;
+                a.maxHealth = 100;
+                a.health = Math.min(100, a.health ?? 100);
+                if (a.needs) a.needs.health = a.health;
+                if (a.combat) { a.combat.isFlying = false; a.combat.isArmored = false; a.combat.maxHealth = 100; a.combat.health = a.health; }
+              }
+            }
+          }
+        }
+        const st = this.sim.settlementSystem?.settlements?.get(warband.settlementId);
+        if (st && warband.rebelSide === "loyalist") {
+          // Rebels won! Break tribute/vassalage!
+          const hadOverlord = st.tributeTo || st.overlordId;
+          st.tributeTo = null;
+          st.overlordId = null;
+          st.vassalOf = null;
+          st.status = "independent";
+          if (hadOverlord) {
+            this.sim.diplomacySystem?.recordDiplomaticEvent?.({
+              tick: tickNow,
+              type: "rebellion",
+              outcome: "rebel_victory",
+              title: `${st.name} Uprising Proclaims Independence`,
+              what: `Rebels overthrew the garrison in ${st.name} and threw off foreign tribute.`,
+              why: "Garrison defeated during urban uprising.",
+              drivers: ["Loyalist garrison wiped out", "Tribute & overlordship abolished"],
+              actors: [st.id],
+              actorNames: [st.name],
+              x: st.center?.x ?? null,
+              y: st.center?.y ?? null
+            });
+          }
+        }
+      }
+      return;
+    }
+
+    // Timeout safety on rebellions so garrison skirmishes don't stall forever
+    if (warband.isRebellion && ((this.sim.clock?.tick ?? 0) - (warband.startedAtTick || 0)) > 160) {
+      warband.active = false;
+      warband.state = "disbanded";
+      for (const sid of soldiers) {
+        const a = this.sim._agentById(sid);
+        if (a) {
+          a.militaryDuty = false;
+          a.warbandId = null;
+          a.combatRole = null;
+          a.isRebel = false;
+          a.maxHealth = 100;
+          a.health = Math.min(100, a.health ?? 100);
+          if (a.needs) a.needs.health = a.health;
+          if (a.combat) { a.combat.isFlying = false; a.combat.isArmored = false; a.combat.maxHealth = 100; a.combat.health = a.health; }
+        }
+      }
       return;
     }
 
     // Ensure commander is alive
     let commander = this.sim._agentById(warband.commanderId);
     if (!commander || !commander.alive) {
-      // Perf: soldiers were just verified alive above, so the first entry is
-      // the new leader (same agent as the old roster-order scan would pick).
       const nextLead = this.sim._agentById(soldiers[0]);
       if (nextLead && nextLead.alive) {
         warband.commanderId = nextLead.id;
@@ -632,23 +1054,21 @@ export class WarfareSystem {
       }
     }
 
-    // Step 3: a band whose morale collapses breaks and routs home. This is
-    // the "losing side penalty" — casualties drain morale, low morale drains
-    // further fights, and routed bands abandon the field instead of dying
-    // to a last stand. Deterministic (no RNG draw needed).
-    const routThreshold = warband.isHolyWar ? 15 : 25;
-    if (warband.morale <= routThreshold && warband.state !== "retreating") {
-      warband.state = "retreating";
-      if (this.sim.eventBus) {
-        this.sim.eventBus.emit("WARBAND_ROUTED", {
-          warbandId: warband.id, settlementName: warband.settlementName
-        });
+    // Rebellions skip home-rout retreat since they fight inside the city
+    if (!warband.isRebellion) {
+      const routThreshold = warband.isHolyWar ? 15 : 25;
+      if (warband.morale <= routThreshold && warband.state !== "retreating") {
+        warband.state = "retreating";
+        if (this.sim.eventBus) {
+          this.sim.eventBus.emit("WARBAND_ROUTED", {
+            warbandId: warband.id, settlementName: warband.settlementName
+          });
+        }
       }
-    }
-    // Wounded, under-strength bands retreat too (fewer than 1/3 remain).
-    const initialSize = warband.initialSize ?? warband.soldiers.length;
-    if (warband.soldiers.length > 0 && warband.soldiers.length * 3 < initialSize && warband.state !== "retreating") {
-      warband.state = "retreating";
+      const initialSize = warband.initialSize ?? warband.soldiers.length;
+      if (warband.soldiers.length > 0 && warband.soldiers.length * 3 < initialSize && warband.state !== "retreating") {
+        warband.state = "retreating";
+      }
     }
 
     // Phase 3b Step 3: wounded soldiers recover at home. Once the band is
@@ -710,6 +1130,10 @@ export class WarfareSystem {
         this.handleEngaging(warband, commander);
         break;
 
+      case "breaching":
+        this.handleBreaching(warband, commander);
+        break;
+
       case "sieging":
         this.handleSieging(warband, commander);
         break;
@@ -727,9 +1151,37 @@ export class WarfareSystem {
       return;
     }
 
-    // Check if in range of any enemy soldier (disembarked only)
+    // Check if in range of any enemy soldier or blocked by intact city walls (disembarked only)
     if (!warband.embarked) {
-      const nearbyEnemy = this.findNearbyEnemy(commander, warband.settlementId, 8.0);
+      // Check for intact city perimeter walls or closed gates blocking the assault
+      const blockingWall = this.sim.fortificationSystem?.findBlockingWallForWarband?.(
+        commander.x,
+        commander.y,
+        warband.targetSettlementId
+      );
+      let hasArtillery = false;
+      let hasTank = false;
+      if (blockingWall) {
+        for (const sid of warband.soldiers) {
+          const s = this.sim._agentById(sid);
+          if (!s || !s.alive) continue;
+          if (s.combatRole === "artillery") hasArtillery = true;
+          if (s.combatRole === "tank") hasTank = true;
+        }
+        const breachRange = hasArtillery ? 9.5 : hasTank ? 7.5 : 3.2;
+        const distToWall = Math.hypot(commander.x - (blockingWall.x + 0.5), commander.y - (blockingWall.y + 0.5));
+        const closeEnemy = this.findNearbyEnemy(commander, warband.settlementId, 3.5);
+        if (closeEnemy) {
+          warband.state = "engaging";
+          return;
+        }
+        if (distToWall <= breachRange) {
+          warband.state = "breaching";
+          return;
+        }
+      }
+
+      const nearbyEnemy = this.findNearbyEnemy(commander, warband.settlementId, blockingWall ? 4.5 : 8.0);
       if (nearbyEnemy) {
         warband.state = "engaging";
         return;
@@ -745,6 +1197,13 @@ export class WarfareSystem {
 
     // Amphibious embarkation when crossing rivers or coastal waters
     if (warband.embarked) {
+      // Un-embarked air units fly directly toward the target beachhead/city as air cover
+      for (const sid of warband.soldiers) {
+        const s = this.sim._agentById(sid);
+        if (s && s.alive && !s.embarked && (s.combatRole === "plane" || s.combat?.isFlying)) {
+          s.moveToward(targetSettlement.center, this.sim.world);
+        }
+      }
       return; // NavalSystem steers the raid vessel and embarked troops
     }
     if (this.sim.navalSystem?.tryEmbarkWarband(warband, commander, targetSettlement.center)) {
@@ -755,6 +1214,115 @@ export class WarfareSystem {
     commander.moveToward(targetSettlement.center, this.sim.world);
 
     // Keep squad in formation
+    this.keepSquadInFormation(warband, commander);
+  }
+
+  handleBreaching(warband, commander) {
+    const enemySettlement = this.sim.settlementSystem.settlements.get(warband.targetSettlementId);
+    if (!enemySettlement) {
+      warband.state = "retreating";
+      return;
+    }
+
+    const defenders = this.getAllNearbyEnemies(commander, warband.settlementId, 3.5);
+    if (defenders.length > 0) {
+      warband.state = "engaging";
+      return;
+    }
+
+    const fort = this.sim.fortificationSystem;
+    const seg = fort?.findBlockingWallForWarband?.(commander.x, commander.y, warband.targetSettlementId);
+    if (!seg) {
+      warband.hasRam = true;
+      warband.siegeStage = "breach";
+      warband.state = "sieging";
+      return;
+    }
+
+    let hasArtillery = false;
+    let isCatapult = false;
+    let tankCount = 0;
+    let firstTank = null;
+    const planes = [];
+    let activeSoldiers = 0;
+    for (const sid of warband.soldiers) {
+      const s = this.sim._agentById(sid);
+      if (s && s.alive) {
+        activeSoldiers++;
+        if (s.combatRole === "artillery") {
+          hasArtillery = true;
+          if (s.combat?.weaponType === "catapult") isCatapult = true;
+        } else if (s.combatRole === "tank") {
+          tankCount++;
+          if (!firstTank) firstTank = s;
+        } else if (s.combatRole === "plane") {
+          planes.push(s);
+        }
+      }
+    }
+
+    // Airborne planes fly over enemy walls during a breach to strike defenders inside!
+    if (planes.length > 0) {
+      const airTargets = this.getAllNearbyEnemies(commander, warband.settlementId, 16.0);
+      for (const plane of planes) {
+        if (airTargets.length > 0) {
+          const tgt = airTargets[0];
+          const pDist = Math.hypot(plane.x - tgt.x, plane.y - tgt.y);
+          if (pDist <= (plane.combat?.range || 15)) {
+            this.executeMeleeAttack(plane, tgt, warband);
+          } else {
+            plane.moveToward(tgt, this.sim.world);
+          }
+        } else {
+          plane.moveToward(enemySettlement.center, this.sim.world);
+        }
+      }
+    }
+
+    const wallTarget = { x: seg.x + 0.5, y: seg.y + 0.5 };
+    const breachRange = hasArtillery ? 9.0 : tankCount > 0 ? 7.0 : 2.8;
+    const dist = Math.hypot(commander.x - wallTarget.x, commander.y - wallTarget.y);
+
+    if (dist > breachRange) {
+      commander.moveToward(wallTarget, this.sim.world);
+      this.keepSquadInFormation(warband, commander);
+      return;
+    }
+
+    warband.hasRam = true;
+    warband.siegeStage = "breach";
+    warband.siegeTicks = (warband.siegeTicks || 0) + 1;
+
+    if (hasArtillery) {
+      this.combatEffects.push({
+        x: wallTarget.x,
+        y: wallTarget.y,
+        fromX: commander.x,
+        fromY: commander.y,
+        toX: wallTarget.x,
+        toY: wallTarget.y,
+        type: isCatapult ? "catapult_boulder" : "artillery_shell",
+        duration: isCatapult ? 18 : 14
+      });
+    }
+    if (firstTank) {
+      this.combatEffects.push({
+        x: wallTarget.x,
+        y: wallTarget.y,
+        fromX: firstTank.x,
+        fromY: firstTank.y,
+        toX: wallTarget.x,
+        toY: wallTarget.y,
+        type: "tank_shell",
+        duration: 14
+      });
+    }
+
+    const wallDmg = Math.max(30, activeSoldiers * 11 + (hasArtillery ? 48 : 22) + (tankCount * 54));
+    const res = fort.damageSegment(seg, wallDmg, warband.settlementName, warband);
+    if (res?.breached) {
+      warband.state = "sieging";
+    }
     this.keepSquadInFormation(warband, commander);
   }
 
@@ -789,11 +1357,11 @@ export class WarfareSystem {
 
     const tickNow = this.sim.clock?.tick ?? 0;
 
-    // Collect friendly ranged/artillery positions for shieldbearer screening
+    // Collect friendly ranged/mechanized positions for shieldbearer screening
     const rangedAllies = [];
     for (const sid of warband.soldiers) {
       const a = this.sim._agentById(sid);
-      if (a && a.alive && !a.wounded && (a.combatRole === "archer" || a.combatRole === "musketeer" || a.combatRole === "rifleman" || a.combatRole === "artillery")) {
+      if (a && a.alive && !a.wounded && (a.combatRole === "archer" || a.combatRole === "musketeer" || a.combatRole === "rifleman" || a.combatRole === "artillery" || a.combatRole === "tank" || a.combatRole === "plane")) {
         rangedAllies.push(a);
       }
     }
@@ -815,7 +1383,9 @@ export class WarfareSystem {
 
       const role = soldier.combatRole || "vanguard";
       const range = soldier.combat?.range ?? 1.9;
-      const isRangedUnit = role === "archer" || role === "musketeer" || role === "rifleman" || role === "artillery" || range >= 4.0;
+      const isPlane = role === "plane" || Boolean(soldier.combat?.isFlying);
+      const isTank = role === "tank" || Boolean(soldier.combat?.isArmored);
+      const isRangedUnit = role === "archer" || role === "musketeer" || role === "rifleman" || role === "artillery" || isTank || isPlane || range >= 4.0;
 
       let nearest = null;
       let minDist = Infinity;
@@ -824,13 +1394,16 @@ export class WarfareSystem {
 
       for (const e of enemies) {
         if (!e.alive) continue;
+        const eIsFlying = Boolean(e.combatRole === "plane" || e.combat?.isFlying);
         const d = Math.hypot(soldier.x - e.x, soldier.y - e.y);
         if (d < minDist) {
           minDist = d;
           nearest = e;
         }
+        // Melee ground troops avoid chasing aircraft when ground enemies are present
+        const airPenalty = (!isRangedUnit && eIsFlying) ? 40 : 0;
         // Ranged/modernized units focus-fire wounded enemies inside engagement envelope
-        const focusScore = d + ((e.health ?? 100) * (isRangedUnit ? 0.08 : 0.03));
+        const focusScore = d + airPenalty + ((e.health ?? 100) * (isRangedUnit ? 0.08 : 0.03));
         if (focusScore < bestFocusScore) {
           bestFocusScore = focusScore;
           focusTarget = e;
@@ -844,21 +1417,21 @@ export class WarfareSystem {
           ? focusTarget
           : nearest;
         const targetDist = Math.hypot(soldier.x - target.x, soldier.y - target.y);
-        const minSafeDist = role === "artillery" ? 4.8 : Math.min(4.2, range * 0.45);
+        const minSafeDist = isPlane ? 5.5 : role === "artillery" ? 4.8 : isTank ? 3.2 : Math.min(4.2, range * 0.45);
 
-        // Tactical standoff: kite backwards if enemies close inside safe range
+        // Tactical standoff: kite backwards if enemies close inside safe range (planes strafe & wheel in flight)
         if (minDist < minSafeDist && this.sim.world) {
           const dx = soldier.x - nearest.x;
           const dy = soldier.y - nearest.y;
           const norm = Math.hypot(dx, dy) || 1;
           const retreatTarget = {
-            x: Math.max(2, Math.min(this.sim.world.width - 3, soldier.x + (dx / norm) * 2.5)),
-            y: Math.max(2, Math.min(this.sim.world.height - 3, soldier.y + (dy / norm) * 2.5))
+            x: Math.max(2, Math.min(this.sim.world.width - 3, soldier.x + (dx / norm) * (isPlane ? 4.0 : 2.5))),
+            y: Math.max(2, Math.min(this.sim.world.height - 3, soldier.y + (dy / norm) * (isPlane ? 4.0 : 2.5)))
           };
-          if (this.sim.world.isWalkable(Math.floor(retreatTarget.x), Math.floor(retreatTarget.y))) {
+          if (isPlane || this.sim.world.isWalkable(Math.floor(retreatTarget.x), Math.floor(retreatTarget.y))) {
             soldier.moveToward(retreatTarget, this.sim.world);
           }
-          // Still fire volley if target remains within range
+          // Still fire volley / strafing pass if target remains within range
           if (targetDist <= range) {
             this.executeMeleeAttack(soldier, target, warband);
           }
@@ -877,7 +1450,7 @@ export class WarfareSystem {
           let threatDist = Infinity;
           for (const ally of rangedAllies) {
             for (const e of enemies) {
-              if (!e.alive) continue;
+              if (!e.alive || e.combatRole === "plane" || e.combat?.isFlying) continue;
               const dToAlly = Math.hypot(ally.x - e.x, ally.y - e.y);
               if (dToAlly < 4.5 && dToAlly < threatDist) {
                 threatDist = dToAlly;
@@ -933,9 +1506,13 @@ export class WarfareSystem {
     const def = defender.combat.defense || 0;
     let finalDmg = Math.max(4, Math.round(rawDmg * (1 - def)));
 
-    // Shield deflection / block check (reduced block vs gunfire/artillery)
+    // Shield deflection / block check (reduced block vs gunfire/artillery/tanks/airstrikes)
     const wType = attacker.combat.weaponType || "unarmed";
-    const isGunfire = wType === "musket" || wType === "rifle" || wType === "cannon" || wType === "artillery";
+    const isGunfire = wType === "musket" || wType === "rifle" || wType === "cannon" || wType === "artillery" || wType === "tank" || wType === "plane";
+    // Melee ground weapons struggle to hit flying aircraft
+    if ((attacker.combat.range ?? 1.9) < 3.0 && (defender.combatRole === "plane" || defender.combat?.isFlying)) {
+      finalDmg = Math.max(3, Math.round(finalDmg * 0.4));
+    }
     const hasShield = defender.combat?.hasShield || defender.hasShield;
     const rawBlock = defender.combat?.blockChance ?? (hasShield ? 0.25 : 0.0);
     const blockChance = isGunfire ? rawBlock * 0.25 : rawBlock;
@@ -958,9 +1535,12 @@ export class WarfareSystem {
     defender._lastCombatTick = tickNow;
     if (defender.combat) defender.combat.health = defender.health;
 
-    // Visual projectile / clash / artillery effect
+    // Visual projectile / clash / artillery / tank / air strike effect
     let fxType = "clash";
-    if (wType === "cannon" || wType === "artillery") fxType = "artillery_shell";
+    if (wType === "catapult") fxType = "catapult_boulder";
+    else if (wType === "cannon" || wType === "artillery") fxType = "artillery_shell";
+    else if (wType === "tank") fxType = "tank_shell";
+    else if (wType === "plane") fxType = "air_strafing";
     else if (wType === "rifle") fxType = "tracer_fire";
     else if (wType === "musket") fxType = "musket_shot";
     else if (wType === "bow") fxType = "arrow";
@@ -974,25 +1554,52 @@ export class WarfareSystem {
         toX: defender.x,
         toY: defender.y,
         type: fxType,
-        duration: 15
+        duration: wType === "catapult" ? 20 : wType === "plane" ? 16 : 15
       });
     }
 
-    // Artillery / Cannon AOE splash damage against clustered enemies
+    // Artillery / Cannon / Catapult / Tank / Air Bomb AOE splash damage & blast craters
     const splashRad = attacker.combat.splashRadius || 0;
     if (splashRad > 0) {
       this.combatEffects.push({
         x: defender.x,
         y: defender.y,
-        type: "explosion",
-        duration: 20
+        fromX: attacker.x,
+        fromY: attacker.y,
+        toX: defender.x,
+        toY: defender.y,
+        type: wType === "plane" ? "bomb_blast" : "explosion",
+        duration: 22
       });
+      this.sim.world?.addCrater?.(defender.x, defender.y, (wType === "artillery" || wType === "plane") ? 2 : 1, 185);
+      if (wType === "artillery" || wType === "tank" || wType === "plane") {
+        this.sim.world?.scorchTile?.(Math.floor(defender.x), Math.floor(defender.y), 210);
+        // Collateral shell/bomb damage to nearby enemy buildings
+        if (Array.isArray(this.sim.buildings)) {
+          const bldDmg = wType === "plane" ? 38 : wType === "artillery" ? 35 : 26;
+          for (const b of this.sim.buildings) {
+            if (!b || !b.complete || b.isRuined) continue;
+            if (b.settlementId === warband?.settlementId) continue;
+            if (Math.hypot(b.x - defender.x, b.y - defender.y) <= splashRad + 0.8) {
+              b.health = Math.max(0, (b.health ?? 100) - bldDmg);
+              this.sim.world?.startFire?.(Math.floor(b.x), Math.floor(b.y), 25);
+              if (b.health <= 0) {
+                b.isRuined = true;
+                b.ruinedAtTick = tickNow;
+              }
+              break;
+            }
+          }
+        }
+      }
       const nearbyTargets = this.getAllNearbyEnemies(attacker, warband.settlementId, (attacker.combat.range || 12) + splashRad);
       let hitCount = 0;
+      const maxSplashHits = wType === "artillery" ? 4 : (wType === "plane" || wType === "tank") ? 3 : 2;
+      const splashFactor = wType === "artillery" ? 0.55 : (wType === "plane" || wType === "tank") ? 0.50 : 0.45;
       for (const adj of nearbyTargets) {
         if (!adj.alive || adj.id === defender.id) continue;
         if (Math.hypot(adj.x - defender.x, adj.y - defender.y) <= splashRad) {
-          const splashDmg = Math.max(5, Math.round(finalDmg * 0.45));
+          const splashDmg = Math.max(5, Math.round(finalDmg * splashFactor));
           adj.health = Math.max(0, (adj.health ?? 100) - splashDmg);
           adj.needs.health = adj.health;
           adj._lastCombatTick = tickNow;
@@ -1000,14 +1607,15 @@ export class WarfareSystem {
           if (adj.needs.health <= 0) {
             this._recordCombatKill(attacker, adj, warband);
           }
-          if (++hitCount >= 2) break;
+          if (++hitCount >= maxSplashHits) break;
         }
       }
     }
 
+    const woundLimit = defender.combat?.isArmored ? 28 : 35;
     if (defender.needs.health <= 0) {
       this._recordCombatKill(attacker, defender, warband);
-    } else if (defender.alive && defender.militaryDuty && defender.health < 35) {
+    } else if (defender.alive && defender.militaryDuty && defender.health < woundLimit) {
       // Surviving gravely wounded soldiers limp off the line (or get captured as POW)
       defender.wounded = true;
       const vBand = this.warbands.get(defender.warbandId);
@@ -1018,6 +1626,7 @@ export class WarfareSystem {
         defender.prisonerOf = warband.settlementId;
         defender.militaryDuty = false;
         defender.combatRole = null;
+        defender.addLifeEvent?.("CAPTIVE", `Wounded and captured by ${warband.settlementName}`, tickNow, "⛓️", true);
         if (this.sim.eventBus) {
           this.sim.eventBus.emit("SOLDIER_CAPTURED", {
             agentId: defender.id,
@@ -1028,6 +1637,7 @@ export class WarfareSystem {
 
       if (this.sim.eventBus && !defender._woundEventSent) {
         defender._woundEventSent = true;
+        defender.addLifeEvent?.("WOUND", `Gravely wounded in action under ${vBand?.settlementName || "arms"}`, tickNow, "🩹", false);
         this.sim.eventBus.emit("SOLDIER_WOUNDED", {
           agentId: defender.id, warbandId: defender.warbandId
         });
@@ -1042,6 +1652,7 @@ export class WarfareSystem {
     defender.health = 0;
     defender.needs.health = 0;
 
+    const tickNow = this.sim.clock?.tick ?? 0;
     if (attacker) {
       attacker.kills = (attacker.kills || 0) + 1;
       attacker.battlesFought = (attacker.battlesFought || 0) + 1;
@@ -1054,6 +1665,7 @@ export class WarfareSystem {
       if (attacker.kills >= 3 && !attacker.legendaryWeapon) {
         const relicNames = ["Oathkeeper", "Dawnbreaker", "Bloodthorn", "Ashfang", "Kingsbane", "Ironcrown", "Stormbrand", "Grimfang"];
         attacker.legendaryWeapon = relicNames[(Number(attacker.id) || 0) % relicNames.length];
+        attacker.addLifeEvent?.("RELIC", `Forged famed relic ${attacker.legendaryWeapon} in battle`, tickNow, "🗡️", true);
       }
     }
     defender.battlesFought = (defender.battlesFought || 0) + 1;
@@ -1083,8 +1695,8 @@ export class WarfareSystem {
     if (victimBand) victimBand.morale = Math.max(0, (victimBand.morale ?? 100) - 6);
 
     // Record war casualty & weariness
-    let battleName = "the Front Line";
-    if (this.sim.diplomacySystem && warband) {
+    let battleName = warband?.isRebellion ? `Street Clashes of ${warband.settlementName}` : "the Front Line";
+    if (this.sim.diplomacySystem && warband && !warband.isRebellion) {
       const defenderSettlementId = this.sim.settlementSystem.getAgentSettlement(defender.id)?.id;
       const war = this.sim.diplomacySystem.activeWars.find(w =>
         (w.attackerId === warband.settlementId && w.defenderId === defenderSettlementId) ||
@@ -1093,21 +1705,30 @@ export class WarfareSystem {
       if (war && defenderSettlementId) {
         war.casualties[defenderSettlementId] = (war.casualties[defenderSettlementId] || 0) + 1;
         war.weariness = war.weariness || {};
-        war.weariness[defenderSettlementId] = (war.weariness[defenderSettlementId] || 0) + 12;
-        war.frontLine = { x: defender.x, y: defender.y, tick: this.sim.clock.tick };
+        const killWeariness = (war.totalWar || (warband.eraId || 1) >= 6) ? 8 : 12;
+        war.weariness[defenderSettlementId] = (war.weariness[defenderSettlementId] || 0) + killWeariness;
+        war.frontLine = { x: defender.x, y: defender.y, tick: tickNow };
         const defSet = this.sim.settlementSystem.settlements.get(defenderSettlementId);
         const attSet = this.sim.settlementSystem.settlements.get(warband.settlementId);
         battleName = this.generateBattleName(defSet, attSet, defender.x, defender.y, war.battles.length);
         war.battles.push({
           name: battleName,
-          tick: this.sim.clock.tick,
+          tick: tickNow,
           x: defender.x,
           y: defender.y,
           casualties: war.casualties[defenderSettlementId]
         });
         if (war.battles.length > 50) war.battles.splice(0, war.battles.length - 50);
+
+        const totalWarDead = (war.casualties[war.attackerId] || 0) + (war.casualties[war.defenderId] || 0);
+        if ((totalWarDead >= 3 && (totalWarDead % 3) === 0) || defender.id === victimBand?.commanderId) {
+          this.sim.world?.addSkullMonument?.(battleName, defender.x, defender.y, 1, "battle", tickNow);
+        }
       }
     }
+
+    attacker?.addLifeEvent?.("KILL", `Slew ${defender.name} at ${battleName}`, tickNow, "🩸", attacker.kills === 1 || attacker.kills >= 3);
+    defender.addLifeEvent?.("DEATH", `Fell in combat vs ${attacker?.name || "enemy forces"} at ${battleName}`, tickNow, "💀", true);
 
     if (this.sim.eventBus) {
       this.sim.eventBus.emit("COMBAT_KILL", {
@@ -1146,16 +1767,32 @@ export class WarfareSystem {
     }
 
     let hasArtillery = false;
+    let isCatapult = false;
+    let hasTank = false;
+    let hasPlane = false;
     for (const sid of warband.soldiers) {
       const s = this.sim._agentById(sid);
-      if (s && s.alive && s.combatRole === "artillery") {
+      if (!s || !s.alive) continue;
+      if (s.combatRole === "artillery") {
         hasArtillery = true;
-        break;
+        if (s.combat?.weaponType === "catapult") isCatapult = true;
+      } else if (s.combatRole === "tank") {
+        hasTank = true;
+      } else if (s.combatRole === "plane") {
+        hasPlane = true;
       }
     }
 
-    // Multi-stage siege progression (accelerated with cannon/artillery bombardment)
-    warband.siegeTicks = (warband.siegeTicks || 0) + (hasArtillery ? 2 : 1);
+    const activeWarForSiege = this.sim.diplomacySystem?.activeWars?.find(w =>
+      (w.attackerId === warband.settlementId && w.defenderId === enemySettlement.id) ||
+      (w.defenderId === warband.settlementId && w.attackerId === enemySettlement.id)
+    );
+    const warbandEraId = warband.eraId || this.sim.civilizationAgeSystem?.getSettlementAge?.(warband.settlementId)?.ageId || 1;
+    const isDevastatingSiege = Boolean(activeWarForSiege?.totalWar) || warbandEraId >= 6;
+    const hasHeavySupport = hasArtillery || hasTank || hasPlane;
+
+    // Multi-stage siege progression (accelerated with artillery, tanks, and air bombing runs)
+    warband.siegeTicks = (warband.siegeTicks || 0) + (hasHeavySupport ? 2 : 1);
     if (hasArtillery) {
       this.combatEffects.push({
         x: enemySettlement.center.x,
@@ -1170,9 +1807,35 @@ export class WarfareSystem {
         fromY: commander.y,
         toX: enemySettlement.center.x,
         toY: enemySettlement.center.y,
-        type: "artillery_shell",
+        type: isCatapult ? "catapult_boulder" : "artillery_shell",
+        duration: isCatapult ? 20 : 15
+      });
+      this.sim.world?.addCrater?.(enemySettlement.center.x, enemySettlement.center.y, isDevastatingSiege ? 2 : 1, isDevastatingSiege ? 220 : 170);
+    }
+    if (hasTank) {
+      this.combatEffects.push({
+        x: enemySettlement.center.x,
+        y: enemySettlement.center.y,
+        fromX: commander.x,
+        fromY: commander.y,
+        toX: enemySettlement.center.x,
+        toY: enemySettlement.center.y,
+        type: "tank_shell",
         duration: 15
       });
+    }
+    if (hasPlane) {
+      this.combatEffects.push({
+        x: enemySettlement.center.x,
+        y: enemySettlement.center.y,
+        fromX: commander.x,
+        fromY: commander.y,
+        toX: enemySettlement.center.x,
+        toY: enemySettlement.center.y,
+        type: "bomb_blast",
+        duration: 22
+      });
+      this.sim.world?.addCrater?.(enemySettlement.center.x, enemySettlement.center.y, 2, 200);
     }
 
     if (warband.siegeTicks < 3) {
@@ -1187,7 +1850,7 @@ export class WarfareSystem {
     // Storming/bombardment inflicts garrison & defender fatalities during breach/assault
     if (warband.siegeTicks >= 4 && enemySettlement.agentIds && enemySettlement.agentIds.size > 0) {
       let stormKills = 0;
-      const maxStormKills = hasArtillery ? 2 : 1;
+      const maxStormKills = isDevastatingSiege ? (hasHeavySupport ? 4 : 3) : (hasArtillery ? 2 : 1);
       for (const did of enemySettlement.agentIds) {
         if (stormKills >= maxStormKills) break;
         const victim = this.sim._agentById(did);
@@ -1200,9 +1863,10 @@ export class WarfareSystem {
 
     // Plunder the enemy stockpile!
     if (enemySettlement.stockpile) {
-      const stolenFood = Math.min(15, Math.floor((enemySettlement.stockpile.food || 0) * 0.4));
-      const stolenWood = Math.min(12, Math.floor((enemySettlement.stockpile.wood || 0) * 0.4));
-      const stolenOre = Math.min(10, Math.floor((enemySettlement.stockpile.ore || 0) * 0.4));
+      const plunderShare = isDevastatingSiege ? 0.55 : 0.4;
+      const stolenFood = Math.min(isDevastatingSiege ? 24 : 15, Math.floor((enemySettlement.stockpile.food || 0) * plunderShare));
+      const stolenWood = Math.min(isDevastatingSiege ? 20 : 12, Math.floor((enemySettlement.stockpile.wood || 0) * plunderShare));
+      const stolenOre = Math.min(isDevastatingSiege ? 16 : 10, Math.floor((enemySettlement.stockpile.ore || 0) * plunderShare));
 
       enemySettlement.stockpile.food = Math.max(0, (enemySettlement.stockpile.food || 0) - stolenFood);
       enemySettlement.stockpile.wood = Math.max(0, (enemySettlement.stockpile.wood || 0) - stolenWood);
@@ -1234,12 +1898,15 @@ export class WarfareSystem {
       const world = this.sim.world;
       if (world.startFire) {
         let burned = 0;
+        const maxBurn = isDevastatingSiege ? 8 : 5;
+        const burnRadius = isDevastatingSiege ? 16 : 14;
+        const burnDmg = isDevastatingSiege ? 80 : 45;
         for (const b of this.sim.buildings) {
           if (!b.complete || b.isRuined || (b.health !== undefined && b.health <= 0)) continue;
           const d = Math.hypot(b.x - enemySettlement.center.x, b.y - enemySettlement.center.y);
-          if (d < 14 && burned < 5) {
-            b.health = Math.max(0, (b.health ?? 100) - 45);
-            world.startFire(Math.floor(b.x), Math.floor(b.y), 40);
+          if (d < burnRadius && burned < maxBurn) {
+            b.health = Math.max(0, (b.health ?? 100) - burnDmg);
+            world.startFire(Math.floor(b.x), Math.floor(b.y), isDevastatingSiege ? 55 : 40);
             if (world.scorchTile) world.scorchTile(Math.floor(b.x), Math.floor(b.y), 240);
             if (b.health <= 0) {
               b.isRuined = true;
@@ -1276,14 +1943,11 @@ export class WarfareSystem {
       }
 
       // Phase 3b Step 6 & 7: weariness from sacking + Holy War temple desecration
-      const war = this.sim.diplomacySystem?.activeWars?.find(w => 
-        (w.attackerId === warband.settlementId && w.defenderId === enemySettlement.id) ||
-        (w.defenderId === warband.settlementId && w.attackerId === enemySettlement.id)
-      );
+      const war = activeWarForSiege;
 
       if (war) {
         war.weariness = war.weariness || {};
-        war.weariness[enemySettlement.id] = (war.weariness[enemySettlement.id] || 0) + 18;
+        war.weariness[enemySettlement.id] = (war.weariness[enemySettlement.id] || 0) + (isDevastatingSiege ? 22 : 18);
       }
       const isConquest = Boolean(war?.goal === "conquest" || war?.isConquest || warband.isConquest);
 
@@ -1370,9 +2034,11 @@ export class WarfareSystem {
           enemySettlement.stockpile.ore = 0;
         }
 
-        // Scorch the entire settlement ground
+        // Scorch and crater the entire settlement ground + stamp city ruin monument
         const ccx = Math.floor(enemySettlement.center.x);
         const ccy = Math.floor(enemySettlement.center.y);
+        enemySettlement.collapseReason = `Razed to total ruin by ${warband.settlementName}`;
+        enemySettlement.ruinsTicks = Math.max(enemySettlement.ruinsTicks || 0, 25);
         for (let dy = -6; dy <= 6; dy++) {
           for (let dx = -6; dx <= 6; dx++) {
             if (dx * dx + dy * dy <= 36 && world.scorchTile) {
@@ -1380,6 +2046,15 @@ export class WarfareSystem {
             }
           }
         }
+        world.addCrater?.(ccx, ccy, 2, 200);
+        world.addSkullMonument?.(
+          enemySettlement.name,
+          ccx,
+          ccy,
+          Math.max(3, enemySettlement.peakPopulation || 5),
+          "city_ruin",
+          this.sim.clock.tick
+        );
 
         if (this.sim.eventBus) {
           this.sim.eventBus.emit("SETTLEMENT_RAZED", {
@@ -1395,7 +2070,7 @@ export class WarfareSystem {
           );
         }
         if (this.sim.diplomacySystem) {
-          this.sim.diplomacySystem.signPeace(warband.settlementId, enemySettlement.id, warband.settlementId, this.sim.clock.tick, "Total Annihilation & City Razed");
+          this.sim.diplomacySystem.signPeace(warband.settlementId, enemySettlement.id, warband.settlementId, this.sim.clock.tick, "Total Annihilation & City Razed", `City of ${enemySettlement.name} razed to ashes by ${warband.settlementName}`);
         }
       } else if (isConquest) {
         this.annexSettlement(warband.settlementId, enemySettlement.id);
@@ -1450,6 +2125,12 @@ export class WarfareSystem {
     }
 
     if (warband.embarked) {
+      for (const sid of warband.soldiers) {
+        const s = this.sim._agentById(sid);
+        if (s && s.alive && !s.embarked && (s.combatRole === "plane" || s.combat?.isFlying)) {
+          s.moveToward(home.center, this.sim.world);
+        }
+      }
       return; // NavalSystem steers the returning raid vessel
     }
     if (this.sim.navalSystem?.tryEmbarkWarband(warband, commander, home.center)) {
@@ -1562,11 +2243,23 @@ export class WarfareSystem {
     const out = [];
     const r2 = radius * radius;
 
-    // Civil war opponents (rebel vs loyalist inside same realm)
+    // Rebellion & Civil War opponents inside same realm
     const myBand = agent.warbandId ? this.warbands.get(agent.warbandId) : null;
     if (myBand?.isCivilWar) {
       for (const wb of this.warbands.values()) {
         if (!wb.active || !wb.isCivilWar || wb.dynastyId !== myBand.dynastyId || wb.civilWarSide === myBand.civilWarSide) continue;
+        for (const sId of wb.soldiers) {
+          const a = this.sim._agentById(sId);
+          if (!a || !a.alive || a.id === agent.id) continue;
+          const dx = a.x - agent.x;
+          const dy = a.y - agent.y;
+          if (dx * dx + dy * dy <= r2) out.push(a);
+        }
+      }
+    }
+    if (myBand?.isRebellion) {
+      for (const wb of this.warbands.values()) {
+        if (!wb.active || !wb.isRebellion || wb.rebelGroupId !== myBand.rebelGroupId || wb.rebelSide === myBand.rebelSide) continue;
         for (const sId of wb.soldiers) {
           const a = this.sim._agentById(sId);
           if (!a || !a.alive || a.id === agent.id) continue;

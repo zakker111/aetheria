@@ -30,7 +30,12 @@ export const BUILDING_TYPES = {
   TOWER: 'tower',
   WALL: 'wall',
   WAREHOUSE: 'warehouse',
-  DOCK: 'dock'
+  GRANARY: 'granary',
+  DOCK: 'dock',
+  FACTORY: 'factory',
+  RESEARCH_LAB: 'research_lab',
+  NUCLEAR_PLANT: 'nuclear_plant',
+  MISSILE_SILO: 'missile_silo'
 };
 
 // Storage capacity per building type (units of food/wood/stone/ore/water).
@@ -39,6 +44,7 @@ export const BUILDING_TYPES = {
 export const STORAGE_CAPACITY = {
   house: 10,
   farm: 40,
+  granary: 140,
   workshop: 30,
   market: 60,
   warehouse: 250,
@@ -48,7 +54,11 @@ export const STORAGE_CAPACITY = {
   castle: 120,
   tower: 20,
   windmill: 50,
-  inn: 40
+  inn: 40,
+  factory: 90,
+  research_lab: 40,
+  nuclear_plant: 80,
+  missile_silo: 30
 };
 
 // Building material costs (units of plank / iron_ingot / gem). Construction
@@ -57,17 +67,22 @@ export const STORAGE_CAPACITY = {
 // plank) and gems only from rare crystal veins — so grand civic projects
 // genuinely depend on the mining -> crafting pipeline.
 export const BUILD_COSTS = {
-  house:     { plank: 2 },
-  farm:      { plank: 2 },
-  dock:      { plank: 4 },
-  workshop:  { plank: 4 },
-  temple:    { plank: 4, iron_ingot: 2 },
-  tower:     { plank: 4, iron_ingot: 2 },
-  barracks:  { plank: 4, iron_ingot: 2 },
-  inn:       { plank: 4, iron_ingot: 1 },
-  market:    { plank: 4, iron_ingot: 1 },
-  warehouse: { plank: 6 },
-  castle:    { plank: 8, iron_ingot: 4, gem: 2 }
+  house:         { plank: 2 },
+  farm:          { plank: 2 },
+  granary:       { plank: 4 },
+  dock:          { plank: 4 },
+  workshop:      { plank: 4 },
+  temple:        { plank: 4, iron_ingot: 2 },
+  tower:         { plank: 4, iron_ingot: 2 },
+  barracks:      { plank: 4, iron_ingot: 2 },
+  inn:           { plank: 4, iron_ingot: 1 },
+  market:        { plank: 4, iron_ingot: 1 },
+  warehouse:     { plank: 6 },
+  castle:        { plank: 8, iron_ingot: 4, gem: 2 },
+  factory:       { plank: 6, iron_ingot: 4 },
+  research_lab:  { plank: 5, iron_ingot: 4 },
+  nuclear_plant: { plank: 6, iron_ingot: 6 },
+  missile_silo:  { plank: 4, iron_ingot: 6 }
 };
 
 export const RESOURCE_TYPES = {

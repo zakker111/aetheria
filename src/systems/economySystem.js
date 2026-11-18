@@ -71,6 +71,13 @@ export class EconomySystem {
         requiredSkills: { combat: 1.0 },
         productivity: 1.0,
         wage: 3
+      },
+      hunter: {
+        name: 'Hunter',
+        description: 'Tracks roaming wildlife across forests and plains for meat and hides',
+        requiredSkills: { gather: 1.0 },
+        productivity: 1.35,
+        wage: 3
       }
     };
     
@@ -164,7 +171,7 @@ export class EconomySystem {
   // specialist who wants out of their current job picks among these; the
   // sim-side demand filter may further narrow the list (e.g. don't quit
   // crafting when the workshop benches are already short-staffed).
-  static CAREER_ALTERNATIVES = ['gatherer', 'farmer', 'lumberjack', 'miner', 'builder'];
+  static CAREER_ALTERNATIVES = ['gatherer', 'farmer', 'hunter', 'lumberjack', 'miner', 'builder'];
 
   // Deterministic reassignment for an agent who *chose* to switch careers:
   // pick the highest-scoring qualified job among `candidates` (never their
@@ -237,6 +244,7 @@ export class EconomySystem {
     const productionMap = {
       gatherer: ['food', 'wood'],
       farmer: ['food'],
+      hunter: ['food', 'meat'],
       miner: ['ore'],
       lumberjack: ['wood'],
       crafter: ['tool']

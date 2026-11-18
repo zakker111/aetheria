@@ -44,6 +44,14 @@ export class WorldState {
     this.fireTiles = new Uint16Array(width * height);
     // Scorched earth layer: per-tile charring intensity (0 = pristine, 255 = charred ash)
     this.scorchedTiles = new Uint8Array(width * height);
+    // Blast crater layer: per-tile crater depth/rim intensity (0 = flat, 255 = deep crater)
+    this.craterTiles = new Uint8Array(width * height);
+    // Nuclear fallout layer: per-tile radiation intensity (0 = safe, 255 = lethal fallout)
+    this.radiationTiles = new Uint8Array(width * height);
+    this._radiationActive = false;
+    // Persistent battlefield monuments & razed city cairns (bounded, JSON-safe)
+    this.skullMonuments = [];
+    this.nextMonumentId = 1;
     this.bridgeTiles = new Uint8Array(width * height); // 1 = bridge deck (walkable over water)
 
     // Spatial index for fast queries (doc 02: spatial indexes)
@@ -58,7 +66,10 @@ export class WorldState {
     // tiles constantly that thrashed the cache back to near-zero hit rate and
     // burned CPU rebuilding identical scans plus churned Map memory (GC).
     this._scanCache = new Map();
+    this._scanBucketCache = new Map();
     this._scanEpoch = 0;
+    this._blockCols = Math.ceil(width / 8);
+    this._blockCounts = new Uint16Array(this._blockCols * Math.ceil(height / 8));
     // Sim clock is wired by Simulation after construction; used only to bound
     // cache growth across ticks (stale-by-epoch entries are pruned, never read).
     this.clock = null;
@@ -935,6 +946,17 @@ export class WorldState {
     return !nonWalkable.includes(terrain.type);
   }
 
+  isTilePassableForAgent(x, y, agent = null) {
+    if (agent && (agent.combatRole === 'plane' || agent.combat?.isFlying)) {
+      return x >= 1 && y >= 1 && x < this.width - 1 && y < this.height - 1;
+    }
+    if (!this.isWalkable(x, y)) return false;
+    if (agent && this.simulation?.fortificationSystem?.isBlockedForAgent(x, y, agent)) {
+      return false;
+    }
+    return true;
+  }
+
   // Bridge network accessors (persistent ground layer, survives save/load).
   isBridge(x, y) {
     if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
@@ -990,6 +1012,83 @@ export class WorldState {
     if (this.scorchedTiles) {
       this.scorchedTiles[idx] = Math.min(255, (this.scorchedTiles[idx] || 0) + amount);
     }
+  }
+
+  addCrater(x, y, radius = 1, intensity = 210) {
+    if (!this.craterTiles) return;
+    const cx = Math.floor(x);
+    const cy = Math.floor(y);
+    const r = Math.max(0, Math.min(8, Math.floor(radius)));
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const tx = cx + dx;
+        const ty = cy + dy;
+        if (tx < 0 || tx >= this.width || ty < 0 || ty >= this.height) continue;
+        const dist = Math.hypot(dx, dy);
+        if (dist > r + 0.35) continue;
+        const idx = ty * this.width + tx;
+        if (this.biome && this.biome[idx] === 'water') continue;
+        const falloff = r === 0 ? 1 : Math.max(0.35, 1 - (dist / (r + 0.6)));
+        const val = Math.round(intensity * falloff);
+        this.craterTiles[idx] = Math.min(255, Math.max(this.craterTiles[idx] || 0, val));
+        this.scorchTile(tx, ty, Math.round(val * 0.85));
+      }
+    }
+  }
+
+  addFallout(x, y, radius = 4, intensity = 220) {
+    if (!this.radiationTiles) return;
+    const cx = Math.floor(x);
+    const cy = Math.floor(y);
+    const r = Math.max(1, Math.min(10, Math.floor(radius)));
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const tx = cx + dx;
+        const ty = cy + dy;
+        if (tx < 0 || tx >= this.width || ty < 0 || ty >= this.height) continue;
+        const dist = Math.hypot(dx, dy);
+        if (dist > r + 0.25) continue;
+        const idx = ty * this.width + tx;
+        const falloff = Math.max(0.25, 1 - (dist / (r + 0.5)));
+        const val = Math.round(intensity * falloff);
+        this.radiationTiles[idx] = Math.min(255, Math.max(this.radiationTiles[idx] || 0, val));
+      }
+    }
+    this._radiationActive = true;
+  }
+
+  addSkullMonument(name, x, y, casualties = 1, kind = 'battle', tick = 0) {
+    if (!Array.isArray(this.skullMonuments)) this.skullMonuments = [];
+    const mx = Math.max(1, Math.min(this.width - 2, x));
+    const my = Math.max(1, Math.min(this.height - 2, y));
+    // Merge into nearby monument of the same kind within 5 tiles
+    for (const mon of this.skullMonuments) {
+      if (Math.hypot(mon.x - mx, mon.y - my) <= 5.0) {
+        mon.casualties = (mon.casualties || 0) + Math.max(1, casualties);
+        mon.tick = Math.max(mon.tick || 0, tick);
+        if (kind === 'nuke' || kind === 'city_ruin') {
+          mon.kind = kind;
+          if (name) mon.name = name;
+        }
+        return mon;
+      }
+    }
+    const mon = {
+      id: this.nextMonumentId++,
+      name: name || 'Field of Fallen Warriors',
+      x: mx,
+      y: my,
+      casualties: Math.max(1, casualties),
+      kind, // 'battle' | 'city_ruin' | 'nuke'
+      tick
+    };
+    this.skullMonuments.push(mon);
+    if (this.skullMonuments.length > 32) {
+      // Prune oldest routine battle marker first, preserving nuclear/razed-city sites when possible
+      const idx = this.skullMonuments.findIndex(m => m.kind === 'battle');
+      this.skullMonuments.splice(idx >= 0 ? idx : 0, 1);
+    }
+    return mon;
   }
 
   /**
@@ -1122,6 +1221,40 @@ export class WorldState {
     return n;
   }
 
+  getCrater(x, y) {
+    const fx = Math.floor(x), fy = Math.floor(y);
+    if (fx < 0 || fy < 0 || fx >= this.width || fy >= this.height || !this.craterTiles) return 0;
+    return this.craterTiles[fy * this.width + fx] || 0;
+  }
+
+  getRadiation(x, y) {
+    const fx = Math.floor(x), fy = Math.floor(y);
+    if (fx < 0 || fy < 0 || fx >= this.width || fy >= this.height || !this.radiationTiles) return 0;
+    return this.radiationTiles[fy * this.width + fx] || 0;
+  }
+
+  /**
+   * Advance nuclear fallout decay deterministically. Returns active irradiated tile count.
+   */
+  updateRadiation(tick) {
+    if (!this.radiationTiles) return 0;
+    const weather = this.simulation?.weatherSystem?.currentWeather?.type || this.simulation?.weatherSystem?.currentWeather || 'clear';
+    const isWet = weather === 'rain' || weather === 'storm';
+    const decayNow = isWet ? (tick % 2 === 0) : (tick % 4 === 0);
+    const rt = this.radiationTiles;
+    let active = 0;
+    for (let i = 0; i < rt.length; i++) {
+      if (rt[i] > 0) {
+        if (decayNow) {
+          rt[i] = Math.max(0, rt[i] - 1);
+        }
+        if (rt[i] > 0) active++;
+      }
+    }
+    this._radiationActive = active > 0;
+    return active;
+  }
+
   /**
    * Get slope between two adjacent tiles
    */
@@ -1195,6 +1328,7 @@ export class WorldState {
     }
     cell.push(entity);
     cell._sorted = false;
+    this._blockCounts[(fy >> 3) * this._blockCols + (fx >> 3)]++;
     // Track registration cell so updateMovedAgents() can relocate the entry
     // without scanning. Must stay in sync with every add/remove path.
     if (entity) {
@@ -1219,6 +1353,8 @@ export class WorldState {
       // scramble a sorted cell and break resume determinism.
       cell.splice(idx, 1);
       cell._sorted = false; // conservative: removal invalidates stamped order
+      const bIdx = (fy >> 3) * this._blockCols + (fx >> 3);
+      if (this._blockCounts[bIdx] > 0) this._blockCounts[bIdx]--;
     }
     if (cell.length === 0) {
       this.spatialGrid[key] = undefined;
@@ -1265,6 +1401,7 @@ export class WorldState {
   rebuildSpatialIndex(agents, resources, buildings, animals = []) {
     this.spatialIndex.clear();
     this.spatialGrid.fill(undefined);
+    this._blockCounts.fill(0);
     for (const agent of agents) {
       if (agent.alive !== false) this.addToSpatialIndex(Math.floor(agent.x), Math.floor(agent.y), agent);
     }
@@ -1300,8 +1437,8 @@ export class WorldState {
 
   getEntitiesNear(x, y, radius) {
     // Single allocation grown with push (the old `push(...spread)` form
-    // re-expanded arrays per cell); bounds-clamped so out-of-map cells are
-    // skipped without touching the Map at all.
+    // re-expanded arrays per cell); bounds-clamped + 8x8 coarse block pruning
+    // skips empty terrain blocks in O(1).
     const entities = [];
     const r = Math.max(0, radius | 0);
     const minX = Math.max(0, x - r), maxX = Math.min(this.width - 1, x + r);
@@ -1309,19 +1446,35 @@ export class WorldState {
     const rSq = radius * radius;
     const w = this.width;
     const grid = this.spatialGrid;
-    for (let cy = minY; cy <= maxY; cy++) {
-      const dy = cy - y;
-      const rowOffset = cy * w;
-      for (let cx = minX; cx <= maxX; cx++) {
-        const dx = cx - x;
-        if (dx * dx + dy * dy > rSq) continue;
-        const cell = grid[rowOffset + cx];
-        if (cell && cell.length > 0) {
-          if (cell.length > 1 && !cell._sorted) {
-            cell.sort(_cmpEntityId);
-            cell._sorted = true;
+    const bCounts = this._blockCounts;
+    const bCols = this._blockCols;
+    const minBy = minY >> 3, maxBy = maxY >> 3;
+    const minBx = minX >> 3, maxBx = maxX >> 3;
+
+    for (let by = minBy; by <= maxBy; by++) {
+      const bRowOffset = by * bCols;
+      const yStart = Math.max(minY, by << 3);
+      const yEnd = Math.min(maxY, (by << 3) + 7);
+      for (let bx = minBx; bx <= maxBx; bx++) {
+        if (bCounts[bRowOffset + bx] === 0) continue;
+        const xStart = Math.max(minX, bx << 3);
+        const xEnd = Math.min(maxX, (bx << 3) + 7);
+        for (let cy = yStart; cy <= yEnd; cy++) {
+          const dy = cy - y;
+          const dySq = dy * dy;
+          const rowOffset = cy * w;
+          for (let cx = xStart; cx <= xEnd; cx++) {
+            const dx = cx - x;
+            if (dx * dx + dySq > rSq) continue;
+            const cell = grid[rowOffset + cx];
+            if (cell && cell.length > 0) {
+              if (cell.length > 1 && !cell._sorted) {
+                cell.sort(_cmpEntityId);
+                cell._sorted = true;
+              }
+              for (let i = 0; i < cell.length; i++) entities.push(cell[i]);
+            }
           }
-          for (let i = 0; i < cell.length; i++) entities.push(cell[i]);
         }
       }
     }
@@ -1329,37 +1482,44 @@ export class WorldState {
   }
 
   // ── Shared per-tick scan cache ─────────────────────────────────────────
-  // Agent perception queries getEntitiesNear() from every agent every tick;
-  // in dense settlements hundreds of agents on the same tile repeat an
-  // identical r^2 sweep. `_getScan` memoizes the raw cell-membership list
-  // per (tile, radius) for one tick only. Safety contract:
-  //  * The cached array is a SUPERSET-safe raw list (square bound only —
-  //    callers must still apply their own exact distance test). It is never
-  //    mutated after caching except by invalidation below, and consumers
-  //    only read it.
-  //  * Any spatial-index mutation (entity moved/added/removed, rebuild)
-  //    calls invalidateScanCache(), clearing every entry — stale lists can
-  //    never survive into a later query.
-  //  * Results are bit-identical to a fresh getEntitiesNear() call: same
-  //    cells, same insertion order, no RNG involved. Determinism preserved.
   _getScan(x, y, r) {
     const key = ((y * this.width + x) << 6) | (r & 63);
     let pair = this._scanCache.get(key);
     if (pair !== undefined) return pair;
     const list = this.getEntitiesNear(x, y, r);
-    // Canonical ID order. Spatial-index insertion order differs between a
-    // fresh run and a save/load resume; perceive() truncates to caps, so the
-    // survivor set must not depend on iteration order. Sorting here (once
-    // per tile/radius per tick, shared by every observing agent) replaces
-    // the old per-agent copy+sort that dominated the tick loop.
     pair = list.length > 1 ? list.sort(_cmpEntityId) : list;
     this._scanCache.set(key, pair);
     return pair;
   }
 
+  // Type-partitioned canonical scan cache: splits sorted entities once per
+  // (tile, r) cache miss into { agents, resources, buildings, animals } so
+  // Agent.perceive() stops scanning each category immediately upon hitting its cap.
+  _getScanBuckets(x, y, r) {
+    const key = ((y * this.width + x) << 6) | (r & 63);
+    let buckets = this._scanBucketCache.get(key);
+    if (buckets !== undefined) return buckets;
+    const list = this._getScan(x, y, r);
+    const agents = [];
+    const resources = [];
+    const buildings = [];
+    const animals = [];
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i];
+      if (e.type === 'agent') agents.push(e);
+      else if (e.type === 'resource') resources.push(e);
+      else if (e.type === 'building') buildings.push(e);
+      else if (e.type === 'animal' && e.alive !== false) animals.push(e);
+    }
+    buckets = { agents, resources, buildings, animals };
+    this._scanBucketCache.set(key, buckets);
+    return buckets;
+  }
+
   invalidateScanCache() {
     if (this._suppressInvalidate) return;
     if (this._scanCache.size > 0) this._scanCache.clear();
+    if (this._scanBucketCache.size > 0) this._scanBucketCache.clear();
   }
 
   // Helper methods for systems to query nearby entities
@@ -1390,6 +1550,10 @@ export class WorldState {
       footTraffic: Array.from(this.footTraffic),
       fireTiles: Array.from(this.fireTiles),
       scorchedTiles: Array.from(this.scorchedTiles),
+      craterTiles: Array.from(this.craterTiles || []),
+      radiationTiles: Array.from(this.radiationTiles || []),
+      skullMonuments: Array.isArray(this.skullMonuments) ? this.skullMonuments.map(m => ({ ...m })) : [],
+      nextMonumentId: this.nextMonumentId || 1,
       bridgeTiles: Array.from(this.bridgeTiles)
     };
   }
@@ -1414,6 +1578,11 @@ export class WorldState {
     world.footTraffic = new Uint16Array(data.footTraffic || new Uint16Array(data.width * data.height));
     world.fireTiles = new Uint16Array(data.fireTiles || new Uint16Array(data.width * data.height));
     world.scorchedTiles = new Uint8Array(data.scorchedTiles || new Uint8Array(data.width * data.height));
+    world.craterTiles = new Uint8Array(data.craterTiles || new Uint8Array(data.width * data.height));
+    world.radiationTiles = new Uint8Array(data.radiationTiles || new Uint8Array(data.width * data.height));
+    world.skullMonuments = Array.isArray(data.skullMonuments) ? data.skullMonuments.map(m => ({ ...m })) : [];
+    world.nextMonumentId = data.nextMonumentId || (world.skullMonuments.length + 1);
+    world._radiationActive = world.radiationTiles.some(v => v > 0);
     world.bridgeTiles = new Uint8Array(data.bridgeTiles || new Uint8Array(data.width * data.height));
     return world;
   }

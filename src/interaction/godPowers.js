@@ -21,15 +21,17 @@ export class Interaction {
   setupTools() {
     if (typeof window === "undefined" || typeof document === "undefined") return;
 
-    // Listen on window for world clicks dispatched by renderer
-    window.addEventListener("worldclick", (e) => {
+    this._onWorldClick = (e) => {
+      if (!e?.detail) return;
       const { x, y } = e.detail;
       this.useTool(x, y);
-    });
-    
-    // Keyboard shortcuts for tools
-    document.addEventListener("keydown", (e) => {
-      switch(e.key) {
+    };
+    window.addEventListener("worldclick", this._onWorldClick);
+
+    this._onKeyDown = (e) => {
+      const tag = document.activeElement?.tagName || "";
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(tag)) return;
+      switch (e.key) {
         case "1":
           this.setTool("inspect");
           break;
@@ -61,7 +63,19 @@ export class Interaction {
           this.setTool("bless");
           break;
       }
-    });
+    };
+    document.addEventListener("keydown", this._onKeyDown);
+  }
+
+  destroy() {
+    if (typeof window !== "undefined" && this._onWorldClick) {
+      window.removeEventListener("worldclick", this._onWorldClick);
+      this._onWorldClick = null;
+    }
+    if (typeof document !== "undefined" && this._onKeyDown) {
+      document.removeEventListener("keydown", this._onKeyDown);
+      this._onKeyDown = null;
+    }
   }
   
   updateUI() {
@@ -151,12 +165,18 @@ export class Interaction {
       }
 
       case "spawn_agent": {
-        if (this.simulation.world.isWalkable(tx, ty)) {
-          const agent = this.simulation.spawnAgent(x, y);
+        const agent = this.simulation.spawnCitizenAt
+          ? this.simulation.spawnCitizenAt(x, y)
+          : (this.simulation.world.isWalkable(tx, ty) ? this.simulation.spawnAgent(x, y) : null);
+
+        if (agent) {
           soundManager.playBless();
-          this.notify(`Spawned ${agent.name}!`);
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("god_effect", { detail: { type: "bless", x: agent.x, y: agent.y, duration: 700 } }));
+          }
+          this.notify(`👤 Spawned ${agent.name} (${this.simulation.agents.length} citizens)!`);
         } else {
-          this.notify("Cannot spawn on water or impassable terrain!");
+          this.notify("Cannot spawn on water, walls, or impassable terrain!");
         }
         break;
       }
@@ -237,6 +257,34 @@ export class Interaction {
           this.notify(`🌉 Built ${res.span}-tile timber bridge across the waters!`);
         } else {
           this.notify(res?.message || res?.reason || "Click on a river or narrow strait (1–10 tiles wide) to span a bridge!");
+        }
+        break;
+      }
+
+      case "build_wall": {
+        const res = this.simulation.fortificationSystem?.placeWallAt(x, y);
+        if (res?.success) {
+          soundManager.playBuild();
+          if (res.action === "repaired") {
+            this.notify(`🔧 Repaired breached ${res.segment?.kind || "wall"} at (${res.segment?.x}, ${res.segment?.y})!`);
+          } else if (res.action === "toggled") {
+            this.notify(`🚪 Converted segment at (${res.segment?.x}, ${res.segment?.y}) to a ${res.segment?.kind}!`);
+          } else {
+            this.notify(`🧱 Built ${res.segment?.kind || "wall"}${res.settlement ? ` for ${res.settlement.name}` : ""} at (${tx}, ${ty})!`);
+          }
+        } else {
+          this.notify(res?.reason || "Click on walkable terrain to build a fortified wall or gate!");
+        }
+        break;
+      }
+
+      case "build_tower": {
+        const res = this.simulation.fortificationSystem?.placeTowerAt(x, y);
+        if (res?.success) {
+          soundManager.playBuild();
+          this.notify(`🗼 Raised defensive Watchtower${res.settlement ? ` for ${res.settlement.name}` : ""} at (${tx}, ${ty})!`);
+        } else {
+          this.notify(res?.reason || "Click on clear walkable terrain to raise a Watchtower!");
         }
         break;
       }
@@ -405,6 +453,25 @@ export class Interaction {
           soundManager.playRain();
           this.notify(`💧 Torrential downpour extinguished ${doused} burning tiles!`);
         }
+        break;
+      }
+
+      case "nuke": {
+        const res = this.simulation.detonateNuclearStrike
+          ? this.simulation.detonateNuclearStrike({
+              x,
+              y,
+              isGodPower: true,
+              reason: "Divine Atomic Strike"
+            })
+          : null;
+        soundManager.playThunder();
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("god_effect", { detail: { type: "nuke", x, y, duration: 2400 } }));
+        }
+        const dead = res?.deaths ?? 0;
+        const ruins = res?.buildingsRuined ?? 0;
+        this.notify(`☢️ Atomic blast at (${tx}, ${ty})! ${dead} casualties, ${ruins} structures shattered.`);
         break;
       }
 

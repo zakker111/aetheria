@@ -31,6 +31,8 @@ export class CanvasRenderer {
     };
 
     this.selectedEntity = null;
+    this.followAgentId = null;
+    this._battleCycleIdx = 0;
     
     // Clouds drifting across the sky
     this.clouds = [];
@@ -117,11 +119,12 @@ export class CanvasRenderer {
 
   setupEventListeners() {
     if (typeof window === "undefined") return;
-    window.addEventListener("god_effect", (e) => {
+    this._onGodEffect = (e) => {
       if (e.detail) {
         this.addVisualEffect(e.detail.type, e.detail.x, e.detail.y, e.detail);
       }
-    });
+    };
+    window.addEventListener("god_effect", this._onGodEffect);
   }
 
   addVisualEffect(type, x, y, data = {}) {
@@ -157,20 +160,23 @@ export class CanvasRenderer {
   }
 
   setupInput() {
+    if (!this.canvas) return;
     let isDragging = false;
     let lastX = 0;
     let lastY = 0;
     let dragDistance = 0;
-    
-    this.canvas.addEventListener("mousedown", (e) => {
+    let touchDistance = 0;
+    let lastTouchClickAt = 0;
+
+    this._onMouseDown = (e) => {
       e.preventDefault();
       isDragging = true;
       lastX = e.clientX;
       lastY = e.clientY;
       dragDistance = 0;
-    });
-    
-    this.canvas.addEventListener("mousemove", (e) => {
+    };
+
+    this._onMouseMove = (e) => {
       if (isDragging) {
         e.preventDefault();
         const dx = e.clientX - lastX;
@@ -198,31 +204,35 @@ export class CanvasRenderer {
         this.camera.y = Math.max(-5, Math.min(this.world.height + 5, this.camera.y));
         this.camera.targetX = this.camera.x;
         this.camera.targetY = this.camera.y;
+        this.followAgentId = null;
         lastX = e.clientX;
         lastY = e.clientY;
       }
-    });
-    
-    this.canvas.addEventListener("mouseup", (e) => {
+    };
+
+    this._onMouseUp = (e) => {
       e.preventDefault();
       isDragging = false;
-    });
-    
-    this.canvas.addEventListener("mouseleave", () => {
+    };
+
+    this._onMouseLeave = () => {
       isDragging = false;
-    });
-    
+    };
+
     // Smooth zoom with wheel
-    this.canvas.addEventListener("wheel", (e) => {
+    this._onWheel = (e) => {
       e.preventDefault();
       const zoomFactor = e.deltaY > 0 ? 0.88 : 1.14;
       const baseZoom = this.camera.targetZoom ?? this.camera.zoom;
       this.camera.targetZoom = Math.max(3.5, Math.min(36, baseZoom * zoomFactor));
-    }, { passive: false });
-    
+    };
+
     // Click to use god powers or inspect
-    this.canvas.addEventListener("click", (e) => {
+    this._onClick = (e) => {
       e.preventDefault();
+      if (Date.now() - lastTouchClickAt < 450) {
+        return;
+      }
       if (dragDistance > 6) {
         // Was dragging the map, ignore click
         return;
@@ -257,25 +267,24 @@ export class CanvasRenderer {
       }
 
       const worldPos = this.screenToWorld(screenX, screenY);
-      
+
       // Dispatch custom event on window for god powers & tools
       window.dispatchEvent(new CustomEvent("worldclick", {
         detail: { x: worldPos.x, y: worldPos.y }
       }));
-    });
+    };
 
     // Touch event handlers for tablets & mobile devices
-    let touchDistance = 0;
-    this.canvas.addEventListener("touchstart", (e) => {
+    this._onTouchStart = (e) => {
       if (e.touches.length === 1) {
         isDragging = true;
         lastX = e.touches[0].clientX;
         lastY = e.touches[0].clientY;
         touchDistance = 0;
       }
-    }, { passive: true });
+    };
 
-    this.canvas.addEventListener("touchmove", (e) => {
+    this._onTouchMove = (e) => {
       if (isDragging && e.touches.length === 1) {
         const cx = e.touches[0].clientX;
         const cy = e.touches[0].clientY;
@@ -302,14 +311,16 @@ export class CanvasRenderer {
         this.camera.y = Math.max(-5, Math.min(this.world.height + 5, this.camera.y));
         this.camera.targetX = this.camera.x;
         this.camera.targetY = this.camera.y;
+        this.followAgentId = null;
         lastX = cx;
         lastY = cy;
       }
-    }, { passive: true });
+    };
 
-    this.canvas.addEventListener("touchend", (e) => {
+    this._onTouchEnd = (e) => {
       isDragging = false;
       if (touchDistance < 8 && e.changedTouches.length === 1) {
+        lastTouchClickAt = Date.now();
         const rect = this.canvas.getBoundingClientRect();
         const screenX = e.changedTouches[0].clientX - rect.left;
         const screenY = e.changedTouches[0].clientY - rect.top;
@@ -318,7 +329,35 @@ export class CanvasRenderer {
           detail: { x: worldPos.x, y: worldPos.y }
         }));
       }
-    }, { passive: true });
+    };
+
+    this.canvas.addEventListener("mousedown", this._onMouseDown);
+    this.canvas.addEventListener("mousemove", this._onMouseMove);
+    this.canvas.addEventListener("mouseup", this._onMouseUp);
+    this.canvas.addEventListener("mouseleave", this._onMouseLeave);
+    this.canvas.addEventListener("wheel", this._onWheel, { passive: false });
+    this.canvas.addEventListener("click", this._onClick);
+    this.canvas.addEventListener("touchstart", this._onTouchStart, { passive: true });
+    this.canvas.addEventListener("touchmove", this._onTouchMove, { passive: true });
+    this.canvas.addEventListener("touchend", this._onTouchEnd, { passive: true });
+  }
+
+  destroy() {
+    if (typeof window !== "undefined" && this._onGodEffect) {
+      window.removeEventListener("god_effect", this._onGodEffect);
+      this._onGodEffect = null;
+    }
+    if (this.canvas) {
+      if (this._onMouseDown) this.canvas.removeEventListener("mousedown", this._onMouseDown);
+      if (this._onMouseMove) this.canvas.removeEventListener("mousemove", this._onMouseMove);
+      if (this._onMouseUp) this.canvas.removeEventListener("mouseup", this._onMouseUp);
+      if (this._onMouseLeave) this.canvas.removeEventListener("mouseleave", this._onMouseLeave);
+      if (this._onWheel) this.canvas.removeEventListener("wheel", this._onWheel);
+      if (this._onClick) this.canvas.removeEventListener("click", this._onClick);
+      if (this._onTouchStart) this.canvas.removeEventListener("touchstart", this._onTouchStart);
+      if (this._onTouchMove) this.canvas.removeEventListener("touchmove", this._onTouchMove);
+      if (this._onTouchEnd) this.canvas.removeEventListener("touchend", this._onTouchEnd);
+    }
   }
 
   /**
@@ -574,7 +613,19 @@ export class CanvasRenderer {
     this._frameNow = Date.now();
     this._currentSimTick = this.simulation?.clock?.tick ?? 0;
 
-    // 0. Smooth Camera Interpolation
+    // 0. Live Agent Follow + Smooth Camera Interpolation
+    if (this.followAgentId != null && this.simulation) {
+      const ag = this.simulation._agentById
+        ? this.simulation._agentById(this.followAgentId)
+        : this.simulation.agents?.find(a => a.id === this.followAgentId);
+      if (ag && ag.alive) {
+        const coords = this.getEntityRenderCoords(ag);
+        this.camera.targetX = coords.x;
+        this.camera.targetY = coords.y;
+      } else {
+        this.followAgentId = null;
+      }
+    }
     this.updateCameraSmoothly();
 
     // 1. Sky & Atmospheric Backdrop
@@ -914,7 +965,9 @@ export class CanvasRenderer {
         const isRoad = Boolean(world.roadTiles && world.roadTiles[idx]);
         const isFire = Boolean(world.fireTiles && world.fireTiles[idx] > 0);
         const isScorched = Boolean(world.scorchedTiles && world.scorchedTiles[idx] > 0);
-        if (!isBridge && !isRoad && !isFire && !isScorched) continue;
+        const isCrater = Boolean(world.craterTiles && world.craterTiles[idx] > 0);
+        const isRad = Boolean(world.radiationTiles && world.radiationTiles[idx] > 0);
+        if (!isBridge && !isRoad && !isFire && !isScorched && !isCrater && !isRad) continue;
 
         const elev = this.getTileElevation(x, y);
 
@@ -927,6 +980,42 @@ export class CanvasRenderer {
 
           const scorchAlpha = Math.min(0.85, (world.scorchedTiles[idx] / 255) * 0.75 + 0.15);
           ctx.fillStyle = `rgba(28, 25, 23, ${scorchAlpha})`;
+          ctx.beginPath();
+          ctx.moveTo(pN.x, pN.y);
+          ctx.lineTo(pE.x, pE.y);
+          ctx.lineTo(pS.x, pS.y);
+          ctx.lineTo(pW.x, pW.y);
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        // Blast Craters in 2.5D
+        if (isCrater) {
+          this.worldToScreenFast(x + 0.5, y + 0.5, elev, pTmp);
+          const intensity = Math.min(1, world.craterTiles[idx] / 220);
+          const rx = Math.max(3, zoom * 0.72 * (0.65 + 0.35 * intensity));
+          const ry = rx * 0.52;
+          ctx.fillStyle = "rgba(15, 13, 12, 0.85)";
+          ctx.beginPath();
+          ctx.ellipse(pTmp.x, pTmp.y, rx, ry, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "rgba(87, 83, 78, 0.75)";
+          ctx.lineWidth = Math.max(1, zoom * 0.08);
+          ctx.beginPath();
+          ctx.ellipse(pTmp.x, pTmp.y - 0.5, rx * 1.05, ry * 1.05, 0, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // Nuclear Fallout Radiation Zones in 2.5D
+        if (isRad) {
+          this.worldToScreenFast(x, y, elev, pN);
+          this.worldToScreenFast(x + 1, y, elev, pE);
+          this.worldToScreenFast(x + 1, y + 1, elev, pS);
+          this.worldToScreenFast(x, y + 1, elev, pW);
+          const radStrength = Math.min(1, world.radiationTiles[idx] / 255);
+          const pulse = 0.75 + 0.25 * Math.sin(now * 0.006 + x * 0.9 + y * 1.1);
+          const radAlpha = Math.min(0.62, radStrength * 0.52 * pulse + 0.08);
+          ctx.fillStyle = `rgba(132, 204, 22, ${radAlpha.toFixed(3)})`;
           ctx.beginPath();
           ctx.moveTo(pN.x, pN.y);
           ctx.lineTo(pE.x, pE.y);
@@ -1098,6 +1187,16 @@ export class CanvasRenderer {
       }
     }
 
+    // 2b. Perimeter City Walls, Gatehouses & Siege Breaches
+    const fortSegments = this.simulation.fortificationSystem?.segments;
+    if (fortSegments && fortSegments.size > 0) {
+      for (const seg of fortSegments.values()) {
+        if (seg.x >= minX - 1 && seg.x <= maxX + 1 && seg.y >= minY - 1 && seg.y <= maxY + 1) {
+          list.push(this.getRenderItem("wall_segment", seg, seg.x + 0.5, seg.y + 0.5, seg.x + seg.y + 0.15));
+        }
+      }
+    }
+
     // 3. Wildlife / Animals (Smooth 60 FPS interpolated motion with viewport culling)
     const animals = this.simulation.animalSystem?.animals;
     if (animals) {
@@ -1137,7 +1236,8 @@ export class CanvasRenderer {
         }
         const coords = this.getEntityRenderCoords(ag);
         if (coords.x >= minX - 1 && coords.x <= maxX + 1 && coords.y >= minY - 1 && coords.y <= maxY + 1) {
-          list.push(this.getRenderItem("agent", ag, coords.x, coords.y, coords.x + coords.y + 0.3));
+          const isFlying = ag.combatRole === "plane" || ag.combat?.isFlying;
+          list.push(this.getRenderItem("agent", ag, coords.x, coords.y, coords.x + coords.y + (isFlying ? 4.5 : 0.3)));
         }
       }
     }
@@ -1183,6 +1283,9 @@ export class CanvasRenderer {
         case "building":
           this.render25DBuilding(item.entity, screen, elev);
           break;
+        case "wall_segment":
+          this.render25DFortification(item.entity, screen);
+          break;
         case "settlement_center":
           this.render25DSettlementCenter(item.entity, screen, elev);
           break;
@@ -1198,9 +1301,128 @@ export class CanvasRenderer {
       }
     }
 
-    // Active Combat Clashes on top
+    // Battlefield Monuments & Active Combat Clashes on top
+    this.renderSkullMonuments(minX, maxX, minY, maxY);
     this.renderWarbandMarkers();
     this.renderCombatEffects();
+  }
+
+  /**
+   * 2.5D Isometric Curtain Walls, Timber Palisades, Gatehouses & Siege Breaches.
+   */
+  render25DFortification(seg, screen) {
+    const ctx = this.ctx;
+    const zoom = this.camera.zoom;
+    const bs = Math.max(5, zoom * 0.96);
+    const now = this._frameNow;
+
+    ctx.save();
+
+    if (seg.state === "breach" || seg.hp <= 0) {
+      // Crumbled Breach Gap: scorched base, broken masonry stumps & rubble chunks
+      ctx.fillStyle = "rgba(28, 25, 23, 0.72)";
+      ctx.beginPath();
+      ctx.ellipse(screen.x, screen.y + bs * 0.08, bs * 0.58, bs * 0.28, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "#475569";
+      ctx.fillRect(screen.x - bs * 0.44, screen.y - bs * 0.28, bs * 0.18, bs * 0.28);
+      ctx.fillRect(screen.x + bs * 0.24, screen.y - bs * 0.22, bs * 0.18, bs * 0.22);
+
+      ctx.fillStyle = "#64748b";
+      ctx.fillRect(screen.x - bs * 0.14, screen.y - bs * 0.08, bs * 0.16, bs * 0.12);
+      ctx.fillRect(screen.x + bs * 0.05, screen.y + bs * 0.02, bs * 0.14, bs * 0.1);
+
+      const dustPhase = (now * 0.002 + (seg.id || 0) * 0.37) % 1;
+      ctx.fillStyle = `rgba(148, 163, 184, ${(0.35 * (1 - dustPhase)).toFixed(2)})`;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - bs * 0.25 - dustPhase * 8, 2 + dustPhase * 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
+
+    // Soft drop shadow
+    ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+    ctx.beginPath();
+    ctx.ellipse(screen.x, screen.y + bs * 0.12, bs * 0.62, bs * 0.3, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (seg.kind === "gate") {
+      // Twin fortified stone/timber gatehouse towers + arched doorway & lantern glow
+      const pH = bs * 1.15;
+      const pW = bs * 0.26;
+      const wallCol = seg.tierKey === "palisade" ? "#78350f" : seg.tierKey === "bastion" ? "#334155" : "#475569";
+      const topCol = seg.tierKey === "palisade" ? "#92400e" : "#94a3b8";
+
+      // Archway lintel + dark timber gate
+      ctx.fillStyle = "#451a03";
+      ctx.fillRect(screen.x - bs * 0.24, screen.y - pH * 0.72, bs * 0.48, pH * 0.72);
+      ctx.fillStyle = wallCol;
+      ctx.fillRect(screen.x - bs * 0.48, screen.y - pH, pW, pH);
+      ctx.fillRect(screen.x + bs * 0.48 - pW, screen.y - pH, pW, pH);
+      ctx.fillStyle = topCol;
+      ctx.fillRect(screen.x - bs * 0.5, screen.y - pH - bs * 0.14, bs * 1.0, bs * 0.18);
+
+      // Gate torches
+      const pulse = 0.75 + 0.25 * Math.sin(now * 0.012 + (seg.id || 0));
+      ctx.fillStyle = `rgba(251, 191, 36, ${pulse.toFixed(2)})`;
+      ctx.beginPath();
+      ctx.arc(screen.x - bs * 0.26, screen.y - pH * 0.52, Math.max(1.5, bs * 0.09), 0, Math.PI * 2);
+      ctx.arc(screen.x + bs * 0.26, screen.y - pH * 0.52, Math.max(1.5, bs * 0.09), 0, Math.PI * 2);
+      ctx.fill();
+    } else if (seg.tierKey === "palisade") {
+      // Sharpened Timber Palisade Stakes
+      const sH = bs * 0.85;
+      ctx.fillStyle = "#78350f";
+      for (let k = -2; k <= 2; k++) {
+        const sx = screen.x + k * bs * 0.18;
+        ctx.fillRect(sx - bs * 0.07, screen.y - sH, bs * 0.14, sH);
+        ctx.beginPath();
+        ctx.moveTo(sx, screen.y - sH - bs * 0.18);
+        ctx.lineTo(sx - bs * 0.07, screen.y - sH);
+        ctx.lineTo(sx + bs * 0.07, screen.y - sH);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.fillStyle = "#451a03";
+      ctx.fillRect(screen.x - bs * 0.46, screen.y - sH * 0.55, bs * 0.92, bs * 0.12);
+    } else {
+      // Stone Curtain Wall or Reinforced Bastion Wall with Crenellations
+      const wH = seg.tierKey === "bastion" ? bs * 1.08 : bs * 0.92;
+      const faceMain = seg.tierKey === "bastion" ? "#334155" : "#475569";
+      const faceLit = seg.tierKey === "bastion" ? "#64748b" : "#94a3b8";
+
+      ctx.fillStyle = faceMain;
+      ctx.fillRect(screen.x - bs * 0.48, screen.y - wH, bs * 0.96, wH);
+      ctx.fillStyle = faceLit;
+      ctx.fillRect(screen.x - bs * 0.48, screen.y - wH, bs * 0.96, bs * 0.16);
+
+      // Merlon battlements along top edge
+      ctx.fillRect(screen.x - bs * 0.46, screen.y - wH - bs * 0.16, bs * 0.22, bs * 0.16);
+      ctx.fillRect(screen.x - bs * 0.11, screen.y - wH - bs * 0.16, bs * 0.22, bs * 0.16);
+      ctx.fillRect(screen.x + bs * 0.24, screen.y - wH - bs * 0.16, bs * 0.22, bs * 0.16);
+    }
+
+    // Battle damage cracks & HP bar when under siege
+    if (seg.maxHp > 0 && seg.hp < seg.maxHp) {
+      const ratio = Math.max(0, Math.min(1, seg.hp / seg.maxHp));
+      ctx.strokeStyle = "#0f172a";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(screen.x - bs * 0.18, screen.y - bs * 0.7);
+      ctx.lineTo(screen.x + bs * 0.04, screen.y - bs * 0.35);
+      ctx.lineTo(screen.x - bs * 0.08, screen.y - bs * 0.1);
+      ctx.stroke();
+
+      const barW = bs * 0.86;
+      ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+      ctx.fillRect(screen.x - barW * 0.5, screen.y - bs * 1.25, barW, 3);
+      ctx.fillStyle = ratio > 0.5 ? "#f59e0b" : "#ef4444";
+      ctx.fillRect(screen.x - barW * 0.5, screen.y - bs * 1.25, barW * ratio, 3);
+    }
+
+    ctx.restore();
   }
 
   /**
@@ -1257,7 +1479,7 @@ export class CanvasRenderer {
     ctx.fill();
 
     if (type === "wood") {
-      // 2.5D Tree with 3D Trunk & Volumetric Foliage Canopy / Stumps
+      // 2.5D Growing Tree Lifecycle (sapling -> young -> mature -> ancient) & Stumps
       if (isDepleted) {
         // Cut timber stump with growth rings & fallen chips
         ctx.fillStyle = "#5c2c16";
@@ -1266,41 +1488,61 @@ export class CanvasRenderer {
         ctx.beginPath();
         ctx.ellipse(screen.x, screen.y - s * 0.3, s * 0.24, s * 0.11, 0, 0, Math.PI * 2);
         ctx.fill();
-        // Inner stump rings
         ctx.strokeStyle = "#713f12";
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.ellipse(screen.x, screen.y - s * 0.3, s * 0.14, s * 0.06, 0, 0, Math.PI * 2);
         ctx.stroke();
-        // Wood chips on ground
         ctx.fillStyle = "#ca8a04";
         ctx.fillRect(screen.x + s * 0.25, screen.y - s * 0.05, s * 0.08, s * 0.05);
         ctx.fillRect(screen.x - s * 0.32, screen.y + s * 0.05, s * 0.07, s * 0.04);
       } else {
-        // Wooden Trunk with bark shading
-        ctx.fillStyle = "#5c2c16";
-        ctx.fillRect(screen.x - s * 0.15, screen.y - s * 0.6, s * 0.3, s * 0.65);
+        const stage = res.growthStage || (fullness < 0.25 ? "sapling" : fullness < 0.6 ? "young" : "mature");
+        const stageScale = stage === "sapling" ? 0.38 : stage === "young" ? 0.68 : stage === "ancient" ? 1.18 : 1.0;
+        const canopyScale = stageScale * (0.65 + 0.35 * fullness);
 
-        // Scale canopy fullness with remaining harvestable wood (0.45 min to 1.0 full)
-        const canopyScale = 0.45 + 0.55 * fullness;
+        if (stage === "sapling") {
+          // Slender sapling shoot with fresh bright leaves
+          ctx.strokeStyle = "#713f12";
+          ctx.lineWidth = Math.max(1.2, s * 0.12);
+          ctx.beginPath();
+          ctx.moveTo(screen.x, screen.y);
+          ctx.lineTo(screen.x, screen.y - s * 0.55);
+          ctx.stroke();
 
-        // Lower Canopy Shadow
-        ctx.fillStyle = "#14532d";
-        ctx.beginPath();
-        ctx.arc(screen.x, screen.y - s * 0.8 * canopyScale, s * 0.7 * canopyScale, 0, Math.PI * 2);
-        ctx.fill();
+          ctx.fillStyle = "#22c55e";
+          ctx.beginPath();
+          ctx.arc(screen.x, screen.y - s * 0.65, s * 0.28, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#86efac";
+          ctx.beginPath();
+          ctx.arc(screen.x - s * 0.08, screen.y - s * 0.72, s * 0.14, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          // Wooden Trunk with bark shading
+          const trunkW = s * (stage === "ancient" ? 0.36 : 0.28) * Math.max(0.75, stageScale);
+          const trunkH = s * 0.64 * Math.max(0.75, stageScale);
+          ctx.fillStyle = "#5c2c16";
+          ctx.fillRect(screen.x - trunkW * 0.5, screen.y - trunkH, trunkW, trunkH + s * 0.05);
 
-        // Upper Canopy Lush Green
-        ctx.fillStyle = "#16a34a";
-        ctx.beginPath();
-        ctx.arc(screen.x, screen.y - s * 1.15 * canopyScale, s * 0.58 * canopyScale, 0, Math.PI * 2);
-        ctx.fill();
+          // Lower Canopy Shadow
+          ctx.fillStyle = stage === "ancient" ? "#052e16" : "#14532d";
+          ctx.beginPath();
+          ctx.arc(screen.x, screen.y - s * 0.8 * canopyScale, s * 0.7 * canopyScale, 0, Math.PI * 2);
+          ctx.fill();
 
-        // Sunlit Leaf Highlight
-        ctx.fillStyle = "#4ade80";
-        ctx.beginPath();
-        ctx.arc(screen.x - s * 0.2 * canopyScale, screen.y - s * 1.3 * canopyScale, s * 0.26 * canopyScale, 0, Math.PI * 2);
-        ctx.fill();
+          // Upper Canopy Lush Green
+          ctx.fillStyle = stage === "young" ? "#22c55e" : "#16a34a";
+          ctx.beginPath();
+          ctx.arc(screen.x, screen.y - s * 1.15 * canopyScale, s * 0.58 * canopyScale, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Sunlit Leaf Highlight
+          ctx.fillStyle = "#4ade80";
+          ctx.beginPath();
+          ctx.arc(screen.x - s * 0.2 * canopyScale, screen.y - s * 1.3 * canopyScale, s * 0.26 * canopyScale, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     } else if (type === "food") {
       // 2.5D Berry Bush / Fruit Orchard / Fallow Patch
@@ -1859,12 +2101,12 @@ export class CanvasRenderer {
       ctx.fillRect(screen.x - bs * 0.32, screen.y - deckH - bs * 0.14, bs * 0.2, bs * 0.05);
 
     } else if (type === "warehouse" || type === "stockpile") {
-      // 2.5D Broad Storage Granary & Supply Cargo Porch
+      // 2.5D Broad Storage Warehouse & Supply Cargo Porch
       const wallH = bs * 0.75;
       ctx.fillStyle = "#78350f";
       ctx.fillRect(screen.x - bs * 0.55, screen.y - wallH, bs * 1.1, wallH);
 
-      // Thatch Roof
+      // Thatch / Timber Roof
       ctx.fillStyle = "#ca8a04";
       ctx.beginPath();
       ctx.moveTo(screen.x, screen.y - wallH - bs * 0.4);
@@ -1876,6 +2118,133 @@ export class CanvasRenderer {
       // Large Double Doors
       ctx.fillStyle = "#292524";
       ctx.fillRect(screen.x - bs * 0.2, screen.y - wallH * 0.6, bs * 0.4, wallH * 0.65);
+
+    } else if (type === "granary") {
+      // 2.5D Domed Stone Granary Silo & Harvest Bins
+      const siloH = bs * 0.95;
+      ctx.fillStyle = "#d6d3d1";
+      ctx.fillRect(screen.x - bs * 0.4, screen.y - siloH, bs * 0.8, siloH);
+      ctx.fillStyle = "#f59e0b";
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - siloH, bs * 0.42, Math.PI, 0);
+      ctx.fill();
+      // Grain sacks beside door
+      ctx.fillStyle = "#eab308";
+      ctx.fillRect(screen.x - bs * 0.52, screen.y - bs * 0.22, bs * 0.2, bs * 0.22);
+      ctx.fillRect(screen.x + bs * 0.3, screen.y - bs * 0.18, bs * 0.2, bs * 0.18);
+
+    } else if (type === "factory") {
+      // 2.5D Heavy Industrial Factory with Sawtooth Roof & Twin Smokestacks
+      const wallH = bs * 0.9;
+      ctx.fillStyle = "#7c2d12";
+      ctx.fillRect(screen.x - bs * 0.62, screen.y - wallH, bs * 1.24, wallH);
+
+      // Steel sawtooth bays
+      ctx.fillStyle = "#334155";
+      for (let i = -1; i <= 0; i++) {
+        const bx = screen.x + i * bs * 0.58;
+        ctx.beginPath();
+        ctx.moveTo(bx, screen.y - wallH);
+        ctx.lineTo(bx + bs * 0.3, screen.y - wallH - bs * 0.32);
+        ctx.lineTo(bx + bs * 0.58, screen.y - wallH);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // Twin tall brick smokestacks + billowing industrial smoke
+      for (const sx of [-bs * 0.38, bs * 0.28]) {
+        ctx.fillStyle = "#475569";
+        ctx.fillRect(screen.x + sx, screen.y - wallH - bs * 0.72, bs * 0.18, bs * 0.72);
+        const sm = ((now * 0.0025 + Math.abs(sx)) % 1);
+        ctx.fillStyle = `rgba(148, 163, 184, ${(0.55 * (1 - sm)).toFixed(2)})`;
+        ctx.beginPath();
+        ctx.arc(screen.x + sx + bs * 0.09 + sm * 5, screen.y - wallH - bs * 0.78 - sm * 14, 3 + sm * 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Glowing amber blast-furnace bay windows
+      ctx.fillStyle = "#f97316";
+      ctx.fillRect(screen.x - bs * 0.42, screen.y - wallH * 0.55, bs * 0.24, bs * 0.22);
+      ctx.fillRect(screen.x + bs * 0.12, screen.y - wallH * 0.55, bs * 0.24, bs * 0.22);
+
+    } else if (type === "research_lab") {
+      // 2.5D Modern Science & Enrichment Laboratory with Rooftop Radar Dish
+      const wallH = bs * 0.85;
+      ctx.fillStyle = "#cbd5e1";
+      ctx.fillRect(screen.x - bs * 0.55, screen.y - wallH, bs * 1.1, wallH);
+      // Blue glass curtain stripe
+      ctx.fillStyle = "#0284c7";
+      ctx.fillRect(screen.x - bs * 0.48, screen.y - wallH * 0.7, bs * 0.96, wallH * 0.32);
+      // Flat roof & radar dome
+      ctx.fillStyle = "#475569";
+      ctx.fillRect(screen.x - bs * 0.6, screen.y - wallH - bs * 0.12, bs * 1.2, bs * 0.14);
+      ctx.fillStyle = "#38bdf8";
+      ctx.beginPath();
+      ctx.arc(screen.x + bs * 0.18, screen.y - wallH - bs * 0.22, bs * 0.22, Math.PI, 0);
+      ctx.fill();
+
+    } else if (type === "nuclear_plant") {
+      // 2.5D Atomic Reactor & Twin Hyperbolic Cooling Towers
+      const tH = bs * 1.15;
+      // Reactor containment dome
+      ctx.fillStyle = "#94a3b8";
+      ctx.fillRect(screen.x - bs * 0.6, screen.y - bs * 0.65, bs * 0.56, bs * 0.65);
+      ctx.fillStyle = "#cbd5e1";
+      ctx.beginPath();
+      ctx.arc(screen.x - bs * 0.32, screen.y - bs * 0.65, bs * 0.28, Math.PI, 0);
+      ctx.fill();
+      // Pulsing Cerenkov cyan reactor indicator
+      const cPulse = 0.55 + 0.45 * Math.sin(now * 0.01 + (b.id || 0));
+      ctx.fillStyle = `rgba(34, 211, 238, ${cPulse.toFixed(2)})`;
+      ctx.beginPath();
+      ctx.arc(screen.x - bs * 0.32, screen.y - bs * 0.36, bs * 0.14, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Twin Cooling Towers with white steam
+      for (const txOff of [bs * 0.08, bs * 0.44]) {
+        const cxTower = screen.x + txOff;
+        ctx.fillStyle = "#64748b";
+        ctx.beginPath();
+        ctx.moveTo(cxTower - bs * 0.2, screen.y);
+        ctx.lineTo(cxTower - bs * 0.13, screen.y - tH);
+        ctx.lineTo(cxTower + bs * 0.13, screen.y - tH);
+        ctx.lineTo(cxTower + bs * 0.2, screen.y);
+        ctx.closePath();
+        ctx.fill();
+        const st = ((now * 0.002 + txOff) % 1);
+        ctx.fillStyle = `rgba(241, 245, 249, ${(0.55 * (1 - st)).toFixed(2)})`;
+        ctx.beginPath();
+        ctx.arc(cxTower, screen.y - tH - 3 - st * 14, 3 + st * 6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+    } else if (type === "missile_silo") {
+      // 2.5D Reinforced ICBM Missile Silo Bunker & Launch Pad
+      const padH = bs * 0.36;
+      ctx.fillStyle = "#334155";
+      ctx.beginPath();
+      ctx.ellipse(screen.x, screen.y, bs * 0.62, bs * 0.36, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#1e293b";
+      ctx.beginPath();
+      ctx.ellipse(screen.x, screen.y - padH * 0.3, bs * 0.42, bs * 0.24, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Retracted blast doors + armed missile tip
+      ctx.fillStyle = "#e2e8f0";
+      ctx.fillRect(screen.x - bs * 0.11, screen.y - bs * 0.72, bs * 0.22, bs * 0.56);
+      ctx.fillStyle = "#ef4444";
+      ctx.beginPath();
+      ctx.moveTo(screen.x, screen.y - bs * 0.98);
+      ctx.lineTo(screen.x - bs * 0.12, screen.y - bs * 0.72);
+      ctx.lineTo(screen.x + bs * 0.12, screen.y - bs * 0.72);
+      ctx.closePath();
+      ctx.fill();
+      // Warning beacon
+      const beaconOn = Math.sin(now * 0.012 + (b.id || 0)) > 0;
+      ctx.fillStyle = beaconOn ? "#a3e635" : "#4d7c0f";
+      ctx.beginPath();
+      ctx.arc(screen.x + bs * 0.36, screen.y - padH * 0.35, Math.max(2, bs * 0.08), 0, Math.PI * 2);
+      ctx.fill();
 
     } else if (type === "monument_pyramid") {
       // 2.5D Majestic Step Pyramid / Great Sun Shrine
@@ -2470,6 +2839,146 @@ export class CanvasRenderer {
     const headBob = (isMoving ? Math.abs(walk) * -1.8 : 0) + limpBob;
 
     const facing = agent._facing || 1;
+    const combatRole = agent.combatRole || agent.combat?.weaponType;
+    const isFlying = combatRole === "plane" || Boolean(agent.combat?.isFlying);
+
+    // 2.5D Armored Battle Tank
+    if (combatRole === "tank") {
+      const ts = Math.max(5, s * 1.45);
+      const bob = isMoving ? Math.sin(now * 0.03 + (agent.id || 0)) * 0.8 : 0;
+      ctx.save();
+      if (facing === -1) {
+        ctx.translate(screen.x, screen.y);
+        ctx.scale(-1, 1);
+        ctx.translate(-screen.x, -screen.y);
+      }
+
+      // Armored Caterpillar Tracks + Roadwheels
+      ctx.fillStyle = "#1e293b";
+      ctx.beginPath();
+      ctx.roundRect(screen.x - ts * 0.85, screen.y - ts * 0.42 + bob, ts * 1.7, ts * 0.44, ts * 0.16);
+      ctx.fill();
+      ctx.fillStyle = "#475569";
+      for (let w = -2; w <= 2; w++) {
+        ctx.beginPath();
+        ctx.arc(screen.x + w * ts * 0.3, screen.y - ts * 0.18 + bob, ts * 0.11, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Sloped Olive-Steel Hull & Faction Stripe
+      ctx.fillStyle = agent.visuals?.flashRed > 0 ? "#f87171" : "#3f6212";
+      if (agent.visuals?.flashRed > 0) agent.visuals.flashRed--;
+      ctx.beginPath();
+      ctx.moveTo(screen.x - ts * 0.78, screen.y - ts * 0.38 + bob);
+      ctx.lineTo(screen.x - ts * 0.62, screen.y - ts * 0.78 + bob);
+      ctx.lineTo(screen.x + ts * 0.72, screen.y - ts * 0.74 + bob);
+      ctx.lineTo(screen.x + ts * 0.82, screen.y - ts * 0.38 + bob);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = agent.factionColor || "#dc2626";
+      ctx.fillRect(screen.x - ts * 0.5, screen.y - ts * 0.62 + bob, ts * 0.9, ts * 0.12);
+
+      // Rotating Turret & Heavy Cannon Barrel
+      ctx.fillStyle = "#4d7c0f";
+      ctx.beginPath();
+      ctx.roundRect(screen.x - ts * 0.36, screen.y - ts * 1.12 + bob, ts * 0.72, ts * 0.38, 3);
+      ctx.fill();
+      ctx.fillStyle = "#1e293b";
+      ctx.fillRect(screen.x + ts * 0.28, screen.y - ts * 0.97 + bob, ts * 0.92, Math.max(2.2, ts * 0.13));
+
+      ctx.restore();
+
+      // Overhead Tank HP bar
+      const curHealth = agent.combat?.health ?? agent.health ?? 220;
+      const maxHealth = agent.combat?.maxHealth ?? agent.maxHealth ?? 220;
+      const barW = Math.max(16, ts * 1.4);
+      const hpRatio = Math.max(0, Math.min(1, curHealth / maxHealth));
+      ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+      ctx.fillRect(screen.x - barW / 2 - 1, screen.y - ts * 1.45 - 1, barW + 2, 4.5);
+      ctx.fillStyle = hpRatio > 0.5 ? "#22c55e" : hpRatio > 0.25 ? "#f59e0b" : "#ef4444";
+      ctx.fillRect(screen.x - barW / 2, screen.y - ts * 1.45, barW * hpRatio, 2.5);
+      ctx.restore();
+      return;
+    }
+
+    // 2.5D Strike Aircraft / Warplane (elevated over ground shadow)
+    if (isFlying) {
+      const ps = Math.max(5.5, s * 1.4);
+      const airLift = Math.max(22, zoom * 2.15) + Math.sin(now * 0.008 + (agent.id || 0)) * 2.5;
+      const airY = screen.y - airLift;
+
+      // Ground shadow far below plane
+      ctx.fillStyle = "rgba(0, 0, 0, 0.28)";
+      ctx.beginPath();
+      ctx.ellipse(screen.x + ps * 0.2, screen.y + 2, ps * 0.85, ps * 0.32, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.save();
+      if (facing === -1) {
+        ctx.translate(screen.x, airY);
+        ctx.scale(-1, 1);
+        ctx.translate(-screen.x, -airY);
+      }
+
+      // Contrail & Afterburner flame
+      const flame = 0.7 + 0.3 * Math.sin(now * 0.04 + (agent.id || 0));
+      ctx.fillStyle = `rgba(249, 115, 22, ${(0.8 * flame).toFixed(2)})`;
+      ctx.beginPath();
+      ctx.moveTo(screen.x - ps * 0.75, airY - ps * 0.08);
+      ctx.lineTo(screen.x - ps * (1.2 + flame * 0.35), airY);
+      ctx.lineTo(screen.x - ps * 0.75, airY + ps * 0.08);
+      ctx.closePath();
+      ctx.fill();
+
+      // Swept Delta Wings
+      ctx.fillStyle = agent.visuals?.flashRed > 0 ? "#f87171" : "#64748b";
+      if (agent.visuals?.flashRed > 0) agent.visuals.flashRed--;
+      ctx.beginPath();
+      ctx.moveTo(screen.x + ps * 0.15, airY);
+      ctx.lineTo(screen.x - ps * 0.55, airY - ps * 0.72);
+      ctx.lineTo(screen.x - ps * 0.78, airY - ps * 0.62);
+      ctx.lineTo(screen.x - ps * 0.35, airY);
+      ctx.lineTo(screen.x - ps * 0.78, airY + ps * 0.62);
+      ctx.lineTo(screen.x - ps * 0.55, airY + ps * 0.72);
+      ctx.closePath();
+      ctx.fill();
+
+      // Sleek Fuselage & Faction Nose Stripe
+      ctx.fillStyle = "#cbd5e1";
+      ctx.beginPath();
+      ctx.moveTo(screen.x + ps * 1.0, airY);
+      ctx.lineTo(screen.x - ps * 0.78, airY - ps * 0.18);
+      ctx.lineTo(screen.x - ps * 0.85, airY);
+      ctx.lineTo(screen.x - ps * 0.78, airY + ps * 0.18);
+      ctx.closePath();
+      ctx.fill();
+
+      // Canopy + Wing Roundels
+      ctx.fillStyle = "#38bdf8";
+      ctx.beginPath();
+      ctx.ellipse(screen.x + ps * 0.38, airY, ps * 0.24, ps * 0.1, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = agent.factionColor || "#dc2626";
+      ctx.beginPath();
+      ctx.arc(screen.x - ps * 0.45, airY - ps * 0.42, ps * 0.1, 0, Math.PI * 2);
+      ctx.arc(screen.x - ps * 0.45, airY + ps * 0.42, ps * 0.1, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+
+      const curHealth = agent.combat?.health ?? agent.health ?? 145;
+      const maxHealth = agent.combat?.maxHealth ?? agent.maxHealth ?? 145;
+      const barW = Math.max(15, ps * 1.3);
+      const hpRatio = Math.max(0, Math.min(1, curHealth / maxHealth));
+      ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+      ctx.fillRect(screen.x - barW / 2 - 1, airY - ps * 0.9 - 1, barW + 2, 4.5);
+      ctx.fillStyle = hpRatio > 0.5 ? "#38bdf8" : hpRatio > 0.25 ? "#f59e0b" : "#ef4444";
+      ctx.fillRect(screen.x - barW / 2, airY - ps * 0.9, barW * hpRatio, 2.5);
+      ctx.restore();
+      return;
+    }
+
     if (facing === -1) {
       ctx.translate(screen.x, screen.y);
       ctx.scale(-1, 1);
@@ -2494,6 +3003,7 @@ export class CanvasRenderer {
     else if (agent.role === "priest" || agent.job === "priest") tunicColor = "#f59e0b";
     else if (agent.role === "builder" || agent.job === "builder") tunicColor = "#b45309";
     else if (agent.role === "lumberjack" || agent.job === "lumberjack") tunicColor = "#15803d";
+    else if (agent.role === "hunter" || agent.job === "hunter") tunicColor = "#047857";
     else if (agent.role === "miner" || agent.job === "miner") tunicColor = "#475569";
     else if (agent.role === "farmer" || agent.job === "farmer") tunicColor = "#84cc16";
 
@@ -2639,6 +3149,13 @@ export class CanvasRenderer {
           ctx.stroke();
         }
       }
+    } else if (agent.job === "hunter" || actType === "hunt") {
+      // Hunting Bow
+      ctx.strokeStyle = "#92400e";
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.arc(screen.x + s * 0.45, screen.y - s * 1.0, s * 0.42, -Math.PI * 0.45, Math.PI * 0.45);
+      ctx.stroke();
     }
 
     // 7. Thought / Emotion Bubble
@@ -2949,6 +3466,39 @@ export class CanvasRenderer {
         ctx.beginPath();
         ctx.arc(screen.x, screen.y, progress * 45, 0, Math.PI * 2);
         ctx.stroke();
+
+      } else if (fx.type === "nuke") {
+        // Atomic Flash, Expanding Shockwave & Rising Mushroom Cloud
+        if (progress < 0.16) {
+          const flashAlpha = (1 - progress / 0.16) * 0.45;
+          ctx.fillStyle = `rgba(255, 255, 240, ${flashAlpha.toFixed(3)})`;
+          ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        }
+        const waveR = Math.max(12, progress * Math.max(110, this.camera.zoom * 14));
+        ctx.strokeStyle = `rgba(251, 146, 60, ${Math.max(0, 1 - progress)})`;
+        ctx.lineWidth = Math.max(2, (1 - progress) * 8);
+        ctx.beginPath();
+        ctx.arc(screen.x, screen.y, waveR, 0, Math.PI * 2);
+        ctx.stroke();
+
+        const cloudAlpha = Math.max(0, 1 - progress * 0.85);
+        const rise = Math.min(1, progress * 1.7) * Math.max(36, this.camera.zoom * 3.8);
+        const capR = Math.max(16, this.camera.zoom * 1.9 * (0.45 + progress * 0.9));
+        // Stem
+        ctx.fillStyle = `rgba(234, 88, 12, ${(cloudAlpha * 0.55).toFixed(3)})`;
+        ctx.fillRect(screen.x - capR * 0.22, screen.y - rise, capR * 0.44, rise);
+        // Mushroom Cap
+        const capGrad = ctx.createRadialGradient(
+          screen.x, screen.y - rise, capR * 0.12,
+          screen.x, screen.y - rise, capR
+        );
+        capGrad.addColorStop(0, `rgba(254, 249, 195, ${(cloudAlpha * 0.95).toFixed(3)})`);
+        capGrad.addColorStop(0.45, `rgba(249, 115, 22, ${(cloudAlpha * 0.85).toFixed(3)})`);
+        capGrad.addColorStop(1, `rgba(68, 64, 60, ${(cloudAlpha * 0.4).toFixed(3)})`);
+        ctx.fillStyle = capGrad;
+        ctx.beginPath();
+        ctx.ellipse(screen.x, screen.y - rise, capR, capR * 0.58, 0, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
   }
@@ -2996,10 +3546,22 @@ export class CanvasRenderer {
           this.ctx.fillRect(screen.x, screen.y, zoom, zoom);
         }
 
-        // 3. Scorched Earth in 2D
+        // 3. Scorched Earth, Craters & Fallout in 2D
         if (world.scorchedTiles && world.scorchedTiles[idx] > 0) {
           const scorchAlpha = Math.min(0.88, (world.scorchedTiles[idx] / 255) * 0.8 + 0.18);
           this.ctx.fillStyle = `rgba(24, 20, 18, ${scorchAlpha})`;
+          this.ctx.fillRect(screen.x, screen.y, zoom + 0.5, zoom + 0.5);
+        }
+        if (world.craterTiles && world.craterTiles[idx] > 0) {
+          this.ctx.fillStyle = "rgba(15, 13, 12, 0.85)";
+          this.ctx.beginPath();
+          this.ctx.arc(screen.x + zoom * 0.5, screen.y + zoom * 0.5, Math.max(2, zoom * 0.42), 0, Math.PI * 2);
+          this.ctx.fill();
+        }
+        if (world.radiationTiles && world.radiationTiles[idx] > 0) {
+          const radPulse = 0.75 + 0.25 * Math.sin(now * 0.006 + x + y);
+          const radAlpha = Math.min(0.6, (world.radiationTiles[idx] / 255) * 0.5 * radPulse + 0.08);
+          this.ctx.fillStyle = `rgba(132, 204, 22, ${radAlpha.toFixed(3)})`;
           this.ctx.fillRect(screen.x, screen.y, zoom + 0.5, zoom + 0.5);
         }
 
@@ -3083,6 +3645,25 @@ export class CanvasRenderer {
         }
       }
     }
+    if (this.simulation.fortificationSystem?.segments) {
+      for (const seg of this.simulation.fortificationSystem.segments.values()) {
+        if (seg.x < startX - 1 || seg.x > endX + 1 || seg.y < startY - 1 || seg.y > endY + 1) continue;
+        const screen = this.worldToScreen(seg.x, seg.y);
+        if (seg.state === "breach" || seg.hp <= 0) {
+          this.ctx.fillStyle = "rgba(71, 85, 105, 0.6)";
+          this.ctx.fillRect(screen.x + zoom * 0.15, screen.y + zoom * 0.15, zoom * 0.3, zoom * 0.3);
+          this.ctx.fillRect(screen.x + zoom * 0.55, screen.y + zoom * 0.5, zoom * 0.25, zoom * 0.25);
+        } else if (seg.kind === "gate") {
+          this.ctx.fillStyle = "#b45309";
+          this.ctx.fillRect(screen.x + 1, screen.y + 1, Math.max(3, zoom - 2), Math.max(3, zoom - 2));
+          this.ctx.fillStyle = "#fbbf24";
+          this.ctx.fillRect(screen.x + zoom * 0.35, screen.y + zoom * 0.35, Math.max(2, zoom * 0.3), Math.max(2, zoom * 0.3));
+        } else {
+          this.ctx.fillStyle = seg.tierKey === "palisade" ? "#78350f" : seg.tierKey === "bastion" ? "#334155" : "#64748b";
+          this.ctx.fillRect(screen.x, screen.y, zoom, zoom);
+        }
+      }
+    }
     if (this.simulation.animalSystem?.animals) {
       for (const an of this.simulation.animalSystem.animals) {
         if (an.alive === false) continue;
@@ -3110,7 +3691,8 @@ export class CanvasRenderer {
       }
     }
 
-    // Active Warband markers & combat clashes in 2D
+    // Battlefield monuments, warband markers & combat clashes in 2D
+    this.renderSkullMonuments(startX, endX, startY, endY);
     this.renderWarbandMarkers();
     this.renderCombatEffects();
   }
@@ -3206,7 +3788,8 @@ export class CanvasRenderer {
       const size = wb.markerSize || wb.soldiers.length || 1;
       const rx = Math.max(10, Math.min(46, size * 2.4)) * (zoom / 20);
       const ry = rx * 0.55;
-      const engaging = wb.state === "engaging" || wb.state === "sieging" || wb.state === "clashing";
+      const breaching = wb.state === "breaching";
+      const engaging = wb.state === "engaging" || wb.state === "sieging" || wb.state === "clashing" || breaching;
       const routing = wb.state === "retreating" || (wb.markerMorale !== undefined && wb.markerMorale <= 25);
       const banner = wb.bannerColor || "#ef4444";
 
@@ -3250,11 +3833,11 @@ export class CanvasRenderer {
       const eraTag = (wb.eraId || 1) >= 6 ? " 🚀" : (wb.eraId || 1) === 5 ? " ⚙️" : "";
       ctx.fillText(`${wb.settlementName || "Warband"}${eraTag} (${size})`, screen.x, screen.y - ry - 16);
 
-      // Clash FX for engaged bands: pulsing ⚔️ + rising smoke particles
+      // Clash FX for engaged/breaching bands: pulsing icon + rising smoke particles
       if (engaging) {
         const pulse = 1 + 0.15 * Math.sin(tick * 0.35);
         ctx.font = `${Math.max(14, zoom * 0.8) * pulse}px sans-serif`;
-        ctx.fillText("⚔️", screen.x, screen.y + 4);
+        ctx.fillText(breaching ? "🧱" : "⚔️", screen.x, screen.y + 4);
 
         // Smoke: deterministic pseudo-random offsets from tick + warband id
         for (let s = 0; s < 3; s++) {
@@ -3268,10 +3851,12 @@ export class CanvasRenderer {
           ctx.fill();
         }
 
-        // Red combat glow ring
+        // Red combat glow ring (amber during wall battering)
         ctx.beginPath();
         ctx.ellipse(screen.x, screen.y, rx + 3, ry + 2, 0, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(239, 68, 68, ${0.35 + 0.25 * Math.sin(tick * 0.3)})`;
+        ctx.strokeStyle = breaching
+          ? `rgba(249, 115, 22, ${0.40 + 0.25 * Math.sin(tick * 0.3)})`
+          : `rgba(239, 68, 68, ${0.35 + 0.25 * Math.sin(tick * 0.3)})`;
         ctx.lineWidth = 2;
         ctx.stroke();
       } else if (routing) {
@@ -3298,6 +3883,40 @@ export class CanvasRenderer {
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
+  renderSkullMonuments(minX = 0, maxX = Infinity, minY = 0, maxY = Infinity) {
+    const monuments = this.world?.skullMonuments;
+    if (!monuments || monuments.length === 0) return;
+    const ctx = this.ctx;
+    const zoom = this.camera.zoom;
+    ctx.save();
+    for (let i = 0; i < monuments.length; i++) {
+      const m = monuments[i];
+      if (m.x < minX - 2 || m.x > maxX + 2 || m.y < minY - 2 || m.y > maxY + 2) continue;
+      const elev = this.getInterpolatedElevation(m.x, m.y);
+      const screen = this.worldToScreen(m.x, m.y, elev);
+
+      // Stone / ash cairn base
+      const baseR = Math.max(3, zoom * 0.36);
+      ctx.fillStyle = m.kind === "nuke" ? "rgba(132, 204, 22, 0.35)" : "rgba(28, 25, 23, 0.72)";
+      ctx.beginPath();
+      ctx.ellipse(screen.x, screen.y + 1, baseR * 1.15, baseR * 0.55, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      const glyph = m.kind === "nuke" ? "☢️" : m.kind === "city_ruin" ? "🏚️" : "💀";
+      ctx.font = `${Math.max(10, zoom * 0.75)}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.fillText(glyph, screen.x, screen.y - 2);
+
+      if (zoom >= 11 && m.label) {
+        ctx.font = "600 10px sans-serif";
+        ctx.fillStyle = "rgba(241, 245, 249, 0.88)";
+        const text = m.casualties > 0 ? `${m.label} (${m.casualties})` : m.label;
+        ctx.fillText(text, screen.x, screen.y + Math.max(10, zoom * 0.5));
+      }
+    }
+    ctx.restore();
+  }
+
   renderCombatEffects() {
     if (!this.simulation?.warfareSystem?.combatEffects) return;
     const effects = this.simulation.warfareSystem.combatEffects;
@@ -3306,14 +3925,62 @@ export class CanvasRenderer {
     ctx.save();
     for (const eff of effects) {
       const screen = this.worldToScreen(eff.x, eff.y);
-      const maxDur = eff.type === "casualty" ? 25 : 15;
+      const maxDur = eff.type === "nuke" ? 55 : eff.type === "bomb_blast" ? 26 : eff.type === "casualty" ? 25 : eff.type === "wall_breach" ? 24 : eff.type === "catapult_boulder" ? 18 : eff.type === "tank_shell" || eff.type === "air_strafing" ? 16 : 15;
       const progress = Math.max(0, Math.min(1, 1 - (eff.duration / maxDur)));
       const alpha = Math.max(0, 1 - progress);
 
       ctx.save();
       ctx.globalAlpha = alpha;
 
-      if (eff.type === "shield_block") {
+      if (eff.type === "nuke") {
+        // Multi-stage atomic flash, shockwave ring & towering mushroom cloud
+        if (progress < 0.14) {
+          ctx.fillStyle = `rgba(255, 255, 240, ${(1 - progress / 0.14) * 0.38})`;
+          ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        }
+        const shockR = 14 + progress * Math.max(95, this.camera.zoom * 11);
+        ctx.strokeStyle = `rgba(251, 146, 60, ${alpha})`;
+        ctx.lineWidth = Math.max(2, (1 - progress) * 7);
+        ctx.beginPath();
+        ctx.arc(screen.x, screen.y, shockR, 0, Math.PI * 2);
+        ctx.stroke();
+
+        const stemH = Math.min(1, progress * 1.6) * Math.max(32, this.camera.zoom * 3.4);
+        const capR = Math.max(14, this.camera.zoom * 1.6 * (0.5 + progress * 0.85));
+        ctx.fillStyle = `rgba(234, 88, 12, ${alpha * 0.55})`;
+        ctx.fillRect(screen.x - capR * 0.2, screen.y - stemH, capR * 0.4, stemH);
+
+        const capGrad = ctx.createRadialGradient(screen.x, screen.y - stemH, capR * 0.1, screen.x, screen.y - stemH, capR);
+        capGrad.addColorStop(0, "rgba(254, 249, 195, 0.95)");
+        capGrad.addColorStop(0.5, "rgba(249, 115, 22, 0.85)");
+        capGrad.addColorStop(1, "rgba(87, 83, 78, 0.25)");
+        ctx.fillStyle = capGrad;
+        ctx.beginPath();
+        ctx.ellipse(screen.x, screen.y - stemH, capR, capR * 0.55, 0, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (eff.type === "catapult_boulder") {
+        // Parabolic siege boulder arc with flame trail & dust impact
+        const pFrom = (eff.fromX !== undefined && eff.fromY !== undefined) ? this.worldToScreen(eff.fromX, eff.fromY) : screen;
+        const pTo = (eff.toX !== undefined && eff.toY !== undefined) ? this.worldToScreen(eff.toX, eff.toY) : screen;
+        const arcH = Math.max(18, Math.hypot(pTo.x - pFrom.x, pTo.y - pFrom.y) * 0.35);
+        const bx = pFrom.x + (pTo.x - pFrom.x) * progress;
+        const by = pFrom.y + (pTo.y - pFrom.y) * progress - Math.sin(progress * Math.PI) * arcH;
+        ctx.strokeStyle = "rgba(249, 115, 22, 0.45)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(pFrom.x, pFrom.y - 4);
+        ctx.quadraticCurveTo((pFrom.x + pTo.x) * 0.5, Math.min(pFrom.y, pTo.y) - arcH, pTo.x, pTo.y);
+        ctx.stroke();
+
+        ctx.fillStyle = "#57534e";
+        ctx.beginPath();
+        ctx.arc(bx, by, Math.max(3, this.camera.zoom * 0.25), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#f97316";
+        ctx.beginPath();
+        ctx.arc(bx, by - 1, Math.max(1.8, this.camera.zoom * 0.14), 0, Math.PI * 2);
+        ctx.fill();
+      } else if (eff.type === "shield_block") {
         // Metallic block ring expanding outward
         const rad = 4 + progress * 14;
         ctx.strokeStyle = "rgba(147, 197, 253, 0.9)";
@@ -3321,7 +3988,6 @@ export class CanvasRenderer {
         ctx.beginPath();
         ctx.arc(screen.x, screen.y - 6, rad, 0, Math.PI * 2);
         ctx.stroke();
-        // Mini shield icon
         ctx.font = `${Math.max(11, this.camera.zoom * 0.9)}px sans-serif`;
         ctx.textAlign = "center";
         ctx.fillText("🛡️", screen.x, screen.y - 12 - progress * 8);
@@ -3335,42 +4001,99 @@ export class CanvasRenderer {
         ctx.font = `${Math.max(14, this.camera.zoom * 1.3)}px sans-serif`;
         ctx.textAlign = "center";
         ctx.fillText("💀", screen.x, screen.y - 10 - progress * 16);
-      } else if (eff.type === "explosion") {
-        // Artillery blast shockwave & fiery fireball
-        const blastR = 8 + progress * 22;
+      } else if (eff.type === "explosion" || eff.type === "bomb_blast") {
+        // Artillery or air bomb blast shockwave, fireball & soot ring
+        const isBomb = eff.type === "bomb_blast";
+        const blastR = (isBomb ? 14 : 10) + progress * (isBomb ? 34 : 26);
         const grad = ctx.createRadialGradient(screen.x, screen.y - 4, 0, screen.x, screen.y - 4, blastR);
-        grad.addColorStop(0, "rgba(255, 251, 235, 0.9)");
-        grad.addColorStop(0.4, "rgba(249, 115, 22, 0.7)");
+        grad.addColorStop(0, "rgba(255, 251, 235, 0.95)");
+        grad.addColorStop(0.4, isBomb ? "rgba(239, 68, 68, 0.85)" : "rgba(249, 115, 22, 0.78)");
         grad.addColorStop(1, "rgba(127, 29, 29, 0)");
         ctx.fillStyle = grad;
         ctx.beginPath();
         ctx.arc(screen.x, screen.y - 4, blastR, 0, Math.PI * 2);
         ctx.fill();
-      } else if (eff.type === "musket_shot" || eff.type === "tracer_fire" || eff.type === "artillery_shell") {
+        ctx.strokeStyle = isBomb ? "rgba(248, 113, 113, 0.7)" : "rgba(251, 146, 60, 0.6)";
+        ctx.lineWidth = isBomb ? 2.2 : 1.5;
+        ctx.beginPath();
+        ctx.arc(screen.x, screen.y - 4, blastR * 1.15, 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (eff.type === "air_strafing") {
+        // Twin autocannon tracer strafing streaks from high altitude to ground target
         const pFrom = (eff.fromX !== undefined && eff.fromY !== undefined) ? this.worldToScreen(eff.fromX, eff.fromY) : screen;
         const pTo = (eff.toX !== undefined && eff.toY !== undefined) ? this.worldToScreen(eff.toX, eff.toY) : screen;
-        ctx.strokeStyle = eff.type === "tracer_fire" ? "#38bdf8" : eff.type === "artillery_shell" ? "#f97316" : "#fbbf24";
-        ctx.lineWidth = eff.type === "artillery_shell" ? 3 : 1.6;
+        const lift = Math.max(22, this.camera.zoom * 2.15);
+        ctx.strokeStyle = "#38bdf8";
+        ctx.lineWidth = 2.1;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(pFrom.x - 4, pFrom.y - lift);
+        ctx.lineTo(pTo.x - 2, pTo.y - 4);
+        ctx.moveTo(pFrom.x + 4, pFrom.y - lift);
+        ctx.lineTo(pTo.x + 2, pTo.y - 4);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else if (eff.type === "musket_shot" || eff.type === "tracer_fire" || eff.type === "artillery_shell" || eff.type === "tank_shell") {
+        const pFrom = (eff.fromX !== undefined && eff.fromY !== undefined) ? this.worldToScreen(eff.fromX, eff.fromY) : screen;
+        const pTo = (eff.toX !== undefined && eff.toY !== undefined) ? this.worldToScreen(eff.toX, eff.toY) : screen;
+        ctx.strokeStyle = eff.type === "tracer_fire" ? "#38bdf8" : eff.type === "tank_shell" ? "#facc15" : eff.type === "artillery_shell" ? "#f97316" : "#fbbf24";
+        ctx.lineWidth = eff.type === "artillery_shell" || eff.type === "tank_shell" ? 3.2 : 1.6;
         ctx.beginPath();
         ctx.moveTo(pFrom.x, pFrom.y - 8);
         ctx.lineTo(pTo.x, pTo.y - 8);
         ctx.stroke();
+        // Muzzle flash & smoke puff
         ctx.fillStyle = "#fef08a";
         ctx.beginPath();
-        ctx.arc(pFrom.x, pFrom.y - 8, 2.5, 0, Math.PI * 2);
+        ctx.arc(pFrom.x, pFrom.y - 8, eff.type === "tank_shell" ? 4.5 : 3, 0, Math.PI * 2);
         ctx.fill();
+        ctx.fillStyle = `rgba(148, 163, 184, ${(0.45 * alpha).toFixed(2)})`;
+        ctx.beginPath();
+        ctx.arc(pFrom.x, pFrom.y - 10 - progress * 8, 3 + progress * 5, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (eff.type === "wall_hit" || eff.type === "wall_breach") {
+        const isBreach = eff.type === "wall_breach";
+        const spread = progress * (isBreach ? 22 : 13);
+        ctx.fillStyle = isBreach ? "rgba(100, 116, 139, 0.72)" : "rgba(148, 163, 184, 0.7)";
+        ctx.beginPath();
+        ctx.arc(screen.x, screen.y - 6 - progress * 8, 5 + progress * (isBreach ? 14 : 7), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#475569";
+        ctx.fillRect(screen.x + spread, screen.y - 6 - spread * 0.7, 3, 3);
+        ctx.fillRect(screen.x - spread, screen.y - 8 - spread * 0.5, 3, 3);
+        ctx.fillRect(screen.x + spread * 0.5, screen.y - 4 + spread * 0.4, 2.5, 2.5);
+        if (isBreach) {
+          ctx.font = `${Math.max(12, this.camera.zoom * 1.1)}px sans-serif`;
+          ctx.textAlign = "center";
+          ctx.fillText("🧱", screen.x, screen.y - 12 - progress * 12);
+        }
       } else if (eff.type === "arrow") {
-        ctx.font = `${Math.max(11, this.camera.zoom * 0.9)}px sans-serif`;
-        ctx.textAlign = "center";
-        ctx.fillText("🏹", screen.x, screen.y - 8 - progress * 10);
+        if (eff.fromX !== undefined && eff.fromY !== undefined) {
+          const pFrom = this.worldToScreen(eff.fromX, eff.fromY);
+          const pTo = (eff.toX !== undefined && eff.toY !== undefined) ? this.worldToScreen(eff.toX, eff.toY) : screen;
+          const ax = pFrom.x + (pTo.x - pFrom.x) * progress;
+          const ay = pFrom.y - 10 + (pTo.y - pFrom.y) * progress - Math.sin(progress * Math.PI) * 14;
+          ctx.strokeStyle = "#fde68a";
+          ctx.lineWidth = 1.6;
+          ctx.beginPath();
+          ctx.moveTo(ax, ay);
+          ctx.lineTo(ax - (pTo.x - pFrom.x) * 0.12, ay - (pTo.y - pFrom.y) * 0.12 + 3);
+          ctx.stroke();
+        } else {
+          ctx.font = `${Math.max(11, this.camera.zoom * 0.9)}px sans-serif`;
+          ctx.textAlign = "center";
+          ctx.fillText("🏹", screen.x, screen.y - 8 - progress * 10);
+        }
       } else {
-        // Clashing steel sparks
-        const sparkDist = progress * 10;
+        // Denser clashing steel sparks + ember flecks
+        const sparkDist = progress * 12;
         ctx.fillStyle = "#fef08a";
         ctx.fillRect(screen.x + sparkDist, screen.y - 8 - sparkDist, 2.5, 2.5);
         ctx.fillRect(screen.x - sparkDist, screen.y - 8 - sparkDist, 2.5, 2.5);
-        ctx.fillRect(screen.x + sparkDist * 0.7, screen.y - 8 + sparkDist * 0.7, 2, 2);
-        ctx.fillRect(screen.x - sparkDist * 0.7, screen.y - 8 + sparkDist * 0.7, 2, 2);
+        ctx.fillRect(screen.x + sparkDist * 0.75, screen.y - 8 + sparkDist * 0.75, 2.2, 2.2);
+        ctx.fillRect(screen.x - sparkDist * 0.75, screen.y - 8 + sparkDist * 0.75, 2.2, 2.2);
+        ctx.fillStyle = "#fb923c";
+        ctx.fillRect(screen.x, screen.y - 10 - sparkDist * 1.15, 2, 2);
 
         ctx.font = `${Math.max(13, this.camera.zoom * 1.1)}px sans-serif`;
         ctx.textAlign = "center";
@@ -3516,10 +4239,54 @@ export class CanvasRenderer {
   }
 
   /**
+   * Focus camera on the next active battle, siege, war front line, or blast monument.
+   */
+  focusNextBattle() {
+    const sim = this.simulation;
+    if (!sim) return null;
+    const targets = [];
+    const warbands = sim.warfareSystem?.warbands ? [...sim.warfareSystem.warbands.values()] : [];
+    for (const wb of warbands) {
+      if (!wb.active) continue;
+      if (wb.state === "engaging" || wb.state === "sieging" || wb.state === "clashing") {
+        targets.push({ x: wb.x, y: wb.y, label: `${wb.settlementName || "Warband"} (${wb.state})` });
+      }
+    }
+    if (targets.length === 0 && sim.diplomacySystem?.activeWars) {
+      for (const w of sim.diplomacySystem.activeWars) {
+        if (w.active && w.frontLine) {
+          targets.push({ x: w.frontLine.x, y: w.frontLine.y, label: `${w.attackerName} vs ${w.defenderName}` });
+        }
+      }
+    }
+    if (targets.length === 0 && sim.warfareSystem?.combatEffects) {
+      for (const eff of sim.warfareSystem.combatEffects) {
+        if (eff.type === "nuke" || eff.type === "explosion") {
+          targets.push({ x: eff.x, y: eff.y, label: eff.type === "nuke" ? "Atomic Blast" : "Artillery Clash" });
+        }
+      }
+    }
+    if (targets.length === 0 && this.world?.skullMonuments?.length > 0) {
+      const mons = this.world.skullMonuments;
+      for (let i = mons.length - 1; i >= Math.max(0, mons.length - 6); i--) {
+        const m = mons[i];
+        targets.push({ x: m.x, y: m.y, label: m.label || "Battlefield Scar" });
+      }
+    }
+    if (targets.length === 0) return null;
+    const idx = this._battleCycleIdx % targets.length;
+    this._battleCycleIdx = (this._battleCycleIdx + 1) % targets.length;
+    const pt = targets[idx];
+    this.centerOn(pt.x, pt.y, Math.max(this.camera.zoom, 15));
+    return pt;
+  }
+
+  /**
    * Smoothly eases or jumps the camera to a world position (front lines, settlements, agents).
    */
-  centerOn(x, y, zoom = null, immediate = false) {
+  centerOn(x, y, zoom = null, immediate = false, keepFollow = false) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    if (!keepFollow) this.followAgentId = null;
     const targetX = Math.max(-5, Math.min(this.world.width + 5, x));
     const targetY = Math.max(-5, Math.min(this.world.height + 5, y));
     this.camera.targetX = targetX;

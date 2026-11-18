@@ -22,6 +22,8 @@ import {
   WarSummary,
   TreatySummary,
   RelationSummary,
+  DiplomaticLogEntry,
+  ChronicleEntrySummary,
   InspectedEntityData,
 } from './types';
 
@@ -35,8 +37,9 @@ export const App: React.FC = () => {
   const [rendererInstance, setRendererInstance] = useState<any>(null);
   const [isMuted, setIsMuted] = useState(() => soundManager.isMuted());
 
-  // Scenario - Warring Kingdoms is default and always active
-  const scenario = 'warring';
+  // Scenario - default to Tribal Warring Kingdoms (switchable via ControlsHeader to Modern & Nuclear)
+  const [scenario, setScenario] = useState<'modern_nuclear' | 'warring'>('warring');
+  const [worldNonce, setWorldNonce] = useState(0);
 
   // UI state
   const [currentTool, setCurrentTool] = useState<ToolType>('inspect');
@@ -64,13 +67,13 @@ export const App: React.FC = () => {
   const [wars, setWars] = useState<WarSummary[]>([]);
   const [treaties, setTreaties] = useState<TreatySummary[]>([]);
   const [relations, setRelations] = useState<RelationSummary[]>([]);
+  const [diplomaticHistory, setDiplomaticHistory] = useState<DiplomaticLogEntry[]>([]);
+  const [followAgentId, setFollowAgentId] = useState<number | null>(null);
 
   const [societiesOpen, setSocietiesOpen] = useState(true);
-  const [diplomacyOpen, setDiplomacyOpen] = useState(false);
+  const [diplomacyOpen, setDiplomacyOpen] = useState(true);
   const societiesOpenRef = useRef(societiesOpen);
   societiesOpenRef.current = societiesOpen;
-  const diplomacyOpenRef = useRef(diplomacyOpen);
-  diplomacyOpenRef.current = diplomacyOpen;
   const [civilizationOpen, setCivilizationOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [currentWeather, setCurrentWeather] = useState<{
@@ -87,6 +90,7 @@ export const App: React.FC = () => {
   const [chronicleEvents, setChronicleEvents] = useState<string[]>([
     'World awakened with 128×128 terrain and biomes.',
   ]);
+  const [chronicleEntries, setChronicleEntries] = useState<ChronicleEntrySummary[]>([]);
   const [inspectedEntity, setInspectedEntity] = useState<InspectedEntityData | null>(null);
 
   const notificationTimeoutRef = useRef<any>(null);
@@ -113,11 +117,15 @@ export const App: React.FC = () => {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
 
-    const sim = new Simulation(Date.now(), 128, 128, { scenario: 'warring' });
+    const sim = new Simulation(Date.now(), 128, 128, { scenario });
     simRef.current = sim;
 
     setTimeout(() => {
-      showNotification('⚔️ Warring Kingdoms: hereditary rivalries active — wars always on');
+      showNotification(
+        scenario === 'modern_nuclear'
+          ? '☢️ Modern & Nuclear Age: Atomic arsenals armed — devastating Total Wars active!'
+          : '⚔️ Warring Kingdoms: hereditary rivalries active — wars always on'
+      );
     }, 500);
 
     const renderer = new CanvasRenderer(canvas, sim.world, sim);
@@ -139,7 +147,11 @@ export const App: React.FC = () => {
     // Attach event bus listeners
     const handleAgentCreated = (e: any) => {
       const name = e.name || `Citizen #${e.agentId}`;
-      addChronicleEntry(`👶 Newborn: ${name} entered the world.`);
+      if (e.reason === 'divine') {
+        addChronicleEntry(`✨ Pioneer: ${name} appeared in the realm.`);
+      } else {
+        addChronicleEntry(`👶 Newborn: ${name} entered the world.`);
+      }
     };
 
     const handleAgentDied = (e: any) => {
@@ -225,6 +237,65 @@ export const App: React.FC = () => {
       showNotification(`🌆 ${e.secondaryName} united into ${e.primaryName}!`);
     };
 
+    const handleNuclearStrike = (e: any) => {
+      addChronicleEntry(
+        `☢️ NUCLEAR STRIKE! ${e.attackerName || 'Atomic Power'} hit ${e.targetName || 'frontier'} (${e.casualties || e.deaths || 0} dead, ${e.buildingsRuined || 0} ruined) — Why: ${e.reason || 'Escalation'}.`
+      );
+      showNotification(`☢️ Nuclear strike on ${e.targetName || 'target'}!`);
+    };
+
+    const handleNuclearWarheadBuilt = (e: any) => {
+      addChronicleEntry(`☢️ ${e.settlementName || 'A power'} assembled Nuclear Warhead #${e.warheads || 1}.`);
+      showNotification(`☢️ ${e.settlementName || 'A power'} armed a Nuclear Warhead!`);
+    };
+
+    const handleUrbanRebellion = (e: any) => {
+      addChronicleEntry(`🔥 Urban Uprising in ${e.settlementName || 'a city'}${e.reason ? ` (${e.reason})` : ''}!`);
+      showNotification(`🔥 Urban rebellion erupted in ${e.settlementName || 'a city'}!`);
+    };
+
+    const handleSettlementCollapsed = (e: any) => {
+      addChronicleEntry(`🏚️ TOTAL COLLAPSE: ${e.name || 'A city'} fell completely into ruins (${e.reason || 'devastation'}).`);
+      showNotification(`🏚️ ${e.name || 'A city'} collapsed completely!`);
+    };
+
+    const handleSanctionsImposed = (e: any) => {
+      addChronicleEntry(`🚫 ${e.fromName || 'A realm'} imposed trade sanctions on ${e.targetName || 'a rival'} — ${e.reason || 'border friction'}.`);
+    };
+
+    const handleUltimatumIssued = (e: any) => {
+      addChronicleEntry(`📜 Ultimatum: ${e.fromName || 'A power'} demanded ${String(e.demand || 'tribute').replace(/_/g, ' ')} from ${e.targetName || 'a neighbor'} (${e.outcome || 'rejected'}).`);
+    };
+
+    const handleEspionageOp = (e: any) => {
+      addChronicleEntry(`🕵️ ${e.title || 'Covert Op'}: ${e.what || ''}`);
+      if (e.detected || e.success) {
+        showNotification(`🕵️ ${e.title || 'Covert Operation'}`);
+      }
+    };
+
+    const handleGuildFounded = (e: any) => {
+      addChronicleEntry(`🏛️ Guild Charter: ${e.guildName || 'Guild'} established in ${e.settlementName || 'a realm'}.`);
+    };
+
+    const handleWonderStage = (e: any) => {
+      addChronicleEntry(`🏗️ Wonder Stage ${e.stage}/${e.maxStage}: ${e.settlementName} advanced ${e.wonderName}!`);
+    };
+
+    const handleWonderCompleted = (e: any) => {
+      addChronicleEntry(`🏆 Great Wonder Completed: ${e.settlementName} finished ${e.wonderName} (${e.buffLabel})!`);
+      showNotification(`🏆 ${e.settlementName} completed ${e.wonderName}!`);
+    };
+
+    const handleFortificationsBuilt = (e: any) => {
+      addChronicleEntry(`🧱 ${e.settlementName || 'A city'} raised ${e.tierName || 'perimeter fortifications'} (${e.segmentsCount || 0} walls, ${e.towersCount || 0} watchtowers).`);
+    };
+
+    const handleWallBreached = (e: any) => {
+      addChronicleEntry(`💥 ${e.attackerName || 'Besiegers'} breached ${e.settlementName || 'a city'}'s ${e.wasGate ? 'gatehouse' : 'wall'} at (${e.x}, ${e.y})!`);
+      showNotification(`💥 Wall breached at ${e.settlementName || 'the frontier'}!`);
+    };
+
     sim.eventBus.on('AGENT_CREATED', handleAgentCreated);
     sim.eventBus.on('AGENT_DIED', handleAgentDied);
     sim.eventBus.on('CONSTRUCTION_COMPLETED', handleConstruction);
@@ -243,10 +314,34 @@ export const App: React.FC = () => {
     sim.eventBus.on('AMPHIBIOUS_LANDING', handleAmphibiousLanding);
     sim.eventBus.on('BARGE_TRADE_COMPLETED', handleBargeTrade);
     sim.eventBus.on('SETTLEMENTS_MERGED', handleSettlementsMerged);
+    sim.eventBus.on('NUCLEAR_STRIKE', handleNuclearStrike);
+    sim.eventBus.on('NUCLEAR_WARHEAD_BUILT', handleNuclearWarheadBuilt);
+    sim.eventBus.on('URBAN_REBELLION', handleUrbanRebellion);
+    sim.eventBus.on('SETTLEMENT_COLLAPSED', handleSettlementCollapsed);
+    sim.eventBus.on('SANCTIONS_IMPOSED', handleSanctionsImposed);
+    sim.eventBus.on('ULTIMATUM_ISSUED', handleUltimatumIssued);
+    sim.eventBus.on('ESPIONAGE_OPERATION', handleEspionageOp);
+    sim.eventBus.on('GUILD_FOUNDED', handleGuildFounded);
+    sim.eventBus.on('WONDER_STAGE_COMPLETED', handleWonderStage);
+    sim.eventBus.on('WONDER_COMPLETED', handleWonderCompleted);
+    sim.eventBus.on('FORTIFICATIONS_BUILT', handleFortificationsBuilt);
+    sim.eventBus.on('WALL_BREACHED', handleWallBreached);
 
     // Custom window events
     const handleEntityInspected = (e: CustomEvent) => {
-      setInspectedEntity(e.detail);
+      const detail = e.detail;
+      if (detail?.kind === 'agent' && detail.entity?.id != null && typeof sim.getAgentDossier === 'function') {
+        setInspectedEntity({ kind: 'agent', entity: detail.entity, dossier: sim.getAgentDossier(detail.entity.id) });
+      } else if (detail?.kind === 'settlement' && detail.entity?.id != null) {
+        const s = sim.settlementSystem?.settlements.get(detail.entity.id) || detail.entity;
+        const ageSummary = sim.civilizationAgeSystem?.getSettlementAgeSummary(s.id);
+        const nuclearProgram = sim.civilizationAgeSystem?.getNuclearProgram?.(s.id);
+        const guilds = sim.espionageSystem?.getSettlementGuilds?.(s.id);
+        const fortifications = sim.fortificationSystem?.getSettlementFortificationSummary?.(s.id);
+        setInspectedEntity({ kind: 'settlement', entity: { ...s, age: ageSummary, nuclearProgram, guilds, fortifications } });
+      } else {
+        setInspectedEntity(detail);
+      }
     };
 
     const handleShowNotification = (e: CustomEvent) => {
@@ -377,6 +472,9 @@ export const App: React.FC = () => {
                 leadershipTitle: s.leadershipTitle,
                 buildingsCount: s.buildings ? s.buildings.length : 0,
                 age: sim.civilizationAgeSystem?.getSettlementAgeSummary(s.id),
+                nuclearProgram: sim.civilizationAgeSystem?.getNuclearProgram?.(s.id),
+                guilds: sim.espionageSystem?.getSettlementGuilds?.(s.id),
+                fortifications: sim.fortificationSystem?.getSettlementFortificationSummary?.(s.id),
                 culture: s.culture,
                 growthTrend: s.growthTrend,
               });
@@ -384,9 +482,10 @@ export const App: React.FC = () => {
             setSocieties(sArr);
           }
 
-          // Diplomacy data — only compute when the panel is actually opened
+          // Diplomacy data — keep live for panel, header badges, and Chancellery
           const diplomacy = sim.diplomacySystem;
-          if (diplomacy && diplomacyOpenRef.current) {
+          if (diplomacy) {
+            const tickNow = sim.clock?.tick ?? 0;
             setWars(
               (diplomacy.activeWars || []).map((w: any) => ({
                 attackerId: w.attackerId,
@@ -394,6 +493,10 @@ export const App: React.FC = () => {
                 defenderId: w.defenderId,
                 defenderName: w.defenderName,
                 casusBelli: w.casusBelli,
+                whySummary: w.whySummary,
+                drivers: w.drivers,
+                warScore: diplomacy.calculateWarScore ? diplomacy.calculateWarScore(w) : 0,
+                totalWar: Boolean(w.totalWar),
                 casualties: w.casualties || {},
                 plundered: w.plundered || { food: 0, wood: 0, ore: 0 },
               }))
@@ -421,33 +524,59 @@ export const App: React.FC = () => {
                     s2Name: s2.name,
                     status: rel.status,
                     score: rel.score,
+                    sanctioned: (rel.sanctionedUntil || 0) > tickNow,
+                    s1Warheads: sim.civilizationAgeSystem?.getNuclearProgram?.(s1.id)?.warheads || 0,
+                    s2Warheads: sim.civilizationAgeSystem?.getNuclearProgram?.(s2.id)?.warheads || 0,
                   });
                 }
               }
             }
             setRelations(relArr);
+            setDiplomaticHistory(Array.isArray(diplomacy.diplomaticHistory) ? [...diplomacy.diplomaticHistory].reverse().slice(0, 40) : []);
           }
         }
 
-        // Live inspector refresh
+        // Sync follow state if renderer cleared it on manual drag or agent death
+        if (rendererRef.current) {
+          const rFollow = rendererRef.current.followAgentId ?? null;
+          setFollowAgentId((prev) => (prev === rFollow ? prev : rFollow));
+        }
+
+        // Live inspector refresh (retains Fallen Memorial dossier if inspected agent died)
         setInspectedEntity((currentInspect) => {
           if (!currentInspect || !currentInspect.entity) return null;
           if (currentInspect.kind === 'agent') {
+            const aid = currentInspect.entity.id;
             const stillAlive =
               typeof sim._agentById === 'function'
-                ? sim._agentById(currentInspect.entity.id)
-                : sim.agents.find((a: any) => a.id === currentInspect.entity.id);
+                ? sim._agentById(aid)
+                : sim.agents.find((a: any) => a.id === aid);
+            const dossier = typeof sim.getAgentDossier === 'function' ? sim.getAgentDossier(aid) : null;
             if (stillAlive && stillAlive.alive) {
-              return { kind: 'agent', entity: stillAlive };
+              return { kind: 'agent', entity: stillAlive, dossier };
             }
-            return null;
+            if (dossier) {
+              return {
+                kind: 'agent',
+                entity: { ...currentInspect.entity, ...dossier, alive: false },
+                dossier,
+              };
+            }
+            return {
+              kind: 'agent',
+              entity: { ...currentInspect.entity, alive: false },
+              dossier: currentInspect.dossier || null,
+            };
           } else if (currentInspect.kind === 'settlement') {
             const updated = sim.settlementSystem?.settlements.get(currentInspect.entity.id);
             if (updated) {
               const ageSummary = sim.civilizationAgeSystem?.getSettlementAgeSummary(updated.id);
+              const nuclearProgram = sim.civilizationAgeSystem?.getNuclearProgram?.(updated.id);
+              const guilds = sim.espionageSystem?.getSettlementGuilds?.(updated.id);
+              const fortifications = sim.fortificationSystem?.getSettlementFortificationSummary?.(updated.id);
               const docksCount = (sim.buildings || []).filter((b: any) => b.settlementId === updated.id && b.buildingType === 'dock' && !b.isRuined).length;
               const vesselsCount = (sim.navalSystem?.vessels || []).filter((v: any) => v.settlementId === updated.id).length;
-              return { kind: 'settlement', entity: { ...updated, age: ageSummary, docksCount, vesselsCount } };
+              return { kind: 'settlement', entity: { ...updated, age: ageSummary, nuclearProgram, guilds, fortifications, docksCount, vesselsCount } };
             }
             return null;
           } else if (currentInspect.kind === 'building') {
@@ -467,6 +596,20 @@ export const App: React.FC = () => {
           }
           return currentInspect;
         });
+
+        if (sim.chronicleSystem?.getHighlights) {
+          const latestEntries = sim.chronicleSystem.getHighlights(80);
+          setChronicleEntries((prev) => {
+            if (
+              prev.length === latestEntries.length &&
+              prev[0]?.id === latestEntries[0]?.id &&
+              prev[0]?.tick === latestEntries[0]?.tick
+            ) {
+              return prev;
+            }
+            return latestEntries;
+          });
+        }
 
         lastUiUpdate = currentTime;
       }
@@ -490,48 +633,52 @@ export const App: React.FC = () => {
       window.removeEventListener('entity_inspected', handleEntityInspected as EventListener);
       window.removeEventListener('show_notification', handleShowNotification as EventListener);
       if (notificationTimeoutRef.current) clearTimeout(notificationTimeoutRef.current);
+      interaction.destroy?.();
+      renderer.destroy?.();
     };
-  }, [addChronicleEntry, showNotification, scenario]);
+  }, [addChronicleEntry, showNotification, scenario, worldNonce]);
 
-  // Keyboard shortcut listener
+  // Keyboard shortcut listener (stable single subscription)
+  const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  keyHandlerRef.current = (e: KeyboardEvent) => {
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')) {
+      return;
+    }
+
+    if (e.code === 'Space') {
+      e.preventDefault();
+      handleTogglePause();
+    } else if (e.key === 'w' || e.key === 'W') {
+      setDiplomacyOpen((prev) => !prev);
+    } else if (e.key === 'c' || e.key === 'C') {
+      setCivilizationOpen((prev) => !prev);
+    } else if (e.key === 'Escape') {
+      setCivilizationOpen(false);
+      setHelpOpen(false);
+    } else {
+      const keyMap: { [k: string]: ToolType } = {
+        '1': 'inspect',
+        '2': 'spawn_agent',
+        '3': 'create_food',
+        '4': 'create_water',
+        '5': 'create_wood',
+        '6': 'create_ore',
+        '7': 'build_house',
+        '8': 'build_workshop',
+        '9': 'build_farm',
+        '0': 'bless',
+      };
+      if (keyMap[e.key]) {
+        handleSelectTool(keyMap[e.key]);
+      }
+    }
+  };
+
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')) {
-        return;
-      }
-
-      if (e.code === 'Space') {
-        e.preventDefault();
-        handleTogglePause();
-      } else if (e.key === 'w' || e.key === 'W') {
-        setDiplomacyOpen((prev) => !prev);
-      } else if (e.key === 'c' || e.key === 'C') {
-        setCivilizationOpen((prev) => !prev);
-      } else if (e.key === 'Escape') {
-        setCivilizationOpen(false);
-        setHelpOpen(false);
-      } else {
-        const keyMap: { [k: string]: ToolType } = {
-          '1': 'inspect',
-          '2': 'spawn_agent',
-          '3': 'create_food',
-          '4': 'create_water',
-          '5': 'create_wood',
-          '6': 'create_ore',
-          '7': 'build_house',
-          '8': 'build_workshop',
-          '9': 'build_farm',
-          '0': 'bless',
-        };
-        if (keyMap[e.key]) {
-          handleSelectTool(keyMap[e.key]);
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  });
+    const onKeyDown = (e: KeyboardEvent) => keyHandlerRef.current(e);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   // Action handlers
   const handleToggleView = () => {
@@ -639,8 +786,11 @@ export const App: React.FC = () => {
     const fullSettlement = simRef.current.settlementSystem?.settlements.get(s.id);
     if (fullSettlement) {
       const ageSummary = simRef.current.civilizationAgeSystem?.getSettlementAgeSummary(s.id);
+      const nuclearProgram = simRef.current.civilizationAgeSystem?.getNuclearProgram?.(s.id);
+      const guilds = simRef.current.espionageSystem?.getSettlementGuilds?.(s.id);
+      const fortifications = simRef.current.fortificationSystem?.getSettlementFortificationSummary?.(s.id);
       const target: InspectedEntityData = {
-        entity: { ...fullSettlement, age: ageSummary },
+        entity: { ...fullSettlement, age: ageSummary, nuclearProgram, guilds, fortifications },
         kind: 'settlement',
       };
       rendererRef.current.selectedEntity = target;
@@ -648,6 +798,50 @@ export const App: React.FC = () => {
     }
     showNotification(`View centered on ${s.name}`);
   };
+
+  const handleFollowAgent = useCallback((agentId: number | null) => {
+    if (!rendererRef.current) return;
+    const nextId = rendererRef.current.followAgentId === agentId ? null : agentId;
+    rendererRef.current.followAgentId = nextId;
+    setFollowAgentId(nextId);
+    if (nextId != null && simRef.current) {
+      const ag = simRef.current._agentById?.(nextId) || simRef.current.agents?.find((a: any) => a.id === nextId);
+      if (ag && ag.alive) {
+        rendererRef.current.centerOn(ag.x, ag.y, Math.max(rendererRef.current.camera.zoom, 16), false, true);
+        showNotification(`Following ${ag.name}`);
+      }
+    }
+  }, [showNotification]);
+
+  const handleSelectAgentById = useCallback((agentId: number) => {
+    const sim = simRef.current;
+    if (!sim) return;
+    const live = typeof sim._agentById === 'function' ? sim._agentById(agentId) : sim.agents?.find((a: any) => a.id === agentId);
+    const dossier = typeof sim.getAgentDossier === 'function' ? sim.getAgentDossier(agentId) : null;
+    if (!live && !dossier) return;
+    const target: InspectedEntityData = {
+      kind: 'agent',
+      entity: live || { ...dossier, alive: false },
+      dossier,
+    };
+    setInspectedEntity(target);
+    if (rendererRef.current) {
+      rendererRef.current.selectedEntity = live ? target : null;
+      if (live && live.alive) {
+        rendererRef.current.centerOn(live.x, live.y, Math.max(rendererRef.current.camera.zoom, 15));
+      }
+    }
+  }, []);
+
+  const handleNextBattle = useCallback(() => {
+    if (!rendererRef.current) return;
+    const res = rendererRef.current.focusNextBattle?.();
+    if (res) {
+      showNotification(`⚔️ Focusing: ${res.label}`);
+    } else {
+      showNotification('🕊️ No active battles or scars to focus on yet.');
+    }
+  }, [showNotification]);
 
   const handleSignPeace = (s1: number, s2: number) => {
     if (simRef.current?.diplomacySystem) {
@@ -668,7 +862,7 @@ export const App: React.FC = () => {
 
   const handleProvokeWar = (s1: number, s2: number) => {
     if (simRef.current?.diplomacySystem) {
-      simRef.current.diplomacySystem.declareWar(s1, s2, 'Territorial Expansion');
+      simRef.current.diplomacySystem.declareWar(s1, s2, 'Militarist Aggression — Territorial Expansion');
       showNotification('⚔️ War ignited between realms!');
     }
   };
@@ -677,6 +871,46 @@ export const App: React.FC = () => {
     if (simRef.current?.diplomacySystem) {
       simRef.current.diplomacySystem.formAlliance(s1, s2, simRef.current.clock.tick);
       showNotification('🤝 Grand Alliance pact sworn!');
+    }
+  };
+
+  const handleImposeSanctions = (fromId: number, targetId: number, reason = 'Trade embargo over border hostility') => {
+    if (simRef.current?.diplomacySystem?.imposeSanctions) {
+      const ok = simRef.current.diplomacySystem.imposeSanctions(fromId, targetId, reason, simRef.current.clock.tick);
+      if (ok) showNotification('🚫 Trade sanctions enacted!');
+    }
+  };
+
+  const handleIssueUltimatum = (fromId: number, targetId: number, demand = 'tribute') => {
+    if (simRef.current?.diplomacySystem?.issueUltimatum) {
+      const res = simRef.current.diplomacySystem.issueUltimatum(fromId, targetId, demand, 'Diplomatic Brinkmanship', simRef.current.clock.tick);
+      if (res) showNotification(`📜 Ultimatum ${res.outcome === 'accepted' ? 'accepted' : 'rejected — war ignited!'}`);
+    }
+  };
+
+  const handleLaunchNuke = (attackerId: number, targetId: number) => {
+    const sim = simRef.current;
+    if (!sim || !sim.detonateNuclearStrike) return;
+    const target = sim.settlementSystem?.settlements?.get(targetId);
+    const attacker = sim.settlementSystem?.settlements?.get(attackerId);
+    const prog = sim.civilizationAgeSystem?.getNuclearProgram?.(attackerId);
+    if (!target?.center || !prog || prog.warheads <= 0) {
+      showNotification('Requires an active Modern Era target and an assembled nuclear warhead.');
+      return;
+    }
+    prog.warheads = Math.max(0, prog.warheads - 1);
+    prog.totalStrikes = (prog.totalStrikes || 0) + 1;
+    prog.lastStrikeTick = sim.clock?.tick ?? 0;
+    sim.detonateNuclearStrike({
+      x: target.center.x,
+      y: target.center.y,
+      attackerSettlementId: attackerId,
+      targetSettlementId: targetId,
+      reason: `${attacker?.name || 'Nuclear Power'} launched a strategic atomic strike against ${target.name}`,
+      isGodPower: false,
+    });
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('god_effect', { detail: { type: 'nuke', x: target.center.x, y: target.center.y, duration: 2400 } }));
     }
   };
 
@@ -694,12 +928,76 @@ export const App: React.FC = () => {
     const sName = simRef.current.settlementSystem?.settlements.get(settlementId)?.name || 'Settlement';
     if (wb) {
       showNotification(`🛡️ Warband mobilized for ${sName} (${wb.soldiers.length} soldiers)!`);
-      const updated = simRef.current.settlementSystem?.settlements.get(settlementId);
+      const sim = simRef.current;
+      const updated = sim.settlementSystem?.settlements.get(settlementId);
       if (updated) {
-        setInspectedEntity({ kind: 'settlement', entity: updated });
+        const ageSummary = sim.civilizationAgeSystem?.getSettlementAgeSummary?.(updated.id);
+        const nuclearProgram = sim.civilizationAgeSystem?.getNuclearProgram?.(updated.id);
+        const guilds = sim.espionageSystem?.getSettlementGuilds?.(updated.id);
+        const fortifications = sim.fortificationSystem?.getSettlementFortificationSummary?.(updated.id);
+        setInspectedEntity({ kind: 'settlement', entity: { ...updated, age: ageSummary, nuclearProgram, guilds, fortifications } });
       }
     } else {
       showNotification(`Not enough healthy adult citizens in ${sName}.`);
+    }
+  };
+
+  const handleSpawnSettlementCitizens = (settlementId: number, count: number) => {
+    const sim = simRef.current;
+    if (!sim || !sim.settlementSystem) return;
+    const s = sim.settlementSystem.settlements.get(settlementId);
+    if (!s || s.ruined || !s.center) return;
+
+    if (sim.agents.length + count > (sim.maxAgents ?? 360)) {
+      sim.maxAgents = Math.min(1200, sim.agents.length + count + 20);
+    }
+
+    const jobs = ['farmer', 'miner', 'lumberjack', 'builder', 'craftsman', 'soldier'];
+    let spawned = 0;
+    const w = sim.world?.width || 128;
+    const h = sim.world?.height || 128;
+
+    for (let i = 0; i < count; i++) {
+      let sx = Math.floor(s.center.x);
+      let sy = Math.floor(s.center.y);
+      let placed = false;
+      for (let attempt = 0; attempt < 24; attempt++) {
+        const ang = ((i * 2.39996 + attempt * 0.7) % (Math.PI * 2));
+        const rad = 1.5 + (attempt % 5);
+        const cx = Math.max(2, Math.min(w - 3, Math.floor(s.center.x + Math.cos(ang) * rad)));
+        const cy = Math.max(2, Math.min(h - 3, Math.floor(s.center.y + Math.sin(ang) * rad)));
+        if (sim.world.isWalkable(cx, cy) && !sim.fortificationSystem?.isBlockedForAgent?.(cx, cy, { settlementId: s.id })) {
+          sx = cx + 0.5;
+          sy = cy + 0.5;
+          placed = true;
+          break;
+        }
+      }
+      if (!placed && !sim.world.isWalkable(sx, sy)) continue;
+
+      const agent = sim.spawnAgent(sx, sy);
+      agent.pioneer = false;
+      agent.settlementId = s.id;
+      agent.factionId = s.factionId ?? null;
+      const job = jobs[(s.agentIds.size + i) % jobs.length];
+      agent.job = job;
+      agent.jobTitle = job.charAt(0).toUpperCase() + job.slice(1);
+      s.agentIds.add(agent.id);
+      sim.settlementSystem.agentSettlementMap.set(agent.id, s.id);
+      sim.economySystem?.agentJobs?.set(agent.id, { job, salary: 14, satisfaction: 85, assignedAt: sim.clock?.tick ?? 0 });
+      sim.religionSystem?.initReligionEntity?.(agent);
+      spawned++;
+    }
+
+    s.population = s.agentIds.size;
+    if (spawned > 0) {
+      soundManager.playBless();
+      showNotification(`👤 Added ${spawned} citizen${spawned > 1 ? 's' : ''} to ${s.name} (Pop ${s.population})!`);
+      const ageSummary = sim.civilizationAgeSystem?.getSettlementAgeSummary?.(s.id);
+      const nuclearProgram = sim.civilizationAgeSystem?.getNuclearProgram?.(s.id);
+      const guilds = sim.espionageSystem?.getSettlementGuilds?.(s.id);
+      const fortifications = sim.fortificationSystem?.getSettlementFortificationSummary?.(s.id);
+      setInspectedEntity({ kind: 'settlement', entity: { ...s, age: ageSummary, nuclearProgram, guilds, fortifications } });
     }
   };
 
@@ -707,6 +1005,88 @@ export const App: React.FC = () => {
     const next = soundManager.toggleMute();
     setIsMuted(next);
     showNotification(next ? '🔇 Sound muted' : '🔊 Sound enabled');
+  };
+
+  const handleLaunchSpyOp = (fromId: number, targetId: number, opType = 'sabotage_granary') => {
+    const sim = simRef.current;
+    if (!sim?.espionageSystem) return;
+    const res = sim.espionageSystem.launchOperation(fromId, targetId, opType, sim.clock?.tick ?? 0, {
+      reason: 'Player-directed intelligence directive',
+    });
+    if (res) {
+      showNotification(`${res.success ? '🕵️' : '🚨'} ${res.title}`);
+    }
+  };
+
+  const handleCommissionWonder = (settlementId: number, wonderKey: string) => {
+    const sim = simRef.current;
+    if (!sim?.civilizationAgeSystem?.commissionWonder) return;
+    const w = sim.civilizationAgeSystem.commissionWonder(settlementId, wonderKey, sim.clock?.tick ?? 0);
+    if (w) {
+      showNotification(`${w.icon} Commissioned ${w.name}!`);
+      const s = sim.settlementSystem?.settlements.get(settlementId);
+      if (s && inspectedEntity?.kind === 'settlement' && inspectedEntity.entity?.id === settlementId) {
+        const ageSummary = sim.civilizationAgeSystem.getSettlementAgeSummary(settlementId);
+        const nuclearProgram = sim.civilizationAgeSystem.getNuclearProgram?.(settlementId);
+        const guilds = sim.espionageSystem?.getSettlementGuilds?.(settlementId);
+        setInspectedEntity({ kind: 'settlement', entity: { ...s, age: ageSummary, nuclearProgram, guilds } });
+      }
+    }
+  };
+
+  const handleAdvanceWonder = (settlementId: number) => {
+    const sim = simRef.current;
+    if (!sim?.civilizationAgeSystem?.advanceWonderProgress) return;
+    const w = sim.civilizationAgeSystem.advanceWonderProgress(settlementId, 34, sim.clock?.tick ?? 0);
+    if (w) {
+      showNotification(`${w.icon} ${w.name}: ${w.complete ? 'Completed!' : `Stage ${w.stage}/${w.maxStage} (${w.progress}%)`}`);
+      const s = sim.settlementSystem?.settlements.get(settlementId);
+      if (s && inspectedEntity?.kind === 'settlement' && inspectedEntity.entity?.id === settlementId) {
+        const ageSummary = sim.civilizationAgeSystem.getSettlementAgeSummary(settlementId);
+        const nuclearProgram = sim.civilizationAgeSystem.getNuclearProgram?.(settlementId);
+        const guilds = sim.espionageSystem?.getSettlementGuilds?.(settlementId);
+        const fortifications = sim.fortificationSystem?.getSettlementFortificationSummary?.(settlementId);
+        setInspectedEntity({ kind: 'settlement', entity: { ...s, age: ageSummary, nuclearProgram, guilds, fortifications } });
+      }
+    }
+  };
+
+  const handleFortifySettlement = (settlementId: number) => {
+    const sim = simRef.current;
+    if (!sim?.fortificationSystem?.fortifySettlement) return;
+    const res = sim.fortificationSystem.fortifySettlement(settlementId, {
+      repairExisting: true,
+      tick: sim.clock?.tick ?? 0,
+    });
+    if (res) {
+      soundManager.playBuild();
+      const s = sim.settlementSystem?.settlements.get(settlementId);
+      const sName = s?.name || 'Settlement';
+      showNotification(
+        `🧱 ${sName}: ${res.summary.intactWalls} walls, ${res.summary.intactGates} gates, ${res.summary.towers} watchtowers!`
+      );
+      if (s && inspectedEntity?.kind === 'settlement' && inspectedEntity.entity?.id === settlementId) {
+        const ageSummary = sim.civilizationAgeSystem.getSettlementAgeSummary(settlementId);
+        const nuclearProgram = sim.civilizationAgeSystem.getNuclearProgram?.(settlementId);
+        const guilds = sim.espionageSystem?.getSettlementGuilds?.(settlementId);
+        setInspectedEntity({
+          kind: 'settlement',
+          entity: { ...s, age: ageSummary, nuclearProgram, guilds, fortifications: res.summary },
+        });
+      }
+    }
+  };
+
+  const downloadJsonFile = (filename: string, payload: unknown) => {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const handleSave = () => {
@@ -717,28 +1097,84 @@ export const App: React.FC = () => {
     showNotification('Game progress saved to local storage!');
   };
 
+  const applyLoadedSimulation = (loaded: Simulation, toastMsg: string) => {
+    simRef.current = loaded;
+    if (rendererRef.current) {
+      rendererRef.current.world = loaded.world;
+      rendererRef.current.simulation = loaded;
+      rendererRef.current.selectedEntity = null;
+      rendererRef.current.followAgentId = null;
+      setRendererInstance(rendererRef.current);
+    }
+    if (interactionRef.current) {
+      interactionRef.current.simulation = loaded;
+      interactionRef.current.renderer = rendererRef.current;
+    }
+    setSimInstance(loaded);
+    setInspectedEntity(null);
+    setFollowAgentId(null);
+    setChronicleEntries(loaded.chronicleSystem?.getHighlights?.(80) || []);
+    soundManager.playClick();
+    showNotification(toastMsg);
+  };
+
   const handleLoad = () => {
     const data = localStorage.getItem('aetheria_save');
     if (data && simRef.current && rendererRef.current) {
       try {
         const loaded = Simulation.deserialize(JSON.parse(data));
-        simRef.current = loaded;
-        rendererRef.current.world = loaded.world;
-        rendererRef.current.simulation = loaded;
-        if (interactionRef.current) {
-          interactionRef.current.simulation = loaded;
-          interactionRef.current.renderer = rendererRef.current;
-        }
-        setSimInstance(loaded);
-        setRendererInstance(rendererRef.current);
-        soundManager.playClick();
-        showNotification('Saved world loaded successfully!');
+        applyLoadedSimulation(loaded, 'Saved world loaded successfully!');
       } catch (err) {
         console.error('Failed to load save file:', err);
         showNotification('Error loading save file.');
       }
     } else {
       showNotification('No previous save file found!');
+    }
+  };
+
+  const handleExportWorld = () => {
+    const sim = simRef.current;
+    if (!sim) return;
+    const snapshot = sim.serialize();
+    downloadJsonFile(`aetheria-world-tick-${sim.clock?.tick ?? 0}.json`, snapshot);
+    soundManager.playClick();
+    showNotification('💾 World snapshot JSON downloaded!');
+  };
+
+  const handleExportChronicle = () => {
+    const sim = simRef.current;
+    if (!sim) return;
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      seed: sim.seed,
+      tick: sim.clock?.tick ?? 0,
+      dominantAge: sim.civilizationAgeSystem?.getDominantAge?.() || null,
+      entries: sim.chronicleSystem?.entries || [],
+      diplomaticHistory: sim.diplomacySystem?.diplomaticHistory || [],
+      warHistory: sim.diplomacySystem?.warHistory || [],
+      fallenHeroes: sim.dynastySystem?.fallenHeroes || [],
+      espionageOps: sim.espionageSystem?.operationsLog || [],
+    };
+    downloadJsonFile(`aetheria-chronicle-tick-${sim.clock?.tick ?? 0}.json`, payload);
+    soundManager.playClick();
+    showNotification('📜 Historical chronicle replay JSON downloaded!');
+  };
+
+  const handleImportWorld = async (file: File) => {
+    if (!file || !simRef.current || !rendererRef.current) return;
+    try {
+      const raw = await file.text();
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || (!parsed.world && !parsed.clock && !parsed.agents)) {
+        showNotification('Invalid Aetheria world save JSON file.');
+        return;
+      }
+      const loaded = Simulation.deserialize(parsed);
+      applyLoadedSimulation(loaded, `📂 Imported "${file.name}" successfully!`);
+    } catch (err) {
+      console.error('Failed to import world file:', err);
+      showNotification('Could not parse save file JSON.');
     }
   };
 
@@ -795,18 +1231,30 @@ export const App: React.FC = () => {
           onTogglePause={handleTogglePause}
           onCycleSpeed={handleCycleSpeed}
           onCenterCamera={handleCenterCamera}
+          onNextBattle={handleNextBattle}
           onSpawnResources={handleSpawnResources}
           onToggleSocieties={() => setSocietiesOpen((prev) => !prev)}
           onToggleDiplomacy={() => setDiplomacyOpen((prev) => !prev)}
           onToggleCivilization={() => setCivilizationOpen((prev) => !prev)}
           onSave={handleSave}
           onLoad={handleLoad}
+          onExportWorld={handleExportWorld}
+          onImportWorld={handleImportWorld}
           onToggleHelp={() => setHelpOpen((prev) => !prev)}
           societiesOpen={societiesOpen}
           diplomacyOpen={diplomacyOpen}
           civilizationOpen={civilizationOpen}
           isMuted={isMuted}
           onToggleMute={handleToggleMute}
+          warsCount={wars.length}
+          treatiesCount={treaties.length}
+          scenario={scenario}
+          onChangeScenario={(nextScenario) => {
+            setInspectedEntity(null);
+            setFollowAgentId(null);
+            setScenario(nextScenario);
+            setWorldNonce((n) => n + 1);
+          }}
         />
       </div>
 
@@ -816,8 +1264,10 @@ export const App: React.FC = () => {
           position: 'absolute',
           top: '76px',
           right: '12px',
-          width: '320px',
+          width: '340px',
           maxHeight: 'calc(100vh - 170px)',
+          overflowY: 'auto',
+          paddingRight: '2px',
           display: 'flex',
           flexDirection: 'column',
           gap: '10px',
@@ -838,10 +1288,16 @@ export const App: React.FC = () => {
             wars={wars}
             treaties={treaties}
             relations={relations}
+            diplomaticHistory={diplomaticHistory}
             onSignPeace={handleSignPeace}
             onEnforceAllPeace={handleEnforceAllPeace}
             onProvokeWar={handleProvokeWar}
             onFormAlliance={handleFormAlliance}
+            onImposeSanctions={handleImposeSanctions}
+            onIssueUltimatum={handleIssueUltimatum}
+            onLaunchNuke={handleLaunchNuke}
+            onLaunchSpyOp={handleLaunchSpyOp}
+            onPanTo={handlePanTo}
             onClose={() => setDiplomacyOpen(false)}
           />
         )}
@@ -849,15 +1305,35 @@ export const App: React.FC = () => {
         {inspectedEntity && (
           <InspectorPanel
             data={inspectedEntity}
+            isFollowing={
+              inspectedEntity.kind === 'agent' &&
+              followAgentId != null &&
+              followAgentId === inspectedEntity.entity?.id
+            }
+            onFollowAgent={handleFollowAgent}
+            onSelectAgent={handleSelectAgentById}
             onRallyWarband={handleRallyWarband}
+            onSpawnCitizens={handleSpawnSettlementCitizens}
+            onAdvanceWonder={handleAdvanceWonder}
+            onFortifySettlement={handleFortifySettlement}
             onClose={() => {
               setInspectedEntity(null);
-              if (rendererRef.current) rendererRef.current.selectedEntity = null;
+              if (rendererRef.current) {
+                rendererRef.current.selectedEntity = null;
+                rendererRef.current.followAgentId = null;
+              }
+              setFollowAgentId(null);
             }}
           />
         )}
 
-        <ChroniclePanel events={chronicleEvents} />
+        <ChroniclePanel
+          events={chronicleEvents}
+          structuredEntries={chronicleEntries}
+          onExportWorld={handleExportWorld}
+          onExportChronicle={handleExportChronicle}
+          onPanTo={handlePanTo}
+        />
       </div>
 
       {/* Divine Powers Dock */}
@@ -878,6 +1354,16 @@ export const App: React.FC = () => {
         isOpen={civilizationOpen}
         onClose={() => setCivilizationOpen(false)}
         simulation={simInstance || simRef.current}
+        onSelectAgent={handleSelectAgentById}
+        onImposeSanctions={handleImposeSanctions}
+        onIssueUltimatum={handleIssueUltimatum}
+        onLaunchNuke={handleLaunchNuke}
+        onLaunchSpyOp={handleLaunchSpyOp}
+        onAdvanceWonder={handleAdvanceWonder}
+        onCommissionWonder={handleCommissionWonder}
+        onExportWorld={handleExportWorld}
+        onExportChronicle={handleExportChronicle}
+        onImportWorld={handleImportWorld}
         onPanTo={handlePanTo}
       />
 

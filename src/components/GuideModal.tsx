@@ -75,20 +75,21 @@ export const GuideModal: React.FC<GuideModalProps> = ({ isOpen, onClose }) => {
         </button>
       </h3>
       <div style={{ margin: '3px 0' }}>
-        • <b>2.5D Isometric World:</b> Full 3D elevated terrain with realistic mountains, valleys & flowing rivers.
+        • <b>2.5D Isometric World &amp; Ecology:</b> Elevated terrain with growing forests (Sapling → Ancient), finite depleting ore mines, and wild herds stalked by settlement Hunters.
       </div>
       <div style={{ margin: '3px 0' }}>
-        • <b>Heights Control:</b> Tap <b>⛰️ Heights</b> to switch between relief levels.
+        • <b>Mechanized Warfare &amp; Structures:</b> Build Granaries, Factories, Research Labs, Nuclear Plants &amp; Missile Silos; fight with siege catapults, Battle Tanks, Strike Aircraft, and Rocket Artillery.
       </div>
       <div style={{ margin: '3px 0' }}>
-        • <b>View Toggle:</b> Switch between <b>📐 2.5D Isometric</b> and <b>🗺️ 2D View</b> anytime.
+        • <b>Atomic Deterrence &amp; Infrastructure:</b> Warhead enrichment requires a <b>Factory + Nuclear Plant + Ore</b> (boosted by Labs &amp; Silos); autonomous nukes fire only as a last resort.
       </div>
-      <div style={{ margin: '3px 0' }}>• <b>Drag</b> mouse to pan across the 128×128 realm</div>
-      <div style={{ margin: '3px 0' }}>• <b>Scroll wheel</b> to zoom in and out</div>
-      <div style={{ margin: '3px 0' }}>• <b>Click</b> with tool selected to act, build or cast miracles</div>
-      <div style={{ margin: '3px 0' }}>• <b>Keys 1-0</b> for rapid tool switching</div>
-      <div style={{ margin: '3px 0' }}>• <b>Spacebar</b> to pause / resume time</div>
-      <div style={{ margin: '3px 0' }}>• Click <b>Inspect</b> and tap any citizen, building, or realm</div>
+      <div style={{ margin: '3px 0' }}>
+        • <b>Deep Diplomacy (W):</b> Scarcity Trade &amp; Non-Aggression Pacts, nuclear proliferation sanctions, ultimatums, Tributary Vassalage, and third-party Peace Mediation.
+      </div>
+      <div style={{ margin: '3px 0' }}>
+        • <b>Spectator Controls:</b> Use <b>⚔️ Next Battle</b> to jump to active fronts, or inspect citizens, buildings, and mines for live stats &amp; Follow camera.
+      </div>
+      <div style={{ margin: '3px 0' }}>• <b>Drag</b> map to pan · <b>Scroll wheel</b> to zoom · <b>Keys 1-0</b> for tools · <b>Spacebar</b> pause/resume</div>
       </div>
     </div>
   );

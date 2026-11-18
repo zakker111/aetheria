@@ -150,6 +150,27 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
         }
       }
 
+      // 2c. Radiation Fallout Zones overlay
+      if (world.radiationTiles) {
+        ctx.fillStyle = 'rgba(132, 204, 22, 0.65)';
+        for (let y = 0; y < H; y += 2) {
+          for (let x = 0; x < W; x += 2) {
+            const idx = y * W + x;
+            if (world.radiationTiles[idx] > 0) {
+              ctx.fillRect(x * scaleX, y * scaleY, scaleX * 2, scaleY * 2);
+            }
+          }
+        }
+      }
+
+      // 2d. Battlefield Scars & Nuclear Monuments
+      if (Array.isArray(world.skullMonuments) && world.skullMonuments.length > 0) {
+        for (const m of world.skullMonuments) {
+          ctx.fillStyle = m.kind === 'nuke' ? '#bef264' : m.kind === 'city_ruin' ? '#f87171' : '#e2e8f0';
+          ctx.fillRect(m.x * scaleX - 1.5, m.y * scaleY - 1.5, 3, 3);
+        }
+      }
+
       // 3. Heatmap Overlays
       if (mode === 'density') {
         // Density Heatmap: agents

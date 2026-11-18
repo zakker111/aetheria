@@ -24,11 +24,14 @@ export class ChronicleSystem {
 
   add(kind, text, extra = {}) {
     const tick = this.sim?.clock?.tick ?? 0;
+    const domAge = this.sim?.civilizationAgeSystem?.getDominantAge?.();
     const entry = {
       id: this._nextEntryId++,
       tick,
       date: this.formatDate(tick),
-      kind,          // founding | war | plague | famine | fire | death | wonder | ruin | peace | era
+      kind,          // founding | war | plague | famine | fire | death | wonder | ruin | peace | era | espionage
+      eraId: extra.eraId ?? domAge?.id ?? 1,
+      eraName: extra.eraName ?? domAge?.name ?? 'Tribal Era',
       text,
       ...extra
     };
@@ -41,6 +44,19 @@ export class ChronicleSystem {
 
   addEntry(kind, text, extra = {}) {
     return this.add(kind, text, extra);
+  }
+
+  getByEra(eraId = null) {
+    const filtered = eraId == null
+      ? this.entries
+      : this.entries.filter(e => (e.eraId ?? 1) === eraId);
+    const list = filtered.slice().reverse();
+    this._refreshFrontLines(list);
+    return list;
+  }
+
+  getHighlights(limit = 60, eraId = null) {
+    return this.getByEra(eraId).slice(0, limit);
   }
 
   recent(limit = 30) {
@@ -234,6 +250,102 @@ export class ChronicleSystem {
     bus.on('ANIMAL_KILLED', (d) => {
       // Only notable kills make the chronicle (keeps it readable)
       if (d.by === 'wolf') this.add('death', `A ${d.species} was torn apart by wolves in the wild.`);
+    });
+    bus.on('NUCLEAR_STRIKE', (d) => {
+      const att = d.attackerName || (d.isGodPower ? 'Divine Wrath' : 'An atomic power');
+      const tgt = d.targetName || `(${Math.round(d.x || 0)}, ${Math.round(d.y || 0)})`;
+      const why = d.reason ? ` Why: ${d.reason}.` : '';
+      this.add('ruin', `☢️ NUCLEAR STRIKE! ${att} detonated an atomic warhead on ${tgt} (${d.deaths || 0} dead, ${d.buildingsRuined || 0} ruined).${why}`, {
+        icon: '☢️',
+        x: d.x,
+        y: d.y
+      });
+    });
+    bus.on('NUCLEAR_WARHEAD_BUILT', (d) => {
+      this.add('era', `☢️ ${d.settlementName || 'A modern power'} completed Nuclear Warhead #${d.warheads || 1} — atomic deterrence has arrived.`, {
+        icon: '☢️',
+        settlementId: d.settlementId
+      });
+    });
+    bus.on('URBAN_REBELLION', (d) => {
+      const reason = d.reason ? ` (${d.reason})` : '';
+      this.add('war', `🔥 Urban Uprising! Rebels rose up inside ${d.settlementName || 'a besieged city'}${reason}.`, {
+        icon: '🔥',
+        settlementId: d.settlementId,
+        x: d.x,
+        y: d.y
+      });
+    });
+    bus.on('SETTLEMENT_COLLAPSED', (d) => {
+      this.add('ruin', `🏚️ TOTAL COLLAPSE! ${d.name || 'A once-great city'} fell to complete ruin (${d.reason || 'devastation'}).`, {
+        icon: '🏚️',
+        settlementId: d.settlementId,
+        x: d.x,
+        y: d.y
+      });
+    });
+    bus.on('SANCTIONS_IMPOSED', (d) => {
+      this.add('era', `🚫 Embargo! ${d.fromName || d.issuerName || 'A realm'} imposed trade sanctions on ${d.targetName || 'a rival'}${d.reason ? ` — ${d.reason}` : ''}.`, {
+        icon: '🚫',
+        x: d.x,
+        y: d.y
+      });
+    });
+    bus.on('ULTIMATUM_ISSUED', (d) => {
+      const demandLabel = String(d.demand || d.kind || 'tribute').replace(/_/g, ' ');
+      this.add('war', `📜 Ultimatum! ${d.fromName || d.issuerName || 'A power'} issued a ${demandLabel} ultimatum to ${d.targetName || 'a neighbor'}: ${d.outcome || 'rejected'}.`, {
+        icon: '📜',
+        x: d.x,
+        y: d.y
+      });
+    });
+    bus.on('ESPIONAGE_OPERATION', (d) => {
+      if (!d) return;
+      this.add('espionage', `${d.title || 'Covert Operation'}: ${d.what || ''}`.trim(), {
+        icon: d.success ? '🕵️' : '🚨',
+        x: d.x,
+        y: d.y
+      });
+    });
+    bus.on('GUILD_FOUNDED', (d) => {
+      if (!d) return;
+      this.add('era', `⚖️ ${d.settlementName || 'A settlement'} chartered the ${d.guildName || 'Guild'}.`, {
+        icon: '⚖️',
+        settlementId: d.settlementId
+      });
+    });
+    bus.on('WONDER_STAGE_COMPLETED', (d) => {
+      if (!d) return;
+      this.add('wonder', `🏛️ ${d.settlementName || 'A realm'} raised Stage ${d.stage}/${d.maxStage || 3} of ${d.wonderName || 'a Great Wonder'}.`, {
+        icon: '🏛️',
+        settlementId: d.settlementId
+      });
+    });
+    bus.on('WONDER_COMPLETED', (d) => {
+      if (!d) return;
+      this.add('wonder', `🏛️ GREAT WONDER COMPLETED! ${d.settlementName || 'A realm'} unveiled ${d.wonderName || 'a Monument'} (${d.buffLabel || 'regional mastery'}).`, {
+        icon: '🏛️',
+        settlementId: d.settlementId
+      });
+    });
+    bus.on('FORTIFICATIONS_BUILT', (d) => {
+      if (!d) return;
+      this.add('founding', `🧱 ${d.settlementName || 'A city'} raised ${d.tierName || 'perimeter fortifications'} (${d.segmentsCount || 0} wall segments, ${d.towersCount || 0} watchtowers).`, {
+        icon: '🧱',
+        settlementId: d.settlementId,
+        x: d.x,
+        y: d.y
+      });
+    });
+    bus.on('WALL_BREACHED', (d) => {
+      if (!d) return;
+      const targetPart = d.wasGate ? 'gatehouse' : 'perimeter wall';
+      this.add('war', `💥 ${d.attackerName || 'Besiegers'} smashed a physical breach through ${d.settlementName || 'a city'}'s ${targetPart} at (${d.x}, ${d.y})!`, {
+        icon: '💥',
+        settlementId: d.settlementId,
+        x: d.x,
+        y: d.y
+      });
     });
   }
 

@@ -73,7 +73,14 @@ export class ConstructionSystem {
             [BUILDING_TYPES.FARM]: { width: 3, height: 3 },
             [BUILDING_TYPES.TOWER]: { width: 2, height: 2 },
             [BUILDING_TYPES.BARRACKS]: { width: 3, height: 3 },
-            [BUILDING_TYPES.MARKET]: { width: 3, height: 2 }
+            [BUILDING_TYPES.MARKET]: { width: 3, height: 2 },
+            [BUILDING_TYPES.WAREHOUSE]: { width: 3, height: 2 },
+            [BUILDING_TYPES.GRANARY]: { width: 2, height: 2 },
+            [BUILDING_TYPES.DOCK]: { width: 3, height: 2 },
+            [BUILDING_TYPES.FACTORY]: { width: 3, height: 3 },
+            [BUILDING_TYPES.RESEARCH_LAB]: { width: 3, height: 2 },
+            [BUILDING_TYPES.NUCLEAR_PLANT]: { width: 3, height: 3 },
+            [BUILDING_TYPES.MISSILE_SILO]: { width: 2, height: 2 }
         };
         
         const base = baseSizes[type] || { width: 2, height: 2 };
@@ -219,6 +226,41 @@ export class ConstructionSystem {
                 maxHealth: 350,
                 jobType: JOB_TYPES.TRADER,
                 bonuses: { tradeEfficiency: 0.2 }
+            },
+            [BUILDING_TYPES.WAREHOUSE]: {
+                cost: { wood_log: 45, stone: 20 },
+                buildTime: 450,
+                maxHealth: 500
+            },
+            [BUILDING_TYPES.GRANARY]: {
+                cost: { wood_log: 35, stone: 15 },
+                buildTime: 350,
+                maxHealth: 450
+            },
+            [BUILDING_TYPES.FACTORY]: {
+                cost: { wood_log: 60, ore_iron: 40 },
+                buildTime: 650,
+                maxHealth: 750,
+                jobType: JOB_TYPES.CRAFTER,
+                bonuses: { industry: 0.4 }
+            },
+            [BUILDING_TYPES.RESEARCH_LAB]: {
+                cost: { wood_log: 45, ore_iron: 35 },
+                buildTime: 600,
+                maxHealth: 600,
+                bonuses: { science: 0.35 }
+            },
+            [BUILDING_TYPES.NUCLEAR_PLANT]: {
+                cost: { wood_log: 50, ore_iron: 65 },
+                buildTime: 850,
+                maxHealth: 900,
+                bonuses: { nuclearPower: true }
+            },
+            [BUILDING_TYPES.MISSILE_SILO]: {
+                cost: { wood_log: 35, ore_iron: 55 },
+                buildTime: 700,
+                maxHealth: 950,
+                bonuses: { missileLaunch: true }
             }
         };
         

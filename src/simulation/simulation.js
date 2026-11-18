@@ -31,6 +31,8 @@ import { CivilizationAgeSystem } from "../systems/civilizationAgeSystem.js";
 import { WeatherSystem } from "../systems/weatherSystem.js";
 import { DynastySystem } from "../systems/dynastySystem.js";
 import { NavalSystem } from "../systems/navalSystem.js";
+import { EspionageSystem } from "../systems/espionageSystem.js";
+import { FortificationSystem } from "../systems/fortificationSystem.js";
 
 export class Simulation {
   // Deterministic RNG helper: always routes through the seeded world RNG.
@@ -146,6 +148,7 @@ export class Simulation {
     this.birthsThisSession = 0;
     this.deathsThisSession = 0;
     this.fallenHeroes = [];
+    this._deadDossiers = [];
     this.mortalityStats = {
       totalDeaths: 0,
       totalAgeAtDeath: 0,
@@ -248,6 +251,8 @@ export class Simulation {
     this.weatherSystem = new WeatherSystem(this);
     this.dynastySystem = new DynastySystem(this);
     this.navalSystem = new NavalSystem(this);
+    this.espionageSystem = new EspionageSystem(this);
+    this.fortificationSystem = new FortificationSystem(this);
     
     // Session statistics
     this.birthsThisSession = 0;
@@ -433,6 +438,13 @@ export class Simulation {
       if (this.economySystem) {
         this.economySystem.agentJobs.set(agent.id, { job: assigned, salary: 12, satisfaction: 85, assignedAt: 0 });
       }
+      const sName = agent.settlementId
+        ? (this.settlementSystem?.settlements?.get(agent.settlementId)?.name || 'Aetheria')
+        : 'the Wilds';
+      if (typeof agent.addLifeEvent === 'function') {
+        agent.addLifeEvent('ORIGIN', `Founding settler of ${sName}`, 0, '🏕️', true);
+        agent.addLifeEvent('CAREER', `Began working as ${agent.jobTitle}`, 0, '🛠️', false);
+      }
     }
 
     // Seed initial building projects in each community so builders immediately construct.
@@ -483,6 +495,10 @@ export class Simulation {
     // Initialize state creeds and beliefs for founded settlements
     if (this.religionSystem) {
       this.religionSystem.initWorldBeliefs();
+    }
+
+    if (this._scenario === 'modern_nuclear') {
+      this.applyModernNuclearScenario();
     }
     
     // Create resources: cluster abundant wood, water, ore, and food near communities
@@ -697,6 +713,7 @@ export class Simulation {
     this.updateEvents();
     this.updateFactions();
     this.updateDiplomacy(); // NEW: Inter-settlement diplomacy, treaties, alliances & war declarations
+    this.updateEspionage(); // Covert spy operations & guild factions
     this.updateWarfare(); // NEW: Warbands, tactical formations, sieges & battlefield clashes
     this.updateFormations(); // Military formations
     
@@ -705,6 +722,7 @@ export class Simulation {
     this.updateConstruction();
     this.updateReligion();
     this.updateInfrastructure(); // NEW: Roads/bridges
+    this.updateFortifications(); // Perimeter walls, gates, watchtowers & breaches
     this.updateNaval(); // Coastal docks, fishing boats, river barges, amphibious raids
 
     // Ecology: wildlife roam/breed/hunt after agents move so prey flee logic
@@ -758,6 +776,12 @@ export class Simulation {
     }
   }
 
+  updateEspionage() {
+    if (this.espionageSystem) {
+      this.espionageSystem.update(this.clock.tick);
+    }
+  }
+
   updateWarfare() {
     if (this.warfareSystem) {
       this.warfareSystem.update();
@@ -773,6 +797,12 @@ export class Simulation {
   updateInfrastructure() {
     // Update roads, irrigation, bridges
     this.infrastructureSystem.update();
+  }
+
+  updateFortifications() {
+    if (this.fortificationSystem) {
+      this.fortificationSystem.update(this.clock.tick);
+    }
   }
 
   updateNaval() {
@@ -806,6 +836,12 @@ export class Simulation {
       // Phase 3b Step 5: seasonal tribute collection for tributary/vassal settlements
       if (this.settlementSystem?.settlements) {
         for (const vassal of this.settlementSystem.settlements.values()) {
+          if (vassal.tributeTo && vassal.tributeUntil && this.clock.tick >= vassal.tributeUntil) {
+            vassal.tributeTo = null;
+            vassal.overlordId = null;
+            vassal.tributeUntil = 0;
+            continue;
+          }
           if (vassal.tributeTo) {
             const overlord = this.settlementSystem.settlements.get(vassal.tributeTo);
             if (overlord && overlord.stockpile && vassal.stockpile) {
@@ -836,6 +872,57 @@ export class Simulation {
     // Dynamic Weather System (Rain, Storms, Lightning, Droughts)
     if (this.weatherSystem) {
       this.weatherSystem.update(this.clock.tick);
+    }
+
+    // Persistent Nuclear Fallout & Radiation Sickness (must run independently of active fires)
+    if (this.world._radiationActive && this.world.radiationTiles) {
+      this.world.updateRadiation(this.clock.tick);
+      if ((this.clock.tick & 7) === 0) {
+        const tick = this.clock.tick;
+        for (const a of this.agents) {
+          if (!a.alive) continue;
+          const rad = this.world.getRadiation(a.x, a.y);
+          if (rad > 15) {
+            const dmg = Math.max(1, Math.round(rad / 45));
+            a.health = Math.max(0, (a.health ?? 100) - dmg);
+            if (a.needs) a.needs.health = a.health;
+            if (a.combat) a.combat.health = a.health;
+            if (a.health <= 0) {
+              a.alive = false;
+              a.deathCause = 'radiation';
+              if (typeof a.addLifeEvent === 'function') {
+                a.addLifeEvent('DEATH', 'Succumbed to lethal atomic radiation', tick, '☢️', true);
+              }
+            } else {
+              const lastRad = a._lastRadEventTick ?? -999;
+              if (tick - lastRad >= 60) {
+                a._lastRadEventTick = tick;
+                if (typeof a.remember === 'function') {
+                  a.remember('SURVIVED_NUKE', tick, { x: a.x, y: a.y, rep: -1 });
+                }
+                if (typeof a.addLifeEvent === 'function') {
+                  a.addLifeEvent('RADIATION', 'Endured toxic nuclear fallout', tick, '☢️', false);
+                }
+              }
+            }
+          }
+        }
+        if (this.resources) {
+          for (const res of this.resources) {
+            if (res.destroyed || res.depleted) continue;
+            if (res.resourceType === 'food' || res.resourceType === 'wood') {
+              const rad = this.world.getRadiation(res.x, res.y);
+              if (rad > 90) {
+                res.amount = Math.max(0, (res.amount || 10) - 3);
+                if (res.amount <= 0) {
+                  res.destroyed = true;
+                  this.world.scorchTile(Math.floor(res.x), Math.floor(res.y), 140);
+                }
+              }
+            }
+          }
+        }
+      }
     }
 
     // Perf: fire layer only matters while something burns. Skip the full-map
@@ -914,6 +1001,9 @@ export class Simulation {
             this.world.isBurning(Math.floor(a.x), Math.floor(a.y) + 1) ||
             this.world.isBurning(Math.floor(a.x), Math.floor(a.y) - 1)) {
           a.remember("SURVIVED_FIRE", this.clock.tick, { x: a.x, y: a.y });
+          if (typeof a.addLifeEvent === 'function') {
+            a.addLifeEvent('SURVIVED_FIRE', 'Braved a raging settlement blaze', this.clock.tick, '🔥', false);
+          }
         }
       }
     }
@@ -1042,7 +1132,10 @@ export class Simulation {
         // in practice (every planner/god-built structure carries its owning
         // settlement or sits outside another town's radius), and only the
         // counts feed the deterministic decisions below — never entity order.
-        let houses = 0, workshops = 0, farms = 0, temples = 0, towers = 0, pending = 0, nonRuined = 0;
+        let houses = 0, workshops = 0, farms = 0, temples = 0, towers = 0;
+        let granaries = 0, markets = 0, barracksCount = 0, warehouses = 0;
+        let factories = 0, researchLabs = 0, nuclearPlants = 0, missileSilos = 0;
+        let pending = 0, nonRuined = 0;
         const owned = bBySettlement.get(settlement.id);
         if (owned) {
           for (const b of owned) {
@@ -1054,12 +1147,21 @@ export class Simulation {
               case "farm": farms++; break;
               case "temple": temples++; break;
               case "tower": case "castle": towers++; break;
+              case "granary": granaries++; break;
+              case "market": markets++; break;
+              case "barracks": barracksCount++; break;
+              case "warehouse": warehouses++; break;
+              case "factory": factories++; break;
+              case "research_lab": researchLabs++; break;
+              case "nuclear_plant": nuclearPlants++; break;
+              case "missile_silo": missileSilos++; break;
             }
           }
         }
         
         // Only plan up to 2 active projects simultaneously, within per-city cap
-        const maxBuildings = Math.min(24, Math.max(8, Math.ceil(pop * 0.65) + 4));
+        const ageId = this.civilizationAgeSystem?.getSettlementAge?.(settlement.id)?.ageId || 1;
+        const maxBuildings = Math.min(28, Math.max(8, Math.ceil(pop * 0.7) + 5));
         if (pending < 2 && nonRuined < maxBuildings) {
           let neededType = null;
           if (houses < Math.max(1, Math.ceil(pop / 3))) {
@@ -1070,14 +1172,33 @@ export class Simulation {
             neededType = "farm";
           } else if (temples === 0 && pop >= 6) {
             neededType = "temple";
+          } else if (granaries === 0 && pop >= 6) {
+            neededType = "granary";
+          } else if (markets === 0 && pop >= 7) {
+            neededType = "market";
+          } else if (barracksCount === 0 && pop >= 9) {
+            neededType = "barracks";
+          } else if (warehouses === 0 && pop >= 11) {
+            neededType = "warehouse";
           } else if (houses < Math.ceil(pop / 2)) {
             neededType = "house";
           }
 
           // Civic milestone projects: towns raise a watchtower, cities a castle.
-          // Deterministic RNG usage preserved (same draw pattern as before).
           if (!neededType && pop >= 8 && towers === 0) {
             neededType = pop >= 15 ? "castle" : "tower";
+          }
+
+          // Industrial, Modern & Nuclear Age infrastructure chain:
+          // Factory -> Research Lab -> Nuclear Power Plant -> Missile Silo
+          if (!neededType && ageId >= 5 && pop >= 10 && factories === 0) {
+            neededType = "factory";
+          } else if (!neededType && ageId >= 5 && pop >= 12 && researchLabs === 0) {
+            neededType = "research_lab";
+          } else if (!neededType && ageId >= 6 && pop >= 12 && factories >= 1 && nuclearPlants === 0) {
+            neededType = "nuclear_plant";
+          } else if (!neededType && ageId >= 6 && pop >= 13 && nuclearPlants >= 1 && missileSilos === 0) {
+            neededType = "missile_silo";
           }
           
           if (neededType) {
@@ -1143,7 +1264,7 @@ export class Simulation {
   updateEconomy() {
     // Assign jobs to unemployed agents in settlements and idle agents
     if (this.clock.tick % 10 === 0) {
-      const availableJobs = ['gatherer', 'farmer', 'lumberjack', 'miner', 'builder', 'craftsman', 'soldier'];
+      const availableJobs = ['gatherer', 'farmer', 'hunter', 'lumberjack', 'miner', 'builder', 'craftsman', 'soldier'];
 
       // Soldier profession cap (Phase 3b Step 2): keep at most ~1 in 8
       // *adults* under arms per settlement so barracks upkeep never starves
@@ -1184,30 +1305,29 @@ export class Simulation {
       // food producers) so agents can voluntarily switch jobs when needed.
       const needsBuilders = new Set();
       const needsFood = new Set();
+      const needsHunters = new Set();
       const craftsmanSurplus = new Set();
       for (const [sid, settlement] of this.settlementSystem.settlements) {
-        let builders = 0, foodWorkers = 0, craftsmen = 0;
+        let builders = 0, foodWorkers = 0, craftsmen = 0, hunters = 0;
         for (const agentId of settlement.agentIds) {
           const a = this._agentById(agentId);
           if (!a || !a.alive) continue;
           if (a.job === 'builder') builders++;
           else if (a.job === 'craftsman') craftsmen++;
+          else if (a.job === 'hunter') { hunters++; foodWorkers++; }
           else if (a.job !== 'unemployed') foodWorkers++;
         }
         const pop = settlement.agentIds.size;
         if (pop >= 2 && builders === 0) needsBuilders.add(sid);
         if (pop >= 3 && foodWorkers <= 1) needsFood.add(sid);
-        // Workshop staffing target: one bench-worker per ~3 residents, capped
-        // at 4 per workshop building. When a town's craftsman roster exceeds
-        // that target the surplus hands are free to answer the call of
-        // boredom and retrain (see _updateCareerChanges). Zero RNG here.
+        if (pop >= 5 && hunters === 0) needsHunters.add(sid);
         const wsCount = wsCountBySettlement.get(sid) || 0;
         const wsCap = Math.max(1, wsCount) * 4;
         const target = Math.min(wsCap, Math.max(2, Math.floor(pop / 3)));
         if (craftsmen > target) craftsmanSurplus.add(sid);
       }
       // Publish the demand snapshot for the voluntary career-change pass.
-      this._jobDemand = { needsBuilders, needsFood, craftsmanSurplus };
+      this._jobDemand = { needsBuilders, needsFood, needsHunters, craftsmanSurplus };
 
       for (const settlement of this.settlementSystem.settlements.values()) {
         const homeSid = settlement.id;
@@ -1288,6 +1408,14 @@ export class Simulation {
                   agent._jobAssignedTick = this.clock.tick;
                   agent._lastJobAssignedTick = this.clock.tick;
                   this._jobChangeCount.set(agent.id, (this._jobChangeCount.get(agent.id) || 0) + 1);
+                } else if (needsHunters.has(homeSid) && agent.job !== 'hunter' && agent.job !== 'craftsman' &&
+                           agent.job !== 'builder' && agent.job !== 'soldier' &&
+                           (this.animalSystem?.animals?.length || 0) >= 6) {
+                  needsHunters.delete(homeSid);
+                  this.economySystem.assignJob(agent, ['hunter']);
+                  agent._jobAssignedTick = this.clock.tick;
+                  agent._lastJobAssignedTick = this.clock.tick;
+                  this._jobChangeCount.set(agent.id, (this._jobChangeCount.get(agent.id) || 0) + 1);
                 } else if (needsFood.has(homeSid) && agent.job !== 'farmer' && agent.job !== 'gatherer' &&
                            agent.job !== 'lumberjack' && agent.job !== 'hunter' &&
                            // Protect the workshop roster: poaching craftsmen
@@ -1295,7 +1423,7 @@ export class Simulation {
                            // crafting -> distribution -> trade pipeline while
                            // granaries overflowed.
                            agent.job !== 'craftsman') {
-                  this.economySystem.assignJob(agent, ['farmer', 'gatherer', 'lumberjack']);
+                  this.economySystem.assignJob(agent, ['farmer', 'hunter', 'gatherer', 'lumberjack']);
                   agent._jobAssignedTick = this.clock.tick;
                   agent._lastJobAssignedTick = this.clock.tick;
                   this._jobChangeCount.set(agent.id, (this._jobChangeCount.get(agent.id) || 0) + 1);
@@ -1454,6 +1582,10 @@ export class Simulation {
       // (reconcileCraftsmen prunes the stale entry next tick otherwise).
       if (agent.workplace && this.craftingSystem?.workshops?.has(agent.workplace)) {
         this.craftingSystem.removeWorker(agent.workplace, agent.id);
+      }
+
+      if (typeof agent.addLifeEvent === 'function') {
+        agent.addLifeEvent('CAREER', `Retrained from ${rec.job} to ${newJob}`, this.clock.tick, '🛠️', false);
       }
 
       this.eventBus.emit("CAREER_CHANGED", {
@@ -1716,6 +1848,16 @@ export class Simulation {
         if (this.dynastySystem) {
           this.dynastySystem.onAgentBorn(baby, parent1, parent2);
         }
+        if (typeof baby.addLifeEvent === 'function') {
+          const pText = parent1 ? ` to ${parent1.name}${parent2 && parent2 !== parent1 ? ` & ${parent2.name}` : ''}` : '';
+          baby.addLifeEvent('BIRTH', `Born${pText}`, currentTick, '👶', true);
+        }
+        if (parent1 && typeof parent1.addLifeEvent === 'function') {
+          parent1.addLifeEvent('CHILD', `Welcomed newborn ${baby.name}`, currentTick, '👶', true);
+        }
+        if (parent2 && parent2 !== parent1 && typeof parent2.addLifeEvent === 'function') {
+          parent2.addLifeEvent('CHILD', `Welcomed newborn ${baby.name}`, currentTick, '👶', true);
+        }
       }
     }
     
@@ -1735,6 +1877,11 @@ export class Simulation {
         if (!agent.alive) deadAgents.push(agent);
       }
       for (const dead of deadAgents) {
+        const deathCause = dead.deathCause || "natural";
+        if (typeof dead.addLifeEvent === 'function' && (!dead.lifeHistory || !dead.lifeHistory.some(e => e.kind === 'DEATH'))) {
+          dead.addLifeEvent('DEATH', `Died of ${deathCause} at age ${Math.floor(dead.age || 0)}`, currentTick, '🕯️', true);
+        }
+        this._recordDeadDossier(dead, deathCause);
         // Bookkeeping: drop the economy job record so agentJobs never
         // accumulates ghost rows of the dead. Without this, stale ids get
         // re-issued to newborns and inherit a stranger's profession.
@@ -1745,7 +1892,7 @@ export class Simulation {
           x: dead.x,
           y: dead.y,
           age: Math.floor(dead.age),
-          cause: dead.deathCause || "natural"
+          cause: deathCause
         });
         this.world.removeFromSpatialIndex(Math.floor(dead.x), Math.floor(dead.y), dead);
         this.world.entityRegistry?.delete(dead.id);
@@ -1877,7 +2024,8 @@ export class Simulation {
           if (terrain && (terrain.biome === "forest" || terrain.biome === "jungle" || terrain.biome === "grassland") && this.world.isWalkable(x, y)) {
             const entities = this.world.getEntitiesAt(x, y);
             if (!entities.some(e => e.type === "resource" || e.type === "building")) {
-              const res = new Resource(x, y, "wood", Math.floor(35 + this._rng().next() * 25), this.idGen);
+              // New trees sprout naturally as saplings and grow through young -> mature -> ancient
+              const res = new Resource(x, y, "wood", 10, this.idGen, { growthStage: "sapling", growthProgress: 12 });
               this.resources.push(res);
               this.world.addToSpatialIndex(x, y, res);
               woodCount++;
@@ -1911,10 +2059,11 @@ export class Simulation {
       }
     }
 
-    // Uncover ore deposits in mountains/highlands
-    const targetOre = 90;
-    if (oreCount < targetOre) {
-      const needed = Math.min(6, targetOre - oreCount);
+    // Mineral ore veins are finite and slow to uncover — heavy mining permanently
+    // depletes nearby seams, forcing caravans and territorial competition.
+    const targetOre = 48;
+    if (oreCount < targetOre && (this.clock.tick % 90 === 0)) {
+      const needed = Math.min(2, targetOre - oreCount);
       for (let k = 0; k < needed; k++) {
         for (let attempt = 0; attempt < 8; attempt++) {
           const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
@@ -1923,7 +2072,7 @@ export class Simulation {
           if (terrain && (terrain.biome === "mountain" || terrain.biome === "highland" || terrain.biome === "tundra") && this.world.isWalkable(x, y)) {
             const entities = this.world.getEntitiesAt(x, y);
             if (!entities.some(e => e.type === "resource" || e.type === "building")) {
-              const res = new Resource(x, y, "ore", Math.floor(45 + this._rng().next() * 30), this.idGen);
+              const res = new Resource(x, y, "ore", Math.floor(35 + this._rng().next() * 25), this.idGen, { exhaustionsRemaining: 1 });
               this.resources.push(res);
               this.world.addToSpatialIndex(x, y, res);
               oreCount++;
@@ -1984,7 +2133,12 @@ export class Simulation {
     if (idx !== undefined && this.agents[idx] && this.agents[idx].id === agentId) {
       const agent = this.agents[idx];
       agent.alive = false;
+      const finalCause = cause || agent.deathCause || "removed";
       if (cause && !agent.deathCause) agent.deathCause = cause;
+      if (typeof agent.addLifeEvent === 'function' && (!agent.lifeHistory || !agent.lifeHistory.some(e => e.kind === 'DEATH'))) {
+        agent.addLifeEvent('DEATH', `Died of ${finalCause} at age ${Math.floor(agent.age || 0)}`, this.clock?.tick ?? 0, '🕯️', true);
+      }
+      this._recordDeadDossier(agent, finalCause);
       this.world.removeFromSpatialIndex(Math.floor(agent.x), Math.floor(agent.y), agent);
       this.world.entityRegistry?.delete(agentId);
       this.agents.splice(idx, 1);
@@ -2059,14 +2213,67 @@ export class Simulation {
   }
 
   spawnAgent(x, y) {
-    const agent = new Agent(x, y, this.idGen, null, this.world.rng);
+    const w = this.world?.width || 128;
+    const h = this.world?.height || 128;
+    const sx = Math.max(1, Math.min(w - 1.1, x));
+    const sy = Math.max(1, Math.min(h - 1.1, y));
+    const agent = new Agent(sx, sy, this.idGen, null, this.world.rng);
     // God-touched wanderer: while unaffiliated they roam locally and gather
     // supplies instead of trekking to the world center (fixes top-of-map bias).
     agent.pioneer = true;
+    agent.spawnX = sx;
+    agent.spawnY = sy;
     this.addAgent(agent);
-    this.world.addToSpatialIndex(Math.floor(x), Math.floor(y), agent);
-    this.eventBus.emit("GOD_POWER_USED", { power: "spawn_agent", x, y });
+    this.combatSystem?.initCombatEntity?.(agent);
+    this.religionSystem?.initReligionEntity?.(agent);
+    this.relationshipSystem?.initializeAgent?.(agent.id);
+    if (typeof agent.addLifeEvent === 'function') {
+      agent.addLifeEvent('ORIGIN', 'Arrived in the world as a pioneer', this.clock?.tick ?? 0, '✨', true);
+    }
+    this.world.addToSpatialIndex(Math.floor(sx), Math.floor(sy), agent);
+    this.eventBus.emit("AGENT_CREATED", { agentId: agent.id, name: agent.name, x: sx, y: sy, reason: "divine" });
+    this.eventBus.emit("GOD_POWER_USED", { power: "spawn_agent", x: sx, y: sy });
     return agent;
+  }
+
+  /**
+   * Player-facing safe citizen spawn: nudges off impassable fortification walls
+   * onto a clear neighboring tile and cleanly raises maxAgents when needed.
+   */
+  spawnCitizenAt(x, y) {
+    const w = this.world?.width || 128;
+    const h = this.world?.height || 128;
+    const tx = Math.floor(x);
+    const ty = Math.floor(y);
+    const isClearTile = (cx, cy) => {
+      if (cx < 1 || cy < 1 || cx >= w - 1 || cy >= h - 1) return false;
+      if (!this.world.isWalkable(cx, cy)) return false;
+      if (this.fortificationSystem?.isBlockedForAgent?.(cx, cy, { settlementId: null })) return false;
+      return true;
+    };
+
+    let spawnX = x;
+    let spawnY = y;
+    let foundClear = isClearTile(tx, ty);
+    if (!foundClear) {
+      for (let r = 1; r <= 2 && !foundClear; r++) {
+        for (let dy = -r; dy <= r && !foundClear; dy++) {
+          for (let dx = -r; dx <= r && !foundClear; dx++) {
+            if (isClearTile(tx + dx, ty + dy)) {
+              spawnX = tx + dx + 0.5;
+              spawnY = ty + dy + 0.5;
+              foundClear = true;
+            }
+          }
+        }
+      }
+    }
+    if (!foundClear) return null;
+
+    if (this.agents.length >= (this.maxAgents ?? 360)) {
+      this.maxAgents = Math.min(1200, this.agents.length + 25);
+    }
+    return this.spawnAgent(spawnX, spawnY);
   }
 
   // Pioneer colonization: god-spawned (or otherwise unaffiliated) agents that
@@ -2076,39 +2283,543 @@ export class Simulation {
     const ssys = this.settlementSystem;
     const pioneers = this.agents.filter(a =>
       a.alive && a.pioneer && !a.settlementId && !ssys.agentSettlementMap.get(a.id));
-    if (pioneers.length === 0) return;
+    if (pioneers.length > 0) {
+      for (const seed of pioneers) {
+        if (!seed.alive || !seed.pioneer || seed.settlementId || ssys.agentSettlementMap.get(seed.id)) continue;
 
-    for (const seed of pioneers) {
-      // Recruit nearby pioneers (and any unaffiliated locals) into a band
-      const band = [seed];
-      for (const other of pioneers) {
-        if (other === seed) continue;
-        if (Math.hypot(other.x - seed.x, other.y - seed.y) < 14) band.push(other);
-      }
-      const nearTown = [...ssys.settlements.values()].some(s =>
-        Math.hypot(s.center.x - seed.x, s.center.y - seed.y) < 24);
-      if (nearTown) continue; // joins an existing town via normal clustering
+        // Recruit only still-unassigned nearby pioneers into one clean band
+        const band = [seed];
+        for (const other of pioneers) {
+          if (other === seed || !other.alive || !other.pioneer || other.settlementId || ssys.agentSettlementMap.get(other.id)) continue;
+          if (Math.hypot(other.x - seed.x, other.y - seed.y) < 14) band.push(other);
+        }
+        const nearTown = [...ssys.settlements.values()].some(s =>
+          !s.ruined && s.center && Math.hypot(s.center.x - seed.x, s.center.y - seed.y) < 24);
+        if (nearTown) continue; // joins an existing town via normal clustering
 
-      if (band.length >= 3) {
-        // Ready to colonize: found a village at the band's camp
-        let cx = 0, cy = 0;
-        for (const b of band) { cx += b.x; cy += b.y; }
-        cx /= band.length; cy /= band.length;
-        const settlement = ssys.foundSettlement(cx, cy, band);
-        for (const b of band) b.pioneer = false;
-        this.eventBus.emit("SETTLEMENT_FOUNDED", {
-          id: settlement?.id ?? null, name: settlement?.name ?? "New Camp",
-          x: cx, y: cy, population: band.length, pioneer: true
-        });
-      } else {
-        // Small band: stay active near the spawn site — gather & make camp
-        const angle = this._rng().next() * Math.PI * 2;
-        const dist = 3 + this._rng().next() * 5;
-        const tx = Math.max(8, Math.min(this.world.width - 8, seed.x + Math.cos(angle) * dist));
-        const ty = Math.max(8, Math.min(this.world.height - 8, seed.y + Math.sin(angle) * dist));
-        seed.goals = [{ type: "gather_supplies", priority: 60, target: { x: tx, y: ty } }];
+        if (band.length >= 3) {
+          // Ready to colonize: found a village at the band's camp
+          let cx = 0, cy = 0;
+          for (const b of band) { cx += b.x; cy += b.y; }
+          cx /= band.length; cy /= band.length;
+          const settlement = ssys.foundSettlement(cx, cy, band);
+          for (const b of band) {
+            b.pioneer = false;
+            if (typeof b.addLifeEvent === 'function') {
+              b.addLifeEvent('FOUNDING', `Co-founded frontier settlement ${settlement?.name || 'New Camp'}`, this.clock.tick, '🏕️', true);
+            }
+          }
+          if (settlement) {
+            if (this.religionSystem) {
+              this.religionSystem.initWorldBeliefs();
+            }
+            if (this.diplomacySystem) {
+              for (const other of ssys.settlements.values()) {
+                if (other.id !== settlement.id && !other.ruined) {
+                  this.diplomacySystem.initRelation(settlement.id, other.id);
+                }
+              }
+            }
+          }
+          this.eventBus.emit("SETTLEMENT_FOUNDED", {
+            id: settlement?.id ?? null, name: settlement?.name ?? "New Camp",
+            x: cx, y: cy, population: band.length, pioneer: true
+          });
+        } else {
+          // Small band: stay active near the spawn site — gather & make camp
+          const angle = this._rng().next() * Math.PI * 2;
+          const dist = 3 + this._rng().next() * 5;
+          const tx = Math.max(8, Math.min(this.world.width - 8, seed.x + Math.cos(angle) * dist));
+          const ty = Math.max(8, Math.min(this.world.height - 8, seed.y + Math.sin(angle) * dist));
+          seed.goals = [{ type: "gather_supplies", priority: 60, target: { x: tx, y: ty } }];
+        }
       }
     }
+
+    // Autonomous organic frontier splintering after world init (keeps tick 0 at 3 cities)
+    if (this.clock.tick >= 120 && this.clock.tick % 100 === 0 && ssys.settlements.size < 6) {
+      const sortedCities = [...ssys.settlements.values()]
+        .filter(s => s && !s.ruined && (s.population || s.agentIds?.size || 0) >= 16)
+        .sort((a, b) => a.id - b.id);
+      for (const origin of sortedCities) {
+        const candidates = [];
+        for (const aid of origin.agentIds || []) {
+          const a = this._agentById(aid);
+          if (a && a.alive && a.lifeStage === 'adult' && !a.isMonarch && !a.militaryDuty && !a.captive && !a.isRebel) {
+            candidates.push(a);
+          }
+        }
+        candidates.sort((a, b) => a.id - b.id);
+        if (candidates.length < 3) continue;
+
+        let fx = null, fy = null;
+        for (let attempt = 0; attempt < 24; attempt++) {
+          const ang = this._rng().next() * Math.PI * 2;
+          const dist = 27 + this._rng().next() * 14;
+          const cx = Math.floor(origin.center.x + Math.cos(ang) * dist);
+          const cy = Math.floor(origin.center.y + Math.sin(ang) * dist);
+          if (cx < 10 || cy < 10 || cx >= this.world.width - 10 || cy >= this.world.height - 10) continue;
+          if (!this.world.isWalkable(cx, cy)) continue;
+          const terr = this.world.getTerrain(cx, cy);
+          if (!terr || terr.type === 'water' || terr.type === 'snow') continue;
+          const farFromAll = [...ssys.settlements.values()].every(s =>
+            !s.center || Math.hypot(s.center.x - cx, s.center.y - cy) >= 25
+          );
+          if (farFromAll) { fx = cx; fy = cy; break; }
+        }
+        if (fx === null) continue;
+
+        const colonists = candidates.slice(0, 3);
+        for (const col of colonists) {
+          origin.agentIds.delete(col.id);
+          ssys.agentSettlementMap.delete(col.id);
+          if (col._sx !== undefined) this.world.removeFromSpatialIndex(col._sx, col._sy, col);
+          col.x = fx + (this._rng().next() - 0.5) * 2;
+          col.y = fy + (this._rng().next() - 0.5) * 2;
+          col.homeId = null;
+          col.workplace = null;
+          col.constructionTarget = null;
+          col.path = null;
+          col.goals = [];
+          this.world.addToSpatialIndex(Math.floor(col.x), Math.floor(col.y), col);
+        }
+        origin.population = origin.agentIds.size;
+
+        const colony = ssys.foundSettlement(fx, fy, colonists);
+        if (colony) {
+          for (const col of colonists) {
+            if (typeof col.addLifeEvent === 'function') {
+              col.addLifeEvent('FOUNDING', `Settled splinter kingdom ${colony.name} from ${origin.name}`, this.clock.tick, '🏕️', true);
+            }
+          }
+          if (this.diplomacySystem) {
+            for (const other of ssys.settlements.values()) {
+              if (other.id !== colony.id && !other.ruined) {
+                this.diplomacySystem.initRelation(colony.id, other.id);
+              }
+            }
+            this.diplomacySystem.seedFeud(colony.id, origin.id, 65);
+          }
+          if (this.chronicleSystem?.add) {
+            this.chronicleSystem.add('founding', `🚩 Frontier colonists from ${origin.name} broke away to establish ${colony.name}!`, {
+              icon: '🚩',
+              x: fx,
+              y: fy
+            });
+          }
+          this.eventBus.emit("SETTLEMENT_FOUNDED", {
+            id: colony.id, name: colony.name, x: fx, y: fy, population: colonists.length, splinterFrom: origin.name
+          });
+        }
+        break; // At most 1 new frontier colony per 100-tick pass
+      }
+    }
+  }
+
+  /**
+   * Detonate a tactical or strategic nuclear weapon at (x, y).
+   * Pure deterministic execution (no Math.random). Stamps craters, fallout, fires,
+   * ruins structures, kills/irradiates agents, records skull monuments, and triggers diplomacy outrage.
+   */
+  detonateNuclearStrike({ x, y, attackerSettlementId = null, targetSettlementId = null, reason = "Strategic Nuclear Strike", isGodPower = false, isRetaliation = false } = {}) {
+    const tick = this.clock?.tick ?? 0;
+    const W = this.world.width || 128;
+    const H = this.world.height || 128;
+    const cx = Math.max(1, Math.min(W - 2, Math.floor(x ?? W / 2)));
+    const cy = Math.max(1, Math.min(H - 2, Math.floor(y ?? H / 2)));
+
+    const attacker = attackerSettlementId != null ? this.settlementSystem?.settlements?.get(attackerSettlementId) : null;
+    const target = targetSettlementId != null ? this.settlementSystem?.settlements?.get(targetSettlementId) : null;
+    const attackerEraId = attackerSettlementId != null
+      ? (this.civilizationAgeSystem?.getSettlementAge?.(attackerSettlementId)?.ageId || 6)
+      : 7;
+    const isNuclearAgeYield = attackerEraId >= 7 || isGodPower;
+
+    const craterRadius = isNuclearAgeYield ? 6 : 5;
+    const falloutRadius = isNuclearAgeYield ? 11 : 9;
+    const fireBound = isNuclearAgeYield ? 5 : 4;
+    const buildingRadius = isNuclearAgeYield ? 10.5 : 8.5;
+    const coreRuinRadius = isNuclearAgeYield ? 5.5 : 4.5;
+    const wallBreachRadius = isNuclearAgeYield ? 7.2 : 5.5;
+    const vaporizeRadius = isNuclearAgeYield ? 6.0 : 4.5;
+    const shockRadius = isNuclearAgeYield ? 13.5 : 10.5;
+
+    this.world.addCrater(cx, cy, craterRadius, 255);
+    this.world.addFallout(cx, cy, falloutRadius, 255);
+
+    for (let dy = -fireBound; dy <= fireBound; dy++) {
+      for (let dx = -fireBound; dx <= fireBound; dx++) {
+        const d = Math.hypot(dx, dy);
+        if (d >= 2 && d <= (fireBound + 0.4) && ((dx * dx + dy * dy + tick) % 3 === 0)) {
+          const fx = cx + dx;
+          const fy = cy + dy;
+          if (fx >= 0 && fx < W && fy >= 0 && fy < H && this.world.isWalkable(fx, fy)) {
+            this.world.startFire(fx, fy, 50);
+          }
+        }
+      }
+    }
+
+    let buildingsRuined = 0;
+    if (Array.isArray(this.buildings)) {
+      for (const b of this.buildings) {
+        if (!b || b.isRuined) continue;
+        const d = Math.hypot(b.x - cx, b.y - cy);
+        if (d <= buildingRadius) {
+          const dmg = d <= coreRuinRadius ? (b.maxHealth || 200) : Math.round((b.maxHealth || 200) * 0.7);
+          b.health = Math.max(0, (b.health ?? 100) - dmg);
+          if (b.health <= 0 || d <= coreRuinRadius) {
+            b.health = 0;
+            b.isRuined = true;
+            b.ruinedAtTick = tick;
+            buildingsRuined++;
+            this.eventBus.emit("building_destroyed", { building: b, cause: "nuclear_strike" });
+          }
+        }
+      }
+    }
+
+    if (this.fortificationSystem?.segments?.size > 0) {
+      const attackerLabel = attacker?.name || "Nuclear Blast";
+      for (const seg of this.fortificationSystem.segments.values()) {
+        if (!seg || seg.state === "breach" || seg.hp <= 0) continue;
+        const d = Math.hypot(seg.x + 0.5 - cx, seg.y + 0.5 - cy);
+        if (d <= wallBreachRadius) {
+          this.fortificationSystem.damageSegment(seg, seg.maxHp + 100, attackerLabel, null, { silent: true });
+        } else if (d <= buildingRadius) {
+          const dmg = Math.round((seg.maxHp || 200) * 0.65);
+          this.fortificationSystem.damageSegment(seg, dmg, attackerLabel, null, { silent: true });
+        }
+      }
+    }
+
+    let casualties = 0;
+    for (const a of this.agents) {
+      if (!a || !a.alive) continue;
+      const d = Math.hypot(a.x - cx, a.y - cy);
+      if (d <= vaporizeRadius) {
+        a.health = 0;
+        if (a.needs) a.needs.health = 0;
+        if (a.combat) a.combat.health = 0;
+        a.alive = false;
+        a.deathCause = "nuclear_blast";
+        if (typeof a.addLifeEvent === "function") {
+          a.addLifeEvent("DEATH", "Vaporized in a nuclear detonation", tick, "☢️", true);
+        }
+        this._recordDeadDossier(a, "nuclear_blast");
+        casualties++;
+      } else if (d <= shockRadius) {
+        const dmg = Math.round((isNuclearAgeYield ? 80 : 65) - (d - vaporizeRadius) * 5);
+        a.health = Math.max(0, (a.health ?? 100) - dmg);
+        if (a.needs) a.needs.health = a.health;
+        if (a.combat) a.combat.health = a.health;
+        if (a.health <= 0) {
+          a.alive = false;
+          a.deathCause = "nuclear_blast";
+          if (typeof a.addLifeEvent === "function") {
+            a.addLifeEvent("DEATH", "Perished in the nuclear shockwave", tick, "☢️", true);
+          }
+          this._recordDeadDossier(a, "nuclear_blast");
+          casualties++;
+        } else {
+          if (typeof a.remember === "function") {
+            a.remember("SURVIVED_NUKE", tick, { x: a.x, y: a.y, rep: -1 });
+          }
+          if (typeof a.addLifeEvent === "function") {
+            a.addLifeEvent("NUKE", "Survived a blinding nuclear flash", tick, "☢️", true);
+          }
+        }
+      }
+    }
+
+    // Track atomic casualties inside active war ledger so War Room / War Score reflect nuclear devastation
+    if (this.diplomacySystem && attacker && target && casualties > 0) {
+      const war = this.diplomacySystem.activeWars?.find(w =>
+        w.active &&
+        ((w.attackerId === attacker.id && w.defenderId === target.id) ||
+         (w.defenderId === attacker.id && w.attackerId === target.id))
+      );
+      if (war) {
+        war.casualties = war.casualties || {};
+        war.casualties[target.id] = (war.casualties[target.id] || 0) + casualties;
+        war.weariness = war.weariness || {};
+        war.weariness[target.id] = (war.weariness[target.id] || 0) + Math.min(35, casualties * 3);
+      }
+    }
+
+    const blastTitle = target ? `Atomic Ground Zero: ${target.name}` : "Atomic Ground Zero";
+    this.world.addSkullMonument(blastTitle, cx, cy, Math.max(1, casualties), "nuke", tick);
+
+    if (this.warfareSystem && Array.isArray(this.warfareSystem.combatEffects)) {
+      this.warfareSystem.combatEffects.push({
+        type: "nuke",
+        x: cx,
+        y: cy,
+        radius: isNuclearAgeYield ? 12 : 10,
+        tick,
+        duration: 55
+      });
+    }
+
+    if (target) {
+      let aliveTargetPop = 0;
+      for (const a of this.agents) {
+        if (a && a.alive && a.settlementId === target.id) aliveTargetPop++;
+      }
+      if (aliveTargetPop === 0 && typeof this.settlementSystem?.collapseSettlement === "function") {
+        this.settlementSystem.collapseSettlement(
+          target.id,
+          isGodPower ? "Obliterated by Divine Atomic Fire" : `Nuclear annihilation by ${attacker?.name || "a rival power"}`,
+          attacker?.id ?? null,
+          tick
+        );
+      } else if (buildingsRuined >= 3 && aliveTargetPop <= 2) {
+        target.ruined = true;
+        target.ruinsTicks = Math.max(target.ruinsTicks || 0, 20);
+        target.collapseReason = `Devastated by atomic strike (${reason})`;
+      }
+    }
+
+    if (this.diplomacySystem) {
+      if (attacker && this.settlementSystem?.settlements) {
+        for (const other of this.settlementSystem.settlements.values()) {
+          if (!other || other.id === attacker.id || other.ruined) continue;
+          const rel = this.diplomacySystem.getRelation(other.id, attacker.id);
+          if (rel) {
+            rel.score = Math.max(-100, (rel.score || 0) - 25);
+          }
+          this.diplomacySystem.addGrievance(other.id, attacker.id, "Atomic Atrocity", 20);
+        }
+      }
+      const actorIds = [];
+      const actorNames = [];
+      if (attacker) { actorIds.push(attacker.id); actorNames.push(attacker.name); }
+      if (target) { actorIds.push(target.id); actorNames.push(target.name); }
+      this.diplomacySystem.recordDiplomaticEvent({
+        tick,
+        type: "nuke",
+        outcome: isRetaliation ? "retaliated" : "detonated",
+        title: isRetaliation
+          ? `☢️ MAD Nuclear Retaliation on ${target?.name || `(${cx}, ${cy})`}`
+          : target ? `Atomic Strike on ${target.name}` : `Nuclear Detonation (${cx}, ${cy})`,
+        what: attacker
+          ? `${attacker.name} detonated a nuclear warhead over ${target?.name || `(${cx}, ${cy})`}, killing ${casualties} and ruining ${buildingsRuined} buildings.`
+          : `A nuclear detonation struck ${target?.name || `(${cx}, ${cy})`}, killing ${casualties} and ruining ${buildingsRuined} buildings.`,
+        why: reason,
+        drivers: [
+          `${casualties} blast casualties · ${buildingsRuined} structures ruined`,
+          `Persistent toxic fallout across radius ${falloutRadius}`,
+          attacker ? `Global atomic outrage (-25 standing, +20 grievance)` : `Divine atomic reckoning`
+        ],
+        actors: actorIds,
+        actorNames,
+        x: cx,
+        y: cy
+      });
+    }
+
+    this.eventBus.emit("NUCLEAR_STRIKE", {
+      x: cx,
+      y: cy,
+      attackerId: attacker?.id ?? null,
+      attackerName: attacker?.name || (isGodPower ? "Divine Wrath" : "Atomic Power"),
+      targetId: target?.id ?? null,
+      targetName: target?.name || "Frontier",
+      reason,
+      casualties,
+      buildingsRuined,
+      isGodPower,
+      isRetaliation,
+      tick
+    });
+
+    // Mutual Assured Destruction (MAD): if a nuclear-armed target survives an enemy strike, launch atomic retaliation
+    if (!isGodPower && !isRetaliation && target && attacker && !target.ruined && !attacker.ruined && attacker.id !== target.id && attacker.center) {
+      const targetProg = this.civilizationAgeSystem?.getNuclearProgram?.(target.id);
+      if (targetProg && targetProg.unlocked && targetProg.warheads > 0 && (targetProg.lastRetaliationTick ?? -999) <= tick - 30) {
+        targetProg.warheads = Math.max(0, targetProg.warheads - 1);
+        targetProg.totalStrikes = (targetProg.totalStrikes || 0) + 1;
+        targetProg.lastStrikeTick = tick;
+        targetProg.lastRetaliationTick = tick;
+        this.detonateNuclearStrike({
+          x: attacker.center.x,
+          y: attacker.center.y,
+          attackerSettlementId: target.id,
+          targetSettlementId: attacker.id,
+          reason: `Mutual Assured Destruction (MAD) automatic nuclear counter-strike after ${attacker.name} hit ${target.name}`,
+          isGodPower: false,
+          isRetaliation: true,
+        });
+      }
+    }
+
+    return { x: cx, y: cy, casualties, buildingsRuined };
+  }
+
+  _recordDeadDossier(agent, cause = "natural") {
+    if (!agent || agent.id == null) return null;
+    if (!Array.isArray(this._deadDossiers)) this._deadDossiers = [];
+    const dossier = this.buildAgentDossier(agent, { alive: false, deathCause: cause || agent.deathCause || "natural" });
+    const existingIdx = this._deadDossiers.findIndex(d => d.id === agent.id);
+    if (existingIdx !== -1) {
+      this._deadDossiers[existingIdx] = dossier;
+    } else {
+      this._deadDossiers.push(dossier);
+      if (this._deadDossiers.length > 120) {
+        this._deadDossiers.shift();
+      }
+    }
+    return dossier;
+  }
+
+  buildAgentDossier(agent, overrides = {}) {
+    if (!agent) return null;
+    const settlementName = agent.settlementId
+      ? (this.settlementSystem?.settlements?.get(agent.settlementId)?.name || `Settlement ${agent.settlementId}`)
+      : "Wilds";
+
+    const resolveRef = (id) => {
+      if (id == null) return null;
+      const live = this._agentById(id);
+      if (live) return { id: live.id, name: live.name, alive: !!live.alive };
+      const archived = Array.isArray(this._deadDossiers) ? this._deadDossiers.find(d => d.id === id) : null;
+      if (archived) return { id: archived.id, name: archived.name, alive: false };
+      const hero = Array.isArray(this.fallenHeroes) ? this.fallenHeroes.find(h => h.id === id) : null;
+      if (hero) return { id: hero.id, name: hero.name, alive: false };
+      return { id, name: `#${id}`, alive: false };
+    };
+
+    const fam = this.relationshipSystem?.getRelatives?.(agent.id);
+    const parentIds = (fam?.parents?.length ? fam.parents : agent.parents) || [];
+    const parents = parentIds.map(resolveRef).filter(Boolean);
+    const spouseId = fam?.spouse ?? agent.partnerId ?? null;
+    const spouse = spouseId != null ? resolveRef(spouseId) : null;
+    const children = (fam?.children || []).map(resolveRef).filter(Boolean);
+    const siblings = (fam?.siblings || []).map(resolveRef).filter(Boolean);
+
+    const friends = [];
+    const rivals = [];
+    const relMap = this.relationshipSystem?.relationships?.get(agent.id);
+    if (relMap) {
+      const entries = Array.from(relMap.entries()).sort((a, b) => a[0] - b[0]);
+      for (const [otherId, rel] of entries) {
+        const ref = resolveRef(otherId);
+        if (!ref) continue;
+        const net = Math.round((rel.friendship || 0) - (rel.rivalry || 0));
+        if ((rel.rivalry || 0) >= 25 || net <= -20) {
+          rivals.push({ ...ref, score: Math.round(rel.rivalry || Math.abs(net)), label: rel.relationType || "Rival" });
+        } else if ((rel.friendship || 0) >= 25 || (rel.romance || 0) >= 40) {
+          friends.push({
+            ...ref,
+            score: Math.round(Math.max(rel.friendship || 0, rel.romance || 0)),
+            label: rel.relationType || ((rel.romance || 0) >= 60 ? "Romantic" : "Friend")
+          });
+        }
+      }
+      friends.sort((a, b) => b.score - a.score || a.id - b.id);
+      rivals.sort((a, b) => b.score - a.score || a.id - b.id);
+    }
+
+    return {
+      id: agent.id,
+      name: agent.name,
+      surname: agent.surname ?? null,
+      epithet: agent.epithet ?? null,
+      age: Math.floor(agent.age || 0),
+      maxAge: Math.floor(agent.maxAge || 72),
+      lifeStage: agent.lifeStage || "adult",
+      gender: agent.gender || "neutral",
+      alive: overrides.alive !== undefined ? overrides.alive : agent.alive !== false,
+      deathCause: overrides.deathCause ?? agent.deathCause ?? null,
+      deathTick: overrides.alive === false ? (this.clock?.tick ?? 0) : null,
+      job: agent.job || "unemployed",
+      jobTitle: agent.jobTitle || agent.job || "Unemployed",
+      settlementId: agent.settlementId ?? null,
+      settlementName,
+      generation: agent.generation ?? 1,
+      traits: agent.personality ? { ...agent.personality } : {},
+      skills: agent.skills ? { ...agent.skills } : {},
+      kills: agent.kills || 0,
+      battlesFought: agent.battlesFought || 0,
+      veteranCampaigns: agent.veteranCampaigns || 0,
+      legendaryWeapon: agent.legendaryWeapon || null,
+      isMonarch: agent.isMonarch === true,
+      isRebel: agent.isRebel === true,
+      captive: agent.captive === true,
+      combatRole: agent.combatRole || null,
+      faith: Math.round(agent.religion?.faith || 0),
+      beliefId: agent.religion?.beliefId || null,
+      reputation: Math.round(agent.reputation || 0),
+      parents,
+      spouse,
+      children,
+      siblings,
+      friends: friends.slice(0, 6),
+      rivals: rivals.slice(0, 6),
+      lifeHistory: Array.isArray(agent.lifeHistory) ? agent.lifeHistory.map(e => ({ ...e })) : []
+    };
+  }
+
+  getAgentDossier(agentOrId) {
+    if (!agentOrId && agentOrId !== 0) return null;
+    const id = typeof agentOrId === "object" ? agentOrId.id : agentOrId;
+    const live = this._agentById(id);
+    if (live && live.alive) {
+      return this.buildAgentDossier(live);
+    }
+    if (Array.isArray(this._deadDossiers)) {
+      const archived = this._deadDossiers.find(d => d.id === id);
+      if (archived) return archived;
+    }
+    if (Array.isArray(this.fallenHeroes)) {
+      const hero = this.fallenHeroes.find(h => h.id === id);
+      if (hero) {
+        return {
+          id: hero.id,
+          name: hero.name,
+          surname: null,
+          epithet: hero.epithet || null,
+          age: hero.age || 0,
+          maxAge: hero.age || 72,
+          lifeStage: "fallen",
+          gender: "neutral",
+          alive: false,
+          deathCause: hero.cause || "combat",
+          deathTick: hero.deathTick || 0,
+          job: "soldier",
+          jobTitle: "Fallen Hero",
+          settlementId: null,
+          settlementName: hero.settlementName || "Wilds",
+          generation: 1,
+          traits: {},
+          skills: {},
+          kills: hero.kills || 0,
+          battlesFought: hero.battlesFought || 0,
+          veteranCampaigns: 0,
+          legendaryWeapon: hero.legendaryWeapon || null,
+          isMonarch: !!hero.isMonarch,
+          isRebel: false,
+          captive: false,
+          combatRole: null,
+          faith: 0,
+          beliefId: null,
+          reputation: 0,
+          parents: [],
+          spouse: null,
+          children: [],
+          siblings: [],
+          friends: [],
+          rivals: [],
+          lifeHistory: [
+            { tick: hero.deathTick || 0, year: Math.floor((hero.deathTick || 0) / 100) + 1, kind: "DEATH", icon: "🕯️", text: `Fell (${hero.cause || "combat"}) with ${hero.kills || 0} kills.`, milestone: true }
+          ]
+        };
+      }
+    }
+    if (typeof agentOrId === "object") {
+      return this.buildAgentDossier(agentOrId, { alive: false });
+    }
+    return null;
   }
 
   // Step H: "Warring Kingdoms" starter scenario. Takes the towns founded at
@@ -2135,6 +2846,149 @@ export class Simulation {
     if (settlements.length >= 3) {
       this.diplomacySystem.seedFeud(
         settlements[0].id, settlements[settlements.length - 1].id, 150);
+    }
+  }
+
+  /**
+   * "Modern & Nuclear Age" starter scenario for immediate late-era play & development.
+   * Expands founding cities into fortified Era 6-7 powers with modern workshops, farms,
+   * stockpiles, bastion walls, atomic warheads, and an active devastating Total War.
+   */
+  applyModernNuclearScenario() {
+    const settlements = [...this.settlementSystem.settlements.values()]
+      .filter(s => s && !s.ruined && s.center)
+      .sort((a, b) => a.id - b.id);
+    if (settlements.length === 0) return;
+
+    const jobs = ['soldier', 'soldier', 'farmer', 'miner', 'lumberjack', 'craftsman', 'builder'];
+
+    for (let idx = 0; idx < settlements.length; idx++) {
+      const s = settlements[idx];
+      const cx = Math.floor(s.center.x);
+      const cy = Math.floor(s.center.y);
+
+      // Expand population to ~18 adults per city
+      const targetPop = 18;
+      let attempts = 0;
+      while ((s.agentIds?.size || 0) < targetPop && attempts < 140) {
+        attempts++;
+        const ax = cx + (this._rng().next() - 0.5) * 12;
+        const ay = cy + (this._rng().next() - 0.5) * 12;
+        const tx = Math.floor(ax);
+        const ty = Math.floor(ay);
+        if (tx < 3 || ty < 3 || tx >= this.world.width - 3 || ty >= this.world.height - 3) continue;
+        if (!this.world.isWalkable(tx, ty)) continue;
+        const agent = new Agent(ax, ay, this.idGen, null, this.world.rng);
+        agent.settlementId = s.id;
+        agent.factionId = s.factionId ?? null;
+        agent.age = 20 + ((agent.id * 7) % 18);
+        agent.lifeStage = 'adult';
+        const job = jobs[(s.agentIds.size + idx) % jobs.length];
+        agent.job = job;
+        agent.jobTitle = job.charAt(0).toUpperCase() + job.slice(1);
+        this.addAgent(agent);
+        this.world.addToSpatialIndex(tx, ty, agent);
+        s.agentIds.add(agent.id);
+        this.settlementSystem?.agentSettlementMap?.set(agent.id, s.id);
+        this.economySystem?.agentJobs?.set(agent.id, { job, salary: 16, satisfaction: 88, assignedAt: 0 });
+        agent.addLifeEvent?.('ORIGIN', `Modern citizen of ${s.name}`, 0, '🏙️', true);
+      }
+      s.population = s.agentIds?.size || 0;
+
+      // Seed modern civic, industrial & nuclear complexes
+      // Era 7 superpowers begin with Factory, Research Lab, Nuclear Power Plant, and Missile Silo;
+      // Era 6 powers begin with Factory & civic core and construct Atomic infrastructure.
+      const offsets = [
+        { dx: -2, dy: -2, type: 'workshop' },
+        { dx: 3, dy: -2, type: 'farm' },
+        { dx: -3, dy: 0, type: 'house' },
+        { dx: 3, dy: 1, type: 'house' },
+        { dx: 0, dy: -3, type: 'granary' },
+        { dx: 0, dy: 3, type: 'barracks' },
+        { dx: -2, dy: 2, type: 'factory' },
+        { dx: 2, dy: 3, type: 'market' },
+        ...(idx < 2 ? [
+          { dx: 3, dy: -4, type: 'research_lab' },
+          { dx: -4, dy: -2, type: 'nuclear_plant' },
+          { dx: 4, dy: 3, type: 'missile_silo' },
+        ] : []),
+      ];
+      for (const off of offsets) {
+        const bx = cx + off.dx;
+        const by = cy + off.dy;
+        if (bx < 3 || by < 3 || bx >= this.world.width - 3 || by >= this.world.height - 3) continue;
+        if (!this.world.isWalkable(bx, by)) continue;
+        if (this.buildings.some(b => b && !b.isRuined && Math.floor(b.x) === bx && Math.floor(b.y) === by)) continue;
+        const b = new Building(bx, by, off.type, this.idGen, s.id, s.factionId ?? null);
+        b.complete = true;
+        b.isComplete = true;
+        b.constructionProgress = 100;
+        this.buildings.push(b);
+        this.world.addToSpatialIndex(bx, by, b);
+        this.world.entityRegistry?.set(b.id, b);
+        if (!s.buildings) s.buildings = [];
+        s.buildings.push(b);
+      }
+
+      // Rich industrial & military stockpiles
+      s.stockpile = {
+        ...(s.stockpile || {}),
+        food: 165,
+        wood: 145,
+        ore: 120,
+        weapon_sword: 4,
+        weapon_bow: 6,
+        armor_shield: 4,
+      };
+
+      // Militarized modern culture
+      if (s.culture?.values) {
+        s.culture.values.belligerence = idx < 2 ? 0.84 : 0.72;
+        s.culture.values.cooperation = 0.25;
+        s.culture.ethos = idx < 2 ? 'Nuclear Superpower' : 'Modern Republic';
+      }
+
+      // Advance first two powers into Era 7 (Nuclear Age) & others into Era 6 (Modern Tactical)
+      const targetEra = idx < 2 ? 7 : 6;
+      this.civilizationAgeSystem?.setSettlementAge?.(s.id, targetEra, true);
+      const prog = this.civilizationAgeSystem?.getNuclearProgram?.(s.id);
+      if (prog) {
+        prog.unlocked = true;
+        prog.warheads = idx < 2 ? 2 : 1;
+        prog.progress = 55;
+        prog.doctrine = 'deterrence';
+      }
+
+      // Fortify perimeter with Reinforced Bastion Walls & Corner Watchtowers
+      this.fortificationSystem?.fortifySettlement?.(s.id, { tick: 0 });
+    }
+
+    // Seed geopolitical web: Conventional Combined-Arms Total War (Tanks, Planes, Artillery), Alliance Pact, and Sanctions
+    if (settlements.length >= 2 && this.diplomacySystem) {
+      if (settlements.length >= 3) {
+        // Forge an active Defensive Alliance & impose trade sanctions so diplomacy immediately has alliances, embargoes, and wars
+        this.diplomacySystem.formAlliance(settlements[1].id, settlements[2].id, 0);
+        this.diplomacySystem.imposeSanctions(
+          settlements[0].id,
+          settlements[2].id,
+          'Strategic containment & atomic non-proliferation embargo',
+          0
+        );
+        this.diplomacySystem.seedFeud(settlements[0].id, settlements[2].id, 80);
+      }
+      this.diplomacySystem.seedFeud(settlements[0].id, settlements[1].id, 0);
+      this.diplomacySystem.declareWar(
+        settlements[0].id,
+        settlements[1].id,
+        'Mechanized Total War — Armored & Air Offensive',
+        0,
+        {
+          totalWar: true,
+          why: `${settlements[0].name} and ${settlements[1].name} mobilized tanks, strike aircraft, and rocket artillery while keeping atomic weapons in last-resort reserve.`,
+          drivers: ['Armored & Air Divisions', 'Conventional Total War', 'Atomic Last-Resort Deterrence'],
+          skipAllyCall: true,
+        }
+      );
     }
   }
 
@@ -2189,7 +3043,15 @@ export class Simulation {
       weather: this.weatherSystem ? this.weatherSystem.serialize() : null,
       dynasties: this.dynastySystem ? this.dynastySystem.serialize() : null,
       naval: this.navalSystem ? this.navalSystem.serialize() : null,
+      espionage: this.espionageSystem ? this.espionageSystem.serialize() : null,
+      fortifications: this.fortificationSystem ? this.fortificationSystem.serialize() : null,
       fallenHeroes: Array.isArray(this.fallenHeroes) ? this.fallenHeroes.map(h => ({ ...h })) : [],
+      deadDossiers: Array.isArray(this._deadDossiers) ? this._deadDossiers.map(d => ({
+        ...d,
+        traits: d.traits ? { ...d.traits } : {},
+        skills: d.skills ? { ...d.skills } : {},
+        lifeHistory: Array.isArray(d.lifeHistory) ? d.lifeHistory.map(e => ({ ...e })) : []
+      })) : [],
       mortalityStats: {
         totalDeaths: this.mortalityStats.totalDeaths,
         totalAgeAtDeath: this.mortalityStats.totalAgeAtDeath,
@@ -2263,6 +3125,12 @@ export class Simulation {
       // Burning tiles are ground state too: without restoring them a resumed world
       // silently extinguishes every active fire and diverges from an uninterrupted run.
       sim.world.fireTiles = new Uint16Array(data.world.fireTiles || new Uint16Array(sim.world.width * sim.world.height));
+      sim.world.scorchedTiles = new Uint8Array(data.world.scorchedTiles || new Uint8Array(sim.world.width * sim.world.height));
+      sim.world.craterTiles = new Uint8Array(data.world.craterTiles || new Uint8Array(sim.world.width * sim.world.height));
+      sim.world.radiationTiles = new Uint8Array(data.world.radiationTiles || new Uint8Array(sim.world.width * sim.world.height));
+      sim.world.skullMonuments = Array.isArray(data.world.skullMonuments) ? data.world.skullMonuments.map(m => ({ ...m })) : [];
+      sim.world.nextMonumentId = data.world.nextMonumentId || (sim.world.skullMonuments.length + 1);
+      sim.world._radiationActive = sim.world.radiationTiles.some(v => v > 0);
       // Bridge decks are ground state too: without restoring them a resumed
       // world loses every crossing, agents reroute (consuming RNG differently)
       // and the run diverges from an uninterrupted one.
@@ -2420,8 +3288,22 @@ export class Simulation {
     if (data.naval && sim.navalSystem) {
       sim.navalSystem = NavalSystem.deserialize(data.naval, sim);
     }
+    if (data.espionage && sim.espionageSystem) {
+      sim.espionageSystem = EspionageSystem.deserialize(data.espionage, sim);
+    }
+    if (data.fortifications && sim.fortificationSystem) {
+      sim.fortificationSystem = FortificationSystem.deserialize(data.fortifications, sim);
+    }
     if (Array.isArray(data.fallenHeroes)) {
       sim.fallenHeroes = data.fallenHeroes.map(h => ({ ...h }));
+    }
+    if (Array.isArray(data.deadDossiers)) {
+      sim._deadDossiers = data.deadDossiers.map(d => ({
+        ...d,
+        traits: d.traits ? { ...d.traits } : {},
+        skills: d.skills ? { ...d.skills } : {},
+        lifeHistory: Array.isArray(d.lifeHistory) ? d.lifeHistory.map(e => ({ ...e })) : []
+      }));
     }
 
     if (data.mortalityStats) {

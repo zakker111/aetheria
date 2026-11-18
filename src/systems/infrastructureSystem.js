@@ -602,14 +602,27 @@ export class InfrastructureSystem {
         });
         
         // Bridges enable trade route continuity; collapsed bridges lose passability
+        // unless a replacement intact bridge now spans those same tiles.
         const world = this.sim?.world;
-        this.bridges.forEach(bridge => {
-            if (bridge.health <= 0 && world?.setBridge) {
-                bridge.tiles.forEach(tile => {
-                    world.setBridge(tile.x, tile.y, false);
-                });
+        if (world?.setBridge) {
+            const intactTiles = new Set();
+            for (const bridge of this.bridges) {
+                if (bridge.health === undefined || bridge.health > 0) {
+                    for (const tile of bridge.tiles || []) {
+                        intactTiles.add(`${tile.x},${tile.y}`);
+                    }
+                }
             }
-        });
+            for (const bridge of this.bridges) {
+                if (bridge.health <= 0) {
+                    for (const tile of bridge.tiles || []) {
+                        if (!intactTiles.has(`${tile.x},${tile.y}`)) {
+                            world.setBridge(tile.x, tile.y, false);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     hasResources(factionOrSettlement, cost) {
@@ -681,15 +694,27 @@ export class InfrastructureSystem {
         if (data.roadSeq !== undefined) this.roadSeq = data.roadSeq;
         if (data.irrigationSeq !== undefined) this.irrigationSeq = data.irrigationSeq;
         // Re-apply intact bridge decks to the world's passability grid so agents can
-        // cross water after a load. WorldState.deserialize restores the raw
-        // bridgeTiles array, but legacy saves (or paths that rebuild the world)
-        // may lack it; re-marking from the bridge list keeps state consistent.
+        // cross water after a load. Apply collapsed bridges only where no intact
+        // replacement bridge spans the tile.
         const world = this.sim && this.sim.world;
         if (world && typeof world.setBridge === 'function') {
+            const intactTiles = new Set();
             for (const bridge of this.bridges || []) {
                 const intact = bridge.health === undefined || bridge.health > 0;
-                for (const t of bridge.tiles || []) {
-                    world.setBridge(t.x, t.y, intact);
+                if (intact) {
+                    for (const t of bridge.tiles || []) {
+                        intactTiles.add(`${t.x},${t.y}`);
+                        world.setBridge(t.x, t.y, true);
+                    }
+                }
+            }
+            for (const bridge of this.bridges || []) {
+                if (bridge.health !== undefined && bridge.health <= 0) {
+                    for (const t of bridge.tiles || []) {
+                        if (!intactTiles.has(`${t.x},${t.y}`)) {
+                            world.setBridge(t.x, t.y, false);
+                        }
+                    }
                 }
             }
         }
