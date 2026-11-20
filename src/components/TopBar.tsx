@@ -115,6 +115,7 @@ const TopBarComponent: React.FC<TopBarProps> = ({
           gridTemplateColumns: 'repeat(2, 1fr)',
           gap: '6px 12px',
           marginTop: '2px',
+          fontVariantNumeric: 'tabular-nums',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>

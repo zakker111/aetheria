@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ToolType } from '../types';
 
 interface DockProps {
@@ -7,10 +7,33 @@ interface DockProps {
 }
 
 export const Dock: React.FC<DockProps> = ({ currentTool, onSelectTool }) => {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScrollButtons = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 4);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  };
+
+  useEffect(() => {
+    updateScrollButtons();
+    window.addEventListener('resize', updateScrollButtons);
+    return () => window.removeEventListener('resize', updateScrollButtons);
+  }, []);
+
+  const scrollDock = (delta: number) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollBy({ left: delta, behavior: 'smooth' });
+  };
+
   const getToolBtnStyle = (tool: ToolType): React.CSSProperties => {
     const isActive = currentTool === tool;
     return {
-      padding: '6px 10px',
+      padding: '5px 9px',
       background: isActive ? '#f43f5e' : '#1e293b',
       border: `1px solid ${isActive ? '#fb7185' : '#334155'}`,
       borderRadius: '8px',
@@ -19,6 +42,7 @@ export const Dock: React.FC<DockProps> = ({ currentTool, onSelectTool }) => {
       fontSize: '11px',
       fontWeight: 500,
       whiteSpace: 'nowrap',
+      flexShrink: 0,
       transition: 'all 0.15s ease',
       display: 'flex',
       alignItems: 'center',
@@ -50,20 +74,55 @@ export const Dock: React.FC<DockProps> = ({ currentTool, onSelectTool }) => {
     >
       <div
         style={{
-          background: 'rgba(15, 23, 42, 0.9)',
+          background: 'rgba(15, 23, 42, 0.92)',
           backdropFilter: 'blur(10px)',
           border: '1px solid rgba(255, 255, 255, 0.14)',
-          padding: '8px 12px',
+          padding: '6px 8px',
           borderRadius: '14px',
           display: 'flex',
-          gap: '6px',
+          gap: '4px',
           alignItems: 'center',
           boxShadow: '0 10px 30px rgba(0, 0, 0, 0.5)',
           pointerEvents: 'auto',
-          maxWidth: '95vw',
-          overflowX: 'auto',
+          maxWidth: 'calc(100vw - 24px)',
         }}
       >
+        {canScrollLeft && (
+          <button
+            type="button"
+            aria-label="Scroll tools left"
+            onClick={() => scrollDock(-260)}
+            style={{
+              background: '#1e293b',
+              border: '1px solid #475569',
+              color: '#e2e8f0',
+              borderRadius: '7px',
+              padding: '5px 8px',
+              fontSize: '11px',
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            ◀
+          </button>
+        )}
+        <div
+          ref={scrollRef}
+          onScroll={updateScrollButtons}
+          onWheel={(e) => {
+            if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && scrollRef.current) {
+              scrollRef.current.scrollLeft += e.deltaY;
+            }
+          }}
+          style={{
+            display: 'flex',
+            gap: '5px',
+            alignItems: 'center',
+            overflowX: 'auto',
+            scrollbarWidth: 'thin',
+            paddingBottom: '1px',
+          }}
+        >
         <button style={getToolBtnStyle('inspect')} onClick={() => onSelectTool('inspect')}>
           🔍 Inspect (1)
         </button>
@@ -199,6 +258,26 @@ export const Dock: React.FC<DockProps> = ({ currentTool, onSelectTool }) => {
         <button style={getToolBtnStyle('remove')} onClick={() => onSelectTool('remove')}>
           🗑️ Remove
         </button>
+        </div>
+        {canScrollRight && (
+          <button
+            type="button"
+            aria-label="Scroll tools right"
+            onClick={() => scrollDock(260)}
+            style={{
+              background: '#1e293b',
+              border: '1px solid #475569',
+              color: '#e2e8f0',
+              borderRadius: '7px',
+              padding: '5px 8px',
+              fontSize: '11px',
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            ▶
+          </button>
+        )}
       </div>
     </div>
   );

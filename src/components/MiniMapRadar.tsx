@@ -15,7 +15,7 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const terrainCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const terrainDrawnRef = useRef(false);
+  const lastWorldRef = useRef<any>(null);
   const [mode, setMode] = useState<RadarMode>('territory');
   const [isMinimized, setIsMinimized] = useState(false);
   const isDraggingRef = useRef(false);
@@ -95,10 +95,10 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
           tCtx.fillRect(x * scaleX, y * scaleY, scaleX * 2 + 0.5, scaleY * 2 + 0.5);
         }
       }
-      terrainDrawnRef.current = true;
+      lastWorldRef.current = world;
     };
 
-    if (!terrainDrawnRef.current) {
+    if (simulation?.world && lastWorldRef.current !== simulation.world) {
       updateTerrainBuffer();
     }
 

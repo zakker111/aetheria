@@ -77,8 +77,15 @@ export class ConstructionSystem {
             [BUILDING_TYPES.WAREHOUSE]: { width: 3, height: 2 },
             [BUILDING_TYPES.GRANARY]: { width: 2, height: 2 },
             [BUILDING_TYPES.DOCK]: { width: 3, height: 2 },
+            [BUILDING_TYPES.WINDMILL]: { width: 2, height: 2 },
+            [BUILDING_TYPES.INN]: { width: 3, height: 2 },
+            [BUILDING_TYPES.LIBRARY]: { width: 3, height: 2 },
+            [BUILDING_TYPES.APOTHECARY]: { width: 2, height: 2 },
+            [BUILDING_TYPES.CASTLE]: { width: 3, height: 3 },
+            [BUILDING_TYPES.BANK]: { width: 3, height: 2 },
             [BUILDING_TYPES.FACTORY]: { width: 3, height: 3 },
             [BUILDING_TYPES.RESEARCH_LAB]: { width: 3, height: 2 },
+            [BUILDING_TYPES.RADAR_STATION]: { width: 2, height: 2 },
             [BUILDING_TYPES.NUCLEAR_PLANT]: { width: 3, height: 3 },
             [BUILDING_TYPES.MISSILE_SILO]: { width: 2, height: 2 }
         };
@@ -237,6 +244,42 @@ export class ConstructionSystem {
                 buildTime: 350,
                 maxHealth: 450
             },
+            [BUILDING_TYPES.WINDMILL]: {
+                cost: { wood_log: 35, stone: 15 },
+                buildTime: 360,
+                maxHealth: 420,
+                bonuses: { agriculture: 0.3 }
+            },
+            [BUILDING_TYPES.INN]: {
+                cost: { wood_log: 40, stone: 15 },
+                buildTime: 380,
+                maxHealth: 440,
+                bonuses: { morale: 0.25 }
+            },
+            [BUILDING_TYPES.LIBRARY]: {
+                cost: { wood_log: 45, stone: 30 },
+                buildTime: 480,
+                maxHealth: 520,
+                bonuses: { science: 0.35 }
+            },
+            [BUILDING_TYPES.APOTHECARY]: {
+                cost: { wood_log: 35, stone: 25 },
+                buildTime: 440,
+                maxHealth: 460,
+                bonuses: { healing: 0.35 }
+            },
+            [BUILDING_TYPES.CASTLE]: {
+                cost: { wood_log: 60, stone: 60 },
+                buildTime: 750,
+                maxHealth: 950,
+                bonuses: { defense: 25 }
+            },
+            [BUILDING_TYPES.BANK]: {
+                cost: { wood_log: 45, stone: 40 },
+                buildTime: 520,
+                maxHealth: 620,
+                bonuses: { tradeEfficiency: 0.35 }
+            },
             [BUILDING_TYPES.FACTORY]: {
                 cost: { wood_log: 60, ore_iron: 40 },
                 buildTime: 650,
@@ -249,6 +292,12 @@ export class ConstructionSystem {
                 buildTime: 600,
                 maxHealth: 600,
                 bonuses: { science: 0.35 }
+            },
+            [BUILDING_TYPES.RADAR_STATION]: {
+                cost: { wood_log: 30, ore_iron: 45 },
+                buildTime: 560,
+                maxHealth: 680,
+                bonuses: { airDefense: 1 }
             },
             [BUILDING_TYPES.NUCLEAR_PLANT]: {
                 cost: { wood_log: 50, ore_iron: 65 },

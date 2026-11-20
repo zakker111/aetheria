@@ -243,7 +243,13 @@ export class TradeSystem {
                         const cargoResource = trader.cargo.resource;
                         const guildMult = this.sim?.espionageSystem?.getTradeYieldMultiplier?.(fromSettlement.id) || 1.0;
                         const wonderMult = this.sim?.civilizationAgeSystem?.getWonderBuffs?.(fromSettlement.id)?.tradeMultiplier || 1.0;
-                        const cargoAmount = Math.max(trader.cargo.amount, Math.round(trader.cargo.amount * Math.max(guildMult, wonderMult)));
+                        const bankPower = this.sim?.getSettlementBuildingBonus?.(fromSettlement.id, 'bank')?.power || 0;
+                        const marketPower = this.sim?.getSettlementBuildingBonus?.(fromSettlement.id, 'market')?.power || 0;
+                        const civicTradeMult = 1 + Math.min(0.85, bankPower * 0.25 + Math.max(0, marketPower - 1) * 0.15);
+                        const cargoAmount = Math.max(
+                            trader.cargo.amount,
+                            Math.round(trader.cargo.amount * Math.max(guildMult, wonderMult) * civicTradeMult)
+                        );
                         toSettlement.stockpile[cargoResource] = (toSettlement.stockpile[cargoResource] || 0) + cargoAmount;
                         trader.cargo.amount = 0;
                         this.eventBus.emit('trade:completed', {

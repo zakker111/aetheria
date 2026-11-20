@@ -719,6 +719,12 @@ export class WarfareSystem {
         drivers.push("Atomic fallout panic & collapse of order");
       }
 
+      const innMaxLvl = this.sim.getSettlementBuildingBonus?.(s.id, 'inn')?.maxLevel || 0;
+      if (innMaxLvl > 0) {
+        const calmBonus = 12 + (innMaxLvl - 1) * 6;
+        unrest = Math.max(0, unrest - calmBonus);
+      }
+
       if (unrest < 45) continue;
       if (((s.id * 19 + Math.floor(tick / 50)) % 3) !== 0) continue;
 
@@ -989,6 +995,11 @@ export class WarfareSystem {
                 a.health = Math.min(100, a.health ?? 100);
                 if (a.needs) a.needs.health = a.health;
                 if (a.combat) { a.combat.isFlying = false; a.combat.isArmored = false; a.combat.maxHealth = 100; a.combat.health = a.health; }
+                const rec = this.sim.economySystem?.getAgentJob?.(sid);
+                if (rec && rec.job && rec.job !== 'soldier') {
+                  a.job = rec.job;
+                  a.jobTitle = this.sim.economySystem.jobDefinitions?.[rec.job]?.name || rec.job;
+                }
               }
             }
           }
@@ -1036,6 +1047,11 @@ export class WarfareSystem {
           a.health = Math.min(100, a.health ?? 100);
           if (a.needs) a.needs.health = a.health;
           if (a.combat) { a.combat.isFlying = false; a.combat.isArmored = false; a.combat.maxHealth = 100; a.combat.health = a.health; }
+          const rec = this.sim.economySystem?.getAgentJob?.(sid);
+          if (rec && rec.job && rec.job !== 'soldier') {
+            a.job = rec.job;
+            a.jobTitle = this.sim.economySystem.jobDefinitions?.[rec.job]?.name || rec.job;
+          }
         }
       }
       return;
@@ -1581,9 +1597,11 @@ export class WarfareSystem {
             if (!b || !b.complete || b.isRuined) continue;
             if (b.settlementId === warband?.settlementId) continue;
             if (Math.hypot(b.x - defender.x, b.y - defender.y) <= splashRad + 0.8) {
-              b.health = Math.max(0, (b.health ?? 100) - bldDmg);
+              const ruined = typeof b.applyDamage === 'function'
+                ? b.applyDamage(bldDmg, { cause: 'collateral', tick: tickNow })
+                : (() => { b.health = Math.max(0, (b.health ?? 100) - bldDmg); return b.health <= 0; })();
               this.sim.world?.startFire?.(Math.floor(b.x), Math.floor(b.y), 25);
-              if (b.health <= 0) {
+              if (ruined || b.health <= 0) {
                 b.isRuined = true;
                 b.ruinedAtTick = tickNow;
               }
@@ -1626,6 +1644,11 @@ export class WarfareSystem {
         defender.prisonerOf = warband.settlementId;
         defender.militaryDuty = false;
         defender.combatRole = null;
+        const rec = this.sim.economySystem?.getAgentJob?.(defender.id);
+        if (rec && rec.job && rec.job !== 'soldier') {
+          defender.job = rec.job;
+          defender.jobTitle = this.sim.economySystem.jobDefinitions?.[rec.job]?.name || rec.job;
+        }
         defender.addLifeEvent?.("CAPTIVE", `Wounded and captured by ${warband.settlementName}`, tickNow, "⛓️", true);
         if (this.sim.eventBus) {
           this.sim.eventBus.emit("SOLDIER_CAPTURED", {
@@ -1905,10 +1928,12 @@ export class WarfareSystem {
           if (!b.complete || b.isRuined || (b.health !== undefined && b.health <= 0)) continue;
           const d = Math.hypot(b.x - enemySettlement.center.x, b.y - enemySettlement.center.y);
           if (d < burnRadius && burned < maxBurn) {
-            b.health = Math.max(0, (b.health ?? 100) - burnDmg);
+            const pillageRuined = typeof b.applyDamage === 'function'
+              ? b.applyDamage(burnDmg, { cause: 'pillage', tick: this.sim.clock.tick })
+              : (() => { b.health = Math.max(0, (b.health ?? 100) - burnDmg); return b.health <= 0; })();
             world.startFire(Math.floor(b.x), Math.floor(b.y), isDevastatingSiege ? 55 : 40);
             if (world.scorchTile) world.scorchTile(Math.floor(b.x), Math.floor(b.y), 240);
-            if (b.health <= 0) {
+            if (pillageRuined || b.health <= 0) {
               b.isRuined = true;
               b.health = 0;
               b.ruinedAtTick = this.sim.clock.tick;

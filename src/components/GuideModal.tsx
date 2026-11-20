@@ -78,7 +78,7 @@ export const GuideModal: React.FC<GuideModalProps> = ({ isOpen, onClose }) => {
         • <b>2.5D Isometric World &amp; Ecology:</b> Elevated terrain with growing forests (Sapling → Ancient), finite depleting ore mines, and wild herds stalked by settlement Hunters.
       </div>
       <div style={{ margin: '3px 0' }}>
-        • <b>Mechanized Warfare &amp; Structures:</b> Build Granaries, Factories, Research Labs, Nuclear Plants &amp; Missile Silos; fight with siege catapults, Battle Tanks, Strike Aircraft, and Rocket Artillery.
+        • <b>Era Buildings &amp; Upgrades (Lv 1–3):</b> Unlock Windmills, Inns, Libraries, Apothecaries, Citadels, Banks, Factories, Research Labs, Air Defense Radars, Nuclear Plants &amp; Silos—each boosting farms, XP, healing, trade, stability, or defense!
       </div>
       <div style={{ margin: '3px 0' }}>
         • <b>Atomic Deterrence &amp; Infrastructure:</b> Warhead enrichment requires a <b>Factory + Nuclear Plant + Ore</b> (boosted by Labs &amp; Silos); autonomous nukes fire only as a last resort.

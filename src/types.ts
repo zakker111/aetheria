@@ -274,4 +274,5 @@ export interface InspectedEntityData {
   kind: 'agent' | 'settlement' | 'building' | 'resource';
   entity: any;
   dossier?: AgentDossier | null;
+  upgradeReq?: any;
 }

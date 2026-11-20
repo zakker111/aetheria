@@ -13,7 +13,9 @@ import { GuideModal } from './components/GuideModal';
 import { CivilizationModal } from './components/CivilizationModal';
 import { NotificationToast } from './components/NotificationToast';
 import { MiniMapRadar } from './components/MiniMapRadar';
+import { StartScreen, SavedWorldMeta } from './components/StartScreen';
 import { soundManager } from './systems/audio';
+import packageJson from '../package.json';
 import {
   ToolType,
   TimeState,
@@ -27,6 +29,28 @@ import {
   InspectedEntityData,
 } from './types';
 
+function readSavedWorldMeta(): SavedWorldMeta | null {
+  try {
+    const raw = localStorage.getItem('aetheria_save');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || (!parsed.world && !parsed.agents)) return null;
+    const tick = Number(parsed.clock?.tick || 0);
+    const settlementsArr = parsed.settlements?.settlements;
+    const settlementsCount = Array.isArray(settlementsArr) ? settlementsArr.length : 0;
+    const agentsCount = Array.isArray(parsed.agents) ? parsed.agents.length : 0;
+    return {
+      exists: true,
+      days: Math.floor(tick / 24),
+      settlementsCount,
+      agentsCount,
+      scenario: parsed.scenario === 'modern_nuclear' ? 'modern_nuclear' : 'warring',
+    };
+  } catch {
+    return null;
+  }
+}
+
 export const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const simRef = useRef<any>(null);
@@ -37,8 +61,20 @@ export const App: React.FC = () => {
   const [rendererInstance, setRendererInstance] = useState<any>(null);
   const [isMuted, setIsMuted] = useState(() => soundManager.isMuted());
 
-  // Scenario - default to Tribal Warring Kingdoms (switchable via ControlsHeader to Modern & Nuclear)
+  // Title / Active play state
+  const [gameScreen, setGameScreen] = useState<'title' | 'playing'>(() => {
+    if (typeof document !== 'undefined') {
+      document.body.dataset.screen = 'title';
+    }
+    return 'title';
+  });
+  const gameScreenRef = useRef(gameScreen);
+  gameScreenRef.current = gameScreen;
+  const [savedMeta, setSavedMeta] = useState<SavedWorldMeta | null>(() => readSavedWorldMeta());
+
+  // Scenario - default to Tribal Warring Kingdoms (switchable via StartScreen or ControlsHeader)
   const [scenario, setScenario] = useState<'modern_nuclear' | 'warring'>('warring');
+  const pendingScenarioRef = useRef<'modern_nuclear' | 'warring'>(scenario);
   const [worldNonce, setWorldNonce] = useState(0);
 
   // UI state
@@ -109,6 +145,10 @@ export const App: React.FC = () => {
     setChronicleEvents((prev) => [entry, ...prev.slice(0, 24)]);
   }, []);
 
+  useEffect(() => {
+    document.body.dataset.screen = gameScreen;
+  }, [gameScreen]);
+
   // Initialize simulation and renderer
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -117,16 +157,19 @@ export const App: React.FC = () => {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
 
-    const sim = new Simulation(Date.now(), 128, 128, { scenario });
+    const activeScenario = pendingScenarioRef.current;
+    const sim = new Simulation(Date.now(), 128, 128, { scenario: activeScenario });
     simRef.current = sim;
 
-    setTimeout(() => {
-      showNotification(
-        scenario === 'modern_nuclear'
-          ? '☢️ Modern & Nuclear Age: Atomic arsenals armed — devastating Total Wars active!'
-          : '⚔️ Warring Kingdoms: hereditary rivalries active — wars always on'
-      );
-    }, 500);
+    if (gameScreenRef.current === 'playing') {
+      setTimeout(() => {
+        showNotification(
+          activeScenario === 'modern_nuclear'
+            ? '☢️ Modern & Nuclear Age: Atomic arsenals armed — devastating Total Wars active!'
+            : '⚔️ Warring Kingdoms: hereditary rivalries active — wars always on'
+        );
+      }, 350);
+    }
 
     const renderer = new CanvasRenderer(canvas, sim.world, sim);
     rendererRef.current = renderer;
@@ -195,7 +238,6 @@ export const App: React.FC = () => {
 
     const handleWeatherChanged = (e: any) => {
       addChronicleEntry(`🌤️ Weather Shift: ${e.icon || ''} ${e.name} has settled across the world.`);
-      showNotification(`${e.icon || '🌤️'} Weather: ${e.name}`);
     };
 
     const handleLightning = (e: any) => {
@@ -296,6 +338,13 @@ export const App: React.FC = () => {
       showNotification(`💥 Wall breached at ${e.settlementName || 'the frontier'}!`);
     };
 
+    const handleBuildingUpgraded = (e: any) => {
+      addChronicleEntry(`🏛️ ${e.settlementName || 'A realm'} upgraded ${e.levelTitle || e.buildingType} to Lv ${e.level}!`);
+      if (e.byPlayer) {
+        showNotification(`⬆️ Upgraded to ${e.levelTitle || `Lv ${e.level}`}!`);
+      }
+    };
+
     sim.eventBus.on('AGENT_CREATED', handleAgentCreated);
     sim.eventBus.on('AGENT_DIED', handleAgentDied);
     sim.eventBus.on('CONSTRUCTION_COMPLETED', handleConstruction);
@@ -326,6 +375,7 @@ export const App: React.FC = () => {
     sim.eventBus.on('WONDER_COMPLETED', handleWonderCompleted);
     sim.eventBus.on('FORTIFICATIONS_BUILT', handleFortificationsBuilt);
     sim.eventBus.on('WALL_BREACHED', handleWallBreached);
+    sim.eventBus.on('BUILDING_UPGRADED', handleBuildingUpgraded);
 
     // Custom window events
     const handleEntityInspected = (e: CustomEvent) => {
@@ -339,6 +389,11 @@ export const App: React.FC = () => {
         const guilds = sim.espionageSystem?.getSettlementGuilds?.(s.id);
         const fortifications = sim.fortificationSystem?.getSettlementFortificationSummary?.(s.id);
         setInspectedEntity({ kind: 'settlement', entity: { ...s, age: ageSummary, nuclearProgram, guilds, fortifications } });
+      } else if (detail?.kind === 'building' && detail.entity) {
+        const b = detail.entity;
+        const sName = b.settlementId != null ? sim.settlementSystem?.settlements?.get(b.settlementId)?.name : null;
+        const upgradeReq = typeof sim.getUpgradeRequirements === 'function' ? sim.getUpgradeRequirements(b) : null;
+        setInspectedEntity({ kind: 'building', entity: { ...b, settlementName: sName }, upgradeReq });
       } else {
         setInspectedEntity(detail);
       }
@@ -363,10 +418,11 @@ export const App: React.FC = () => {
       const rawDelta = currentTime - lastTime;
       const frameDt = Math.min(250, Math.max(0, rawDelta));
       lastTime = currentTime;
-      const currentSpeed = sim.clock.speed;
+      const isPlaying = gameScreenRef.current === 'playing';
+      const currentSpeed = isPlaying ? sim.clock.speed : 0;
 
       let tickAlpha = 1;
-      if (currentSpeed > 0) {
+      if (isPlaying && currentSpeed > 0) {
         const stepInterval = TICK_RATE / currentSpeed;
         accumulator += frameDt;
         let steps = 0;
@@ -383,7 +439,7 @@ export const App: React.FC = () => {
         accumulator = 0;
       }
 
-      renderer.setFrameTiming(tickAlpha, frameDt, currentSpeed);
+      renderer.setFrameTiming(tickAlpha, isPlaying ? frameDt : 0, currentSpeed);
       renderer.render();
 
       // UI state refresh throttle (4 times/sec)
@@ -583,7 +639,13 @@ export const App: React.FC = () => {
             const bId = currentInspect.entity.id;
             const stillBuilding = sim.buildings.find((b: any) => b.id === bId);
             if (stillBuilding && (stillBuilding.health === undefined || stillBuilding.health > 0)) {
-              return { kind: 'building', entity: stillBuilding };
+              const sName = stillBuilding.settlementId != null
+                ? sim.settlementSystem?.settlements?.get(stillBuilding.settlementId)?.name
+                : null;
+              const upgradeReq = typeof sim.getUpgradeRequirements === 'function'
+                ? sim.getUpgradeRequirements(stillBuilding)
+                : null;
+              return { kind: 'building', entity: { ...stillBuilding, settlementName: sName }, upgradeReq };
             }
             return null;
           } else if (currentInspect.kind === 'resource') {
@@ -636,11 +698,14 @@ export const App: React.FC = () => {
       interaction.destroy?.();
       renderer.destroy?.();
     };
-  }, [addChronicleEntry, showNotification, scenario, worldNonce]);
+  }, [addChronicleEntry, showNotification, worldNonce]);
 
   // Keyboard shortcut listener (stable single subscription)
   const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
   keyHandlerRef.current = (e: KeyboardEvent) => {
+    if (gameScreenRef.current !== 'playing') {
+      return;
+    }
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')) {
       return;
     }
@@ -1077,6 +1142,44 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleUpgradeBuilding = (buildingId: number) => {
+    const sim = simRef.current;
+    if (!sim || typeof sim.upgradeBuilding !== 'function') return;
+    const res = sim.upgradeBuilding(buildingId, { byPlayer: true, tick: sim.clock?.tick ?? 0 });
+    if (res?.ok && res.building) {
+      soundManager.playBuild();
+      const sName = res.building.settlementId != null
+        ? sim.settlementSystem?.settlements?.get(res.building.settlementId)?.name
+        : null;
+      const upgradeReq = typeof sim.getUpgradeRequirements === 'function'
+        ? sim.getUpgradeRequirements(res.building)
+        : null;
+      setInspectedEntity({ kind: 'building', entity: { ...res.building, settlementName: sName }, upgradeReq });
+    } else if (res?.reason) {
+      showNotification(`⚠️ ${res.reason}`);
+    }
+  };
+
+  const handleCommissionBuilding = (settlementId: number, buildingType: string) => {
+    const sim = simRef.current;
+    if (!sim || typeof sim.commissionSettlementBuilding !== 'function') return;
+    const res = sim.commissionSettlementBuilding(settlementId, buildingType, { byPlayer: true });
+    if (res?.ok && res.building) {
+      soundManager.playBuild();
+      showNotification(`📐 Commissioned ${res.meta?.icon || '🏗️'} ${res.meta?.name || buildingType}!`);
+      const s = sim.settlementSystem?.settlements.get(settlementId);
+      if (s && inspectedEntity?.kind === 'settlement' && inspectedEntity.entity?.id === settlementId) {
+        const ageSummary = sim.civilizationAgeSystem?.getSettlementAgeSummary?.(settlementId);
+        const nuclearProgram = sim.civilizationAgeSystem?.getNuclearProgram?.(settlementId);
+        const guilds = sim.espionageSystem?.getSettlementGuilds?.(settlementId);
+        const fortifications = sim.fortificationSystem?.getSettlementFortificationSummary?.(settlementId);
+        setInspectedEntity({ kind: 'settlement', entity: { ...s, age: ageSummary, nuclearProgram, guilds, fortifications } });
+      }
+    } else if (res?.reason) {
+      showNotification(`⚠️ ${res.reason}`);
+    }
+  };
+
   const downloadJsonFile = (filename: string, payload: unknown) => {
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1093,17 +1196,30 @@ export const App: React.FC = () => {
     if (!simRef.current) return;
     const data = simRef.current.serialize();
     localStorage.setItem('aetheria_save', JSON.stringify(data));
+    setSavedMeta(readSavedWorldMeta());
     soundManager.playClick();
     showNotification('Game progress saved to local storage!');
   };
 
   const applyLoadedSimulation = (loaded: Simulation, toastMsg: string) => {
+    const loadedScenario = loaded._scenario === 'modern_nuclear' ? 'modern_nuclear' : 'warring';
+    pendingScenarioRef.current = loadedScenario;
+    setScenario(loadedScenario);
+
     simRef.current = loaded;
     if (rendererRef.current) {
       rendererRef.current.world = loaded.world;
       rendererRef.current.simulation = loaded;
       rendererRef.current.selectedEntity = null;
       rendererRef.current.followAgentId = null;
+      if (loaded.agents && loaded.agents.length > 0) {
+        rendererRef.current.centerOn(loaded.agents[0].x, loaded.agents[0].y, 14, true);
+      } else {
+        const firstSettlement = loaded.settlementSystem?.settlements?.values()?.next()?.value;
+        if (firstSettlement?.center) {
+          rendererRef.current.centerOn(firstSettlement.center.x, firstSettlement.center.y, 14, true);
+        }
+      }
       setRendererInstance(rendererRef.current);
     }
     if (interactionRef.current) {
@@ -1113,24 +1229,61 @@ export const App: React.FC = () => {
     setSimInstance(loaded);
     setInspectedEntity(null);
     setFollowAgentId(null);
+    setSpeed(loaded.clock?.speed ?? 1);
+    setIsPaused((loaded.clock?.speed ?? 1) === 0);
     setChronicleEntries(loaded.chronicleSystem?.getHighlights?.(80) || []);
+    if (typeof document !== 'undefined') {
+      document.body.dataset.screen = 'playing';
+    }
+    gameScreenRef.current = 'playing';
+    setGameScreen('playing');
     soundManager.playClick();
     showNotification(toastMsg);
   };
 
-  const handleLoad = () => {
+  const handleLoad = (): boolean => {
     const data = localStorage.getItem('aetheria_save');
     if (data && simRef.current && rendererRef.current) {
       try {
         const loaded = Simulation.deserialize(JSON.parse(data));
         applyLoadedSimulation(loaded, 'Saved world loaded successfully!');
+        return true;
       } catch (err) {
         console.error('Failed to load save file:', err);
         showNotification('Error loading save file.');
+        return false;
       }
     } else {
       showNotification('No previous save file found!');
+      return false;
     }
+  };
+
+  const handlePlayNewGame = (chosenScenario: 'warring' | 'modern_nuclear') => {
+    if (typeof document !== 'undefined') {
+      document.body.dataset.screen = 'playing';
+    }
+    gameScreenRef.current = 'playing';
+    setGameScreen('playing');
+    soundManager.playClick();
+    pendingScenarioRef.current = chosenScenario;
+    setScenario(chosenScenario);
+    setInspectedEntity(null);
+    setFollowAgentId(null);
+    setCivilizationOpen(false);
+    setHelpOpen(false);
+    setWorldNonce((n) => n + 1);
+  };
+
+  const handleContinueSavedGame = () => {
+    handleLoad();
+  };
+
+  const handleReturnToMenu = () => {
+    setSavedMeta(readSavedWorldMeta());
+    setCivilizationOpen(false);
+    setHelpOpen(false);
+    setGameScreen('title');
   };
 
   const handleExportWorld = () => {
@@ -1161,20 +1314,22 @@ export const App: React.FC = () => {
     showNotification('📜 Historical chronicle replay JSON downloaded!');
   };
 
-  const handleImportWorld = async (file: File) => {
-    if (!file || !simRef.current || !rendererRef.current) return;
+  const handleImportWorld = async (file: File): Promise<boolean> => {
+    if (!file || !simRef.current || !rendererRef.current) return false;
     try {
       const raw = await file.text();
       const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== 'object' || (!parsed.world && !parsed.clock && !parsed.agents)) {
         showNotification('Invalid Aetheria world save JSON file.');
-        return;
+        return false;
       }
       const loaded = Simulation.deserialize(parsed);
       applyLoadedSimulation(loaded, `📂 Imported "${file.name}" successfully!`);
+      return true;
     } catch (err) {
       console.error('Failed to import world file:', err);
       showNotification('Could not parse save file JSON.');
+      return false;
     }
   };
 
@@ -1191,184 +1346,242 @@ export const App: React.FC = () => {
         }}
       />
 
-      {/* Top Bar & Controls */}
-      <div
-        style={{
-          position: 'absolute',
-          top: '12px',
-          left: '12px',
-          right: '12px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          pointerEvents: 'none',
-          zIndex: 20,
-          gap: '12px',
-        }}
-      >
-        <TopBar
-          time={timeState}
-          agentCount={agentCount}
-          births={births}
-          deaths={deaths}
-          avgDeathAge={avgDeathAge}
-          resources={resources}
-          societiesCount={societiesCount || societies.length}
-          speed={speed}
-          is25D={is25D}
-          weather={currentWeather || undefined}
-          dominantAge={dominantAge || undefined}
-          lodStats={lodStats || undefined}
+      {gameScreen === 'title' && (
+        <StartScreen
+          version={packageJson.version}
+          selectedScenario={scenario}
+          onSelectScenario={setScenario}
+          savedMeta={savedMeta}
+          onPlayNewGame={handlePlayNewGame}
+          onContinueSavedGame={handleContinueSavedGame}
+          onImportWorldFile={handleImportWorld}
         />
+      )}
 
-        <ControlsHeader
-          is25D={is25D}
-          heightScaleLabel={heightScaleLabel}
-          isPaused={isPaused}
-          speed={speed}
-          onToggleView={handleToggleView}
-          onCycleHeight={handleCycleHeight}
-          onTogglePause={handleTogglePause}
-          onCycleSpeed={handleCycleSpeed}
-          onCenterCamera={handleCenterCamera}
-          onNextBattle={handleNextBattle}
-          onSpawnResources={handleSpawnResources}
-          onToggleSocieties={() => setSocietiesOpen((prev) => !prev)}
-          onToggleDiplomacy={() => setDiplomacyOpen((prev) => !prev)}
-          onToggleCivilization={() => setCivilizationOpen((prev) => !prev)}
-          onSave={handleSave}
-          onLoad={handleLoad}
-          onExportWorld={handleExportWorld}
-          onImportWorld={handleImportWorld}
-          onToggleHelp={() => setHelpOpen((prev) => !prev)}
-          societiesOpen={societiesOpen}
-          diplomacyOpen={diplomacyOpen}
-          civilizationOpen={civilizationOpen}
-          isMuted={isMuted}
-          onToggleMute={handleToggleMute}
-          warsCount={wars.length}
-          treatiesCount={treaties.length}
-          scenario={scenario}
-          onChangeScenario={(nextScenario) => {
-            setInspectedEntity(null);
-            setFollowAgentId(null);
-            setScenario(nextScenario);
-            setWorldNonce((n) => n + 1);
-          }}
-        />
-      </div>
+      {gameScreen === 'playing' && (
+        <>
+          {/* Two-Row Desktop HUD Shell (TopBar + ControlsHeader in Row 1; Side Panels in Row 2) */}
+          <div
+            style={{
+              position: 'absolute',
+              top: '12px',
+              left: '12px',
+              right: '12px',
+              bottom: '74px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '10px',
+              pointerEvents: 'none',
+              zIndex: 20,
+            }}
+          >
+            {/* Row 1: Top-Left Telemetry & Top-Right Controls */}
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'flex-start',
+                gap: '12px',
+                flexShrink: 0,
+              }}
+            >
+              <div style={{ flexShrink: 0 }}>
+                <TopBar
+                  time={timeState}
+                  agentCount={agentCount}
+                  births={births}
+                  deaths={deaths}
+                  avgDeathAge={avgDeathAge}
+                  resources={resources}
+                  societiesCount={societiesCount || societies.length}
+                  speed={speed}
+                  is25D={is25D}
+                  weather={currentWeather || undefined}
+                  dominantAge={dominantAge || undefined}
+                  lodStats={lodStats || undefined}
+                />
+              </div>
 
-      {/* Right Side Panels */}
-      <div
-        style={{
-          position: 'absolute',
-          top: '76px',
-          right: '12px',
-          width: '340px',
-          maxHeight: 'calc(100vh - 170px)',
-          overflowY: 'auto',
-          paddingRight: '2px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '10px',
-          zIndex: 15,
-          pointerEvents: 'none',
-        }}
-      >
-        {societiesOpen && (
-          <SocietiesPanel
-            settlements={societies}
-            onSelectSettlement={handleSelectSettlement}
-            onClose={() => setSocietiesOpen(false)}
+              <div style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', justifyContent: 'flex-end' }}>
+                <ControlsHeader
+                  is25D={is25D}
+                  heightScaleLabel={heightScaleLabel}
+                  isPaused={isPaused}
+                  speed={speed}
+                  onToggleView={handleToggleView}
+                  onCycleHeight={handleCycleHeight}
+                  onTogglePause={handleTogglePause}
+                  onCycleSpeed={handleCycleSpeed}
+                  onCenterCamera={handleCenterCamera}
+                  onNextBattle={handleNextBattle}
+                  onSpawnResources={handleSpawnResources}
+                  onToggleSocieties={() => setSocietiesOpen((prev) => !prev)}
+                  onToggleDiplomacy={() => setDiplomacyOpen((prev) => !prev)}
+                  onToggleCivilization={() => setCivilizationOpen((prev) => !prev)}
+                  onSave={handleSave}
+                  onLoad={handleLoad}
+                  onExportWorld={handleExportWorld}
+                  onImportWorld={handleImportWorld}
+                  onToggleHelp={() => setHelpOpen((prev) => !prev)}
+                  societiesOpen={societiesOpen}
+                  diplomacyOpen={diplomacyOpen}
+                  civilizationOpen={civilizationOpen}
+                  isMuted={isMuted}
+                  onToggleMute={handleToggleMute}
+                  warsCount={wars.length}
+                  treatiesCount={treaties.length}
+                  scenario={scenario}
+                  onChangeScenario={(nextScenario) => {
+                    pendingScenarioRef.current = nextScenario;
+                    setInspectedEntity(null);
+                    setFollowAgentId(null);
+                    setScenario(nextScenario);
+                    setWorldNonce((n) => n + 1);
+                  }}
+                  onReturnToMenu={handleReturnToMenu}
+                />
+              </div>
+            </div>
+
+            {/* Row 2: Right Side Panels (dynamically below Row 1, above Dock) */}
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                display: 'flex',
+                justifyContent: 'flex-end',
+                alignItems: 'stretch',
+                pointerEvents: 'none',
+              }}
+            >
+              <div
+                style={{
+                  width: '348px',
+                  maxWidth: '100%',
+                  height: '100%',
+                  overflowY: 'auto',
+                  paddingRight: '2px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px',
+                  pointerEvents: 'none',
+                }}
+              >
+                {inspectedEntity && (
+                  <div style={{ flexShrink: 0 }}>
+                    <InspectorPanel
+                      data={inspectedEntity}
+                      isFollowing={
+                        inspectedEntity.kind === 'agent' &&
+                        followAgentId != null &&
+                        followAgentId === inspectedEntity.entity?.id
+                      }
+                      onFollowAgent={handleFollowAgent}
+                      onSelectAgent={handleSelectAgentById}
+                      onRallyWarband={handleRallyWarband}
+                      onSpawnCitizens={handleSpawnSettlementCitizens}
+                      onAdvanceWonder={handleAdvanceWonder}
+                      onFortifySettlement={handleFortifySettlement}
+                      onUpgradeBuilding={handleUpgradeBuilding}
+                      onCommissionBuilding={handleCommissionBuilding}
+                      onClose={() => {
+                        setInspectedEntity(null);
+                        if (rendererRef.current) {
+                          rendererRef.current.selectedEntity = null;
+                          rendererRef.current.followAgentId = null;
+                        }
+                        setFollowAgentId(null);
+                      }}
+                    />
+                  </div>
+                )}
+
+                {societiesOpen && (
+                  <div style={{ flexShrink: 0 }}>
+                    <SocietiesPanel
+                      settlements={societies}
+                      onSelectSettlement={handleSelectSettlement}
+                      onClose={() => setSocietiesOpen(false)}
+                    />
+                  </div>
+                )}
+
+                {diplomacyOpen && (
+                  <div style={{ flexShrink: 0 }}>
+                    <DiplomacyPanel
+                      wars={wars}
+                      treaties={treaties}
+                      relations={relations}
+                      diplomaticHistory={diplomaticHistory}
+                      onSignPeace={handleSignPeace}
+                      onEnforceAllPeace={handleEnforceAllPeace}
+                      onProvokeWar={handleProvokeWar}
+                      onFormAlliance={handleFormAlliance}
+                      onImposeSanctions={handleImposeSanctions}
+                      onIssueUltimatum={handleIssueUltimatum}
+                      onLaunchNuke={handleLaunchNuke}
+                      onLaunchSpyOp={handleLaunchSpyOp}
+                      onPanTo={handlePanTo}
+                      onClose={() => setDiplomacyOpen(false)}
+                    />
+                  </div>
+                )}
+
+                <div style={{ flexShrink: 0 }}>
+                  <ChroniclePanel
+                    events={chronicleEvents}
+                    structuredEntries={chronicleEntries}
+                    onExportWorld={handleExportWorld}
+                    onExportChronicle={handleExportChronicle}
+                    onPanTo={handlePanTo}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Divine Powers Dock */}
+          <Dock currentTool={currentTool} onSelectTool={handleSelectTool} />
+
+          {/* Mini-Map Radar with Tactical Heatmaps */}
+          <MiniMapRadar
+            simulation={simInstance || simRef.current}
+            renderer={rendererInstance || rendererRef.current}
+            onPanTo={handlePanTo}
           />
-        )}
 
-        {diplomacyOpen && (
-          <DiplomacyPanel
-            wars={wars}
-            treaties={treaties}
-            relations={relations}
-            diplomaticHistory={diplomaticHistory}
-            onSignPeace={handleSignPeace}
-            onEnforceAllPeace={handleEnforceAllPeace}
-            onProvokeWar={handleProvokeWar}
-            onFormAlliance={handleFormAlliance}
+          {/* Divine Guide Modal */}
+          <GuideModal isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
+
+          {/* Full-Screen Civilization, Dynasties & War Room Modal */}
+          <CivilizationModal
+            isOpen={civilizationOpen}
+            onClose={() => setCivilizationOpen(false)}
+            simulation={simInstance || simRef.current}
+            onSelectAgent={handleSelectAgentById}
             onImposeSanctions={handleImposeSanctions}
             onIssueUltimatum={handleIssueUltimatum}
             onLaunchNuke={handleLaunchNuke}
             onLaunchSpyOp={handleLaunchSpyOp}
-            onPanTo={handlePanTo}
-            onClose={() => setDiplomacyOpen(false)}
-          />
-        )}
-
-        {inspectedEntity && (
-          <InspectorPanel
-            data={inspectedEntity}
-            isFollowing={
-              inspectedEntity.kind === 'agent' &&
-              followAgentId != null &&
-              followAgentId === inspectedEntity.entity?.id
-            }
-            onFollowAgent={handleFollowAgent}
-            onSelectAgent={handleSelectAgentById}
-            onRallyWarband={handleRallyWarband}
-            onSpawnCitizens={handleSpawnSettlementCitizens}
             onAdvanceWonder={handleAdvanceWonder}
-            onFortifySettlement={handleFortifySettlement}
-            onClose={() => {
-              setInspectedEntity(null);
-              if (rendererRef.current) {
-                rendererRef.current.selectedEntity = null;
-                rendererRef.current.followAgentId = null;
-              }
-              setFollowAgentId(null);
-            }}
+            onCommissionWonder={handleCommissionWonder}
+            onExportWorld={handleExportWorld}
+            onExportChronicle={handleExportChronicle}
+            onImportWorld={handleImportWorld}
+            onPanTo={handlePanTo}
           />
-        )}
-
-        <ChroniclePanel
-          events={chronicleEvents}
-          structuredEntries={chronicleEntries}
-          onExportWorld={handleExportWorld}
-          onExportChronicle={handleExportChronicle}
-          onPanTo={handlePanTo}
-        />
-      </div>
-
-      {/* Divine Powers Dock */}
-      <Dock currentTool={currentTool} onSelectTool={handleSelectTool} />
-
-      {/* Mini-Map Radar with Tactical Heatmaps */}
-      <MiniMapRadar
-        simulation={simInstance || simRef.current}
-        renderer={rendererInstance || rendererRef.current}
-        onPanTo={handlePanTo}
-      />
-
-      {/* Divine Guide Modal */}
-      <GuideModal isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
-
-      {/* Full-Screen Civilization, Dynasties & War Room Modal */}
-      <CivilizationModal
-        isOpen={civilizationOpen}
-        onClose={() => setCivilizationOpen(false)}
-        simulation={simInstance || simRef.current}
-        onSelectAgent={handleSelectAgentById}
-        onImposeSanctions={handleImposeSanctions}
-        onIssueUltimatum={handleIssueUltimatum}
-        onLaunchNuke={handleLaunchNuke}
-        onLaunchSpyOp={handleLaunchSpyOp}
-        onAdvanceWonder={handleAdvanceWonder}
-        onCommissionWonder={handleCommissionWonder}
-        onExportWorld={handleExportWorld}
-        onExportChronicle={handleExportChronicle}
-        onImportWorld={handleImportWorld}
-        onPanTo={handlePanTo}
-      />
+        </>
+      )}
 
       {/* Notification Toast */}
-      <NotificationToast message={notification} />
+      <NotificationToast
+        message={notification}
+        placement={gameScreen === 'title' ? 'title' : 'hud'}
+        onDismiss={() => {
+          if (notificationTimeoutRef.current) clearTimeout(notificationTimeoutRef.current);
+          setNotification(null);
+        }}
+      />
     </div>
   );
 };

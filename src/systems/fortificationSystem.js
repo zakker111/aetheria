@@ -617,7 +617,7 @@ export class FortificationSystem {
     for (let i = 0; i < this.sim.buildings.length; i++) {
       const b = this.sim.buildings[i];
       if (!b || !b.complete || b.isRuined || (b.health !== undefined && b.health <= 0)) continue;
-      if (b.buildingType !== 'tower' && b.buildingType !== 'castle') continue;
+      if (b.buildingType !== 'tower' && b.buildingType !== 'castle' && b.buildingType !== 'radar_station') continue;
       if (b.settlementId == null) continue;
 
       let enemySet = enemySetCache.get(b.settlementId);
@@ -628,13 +628,19 @@ export class FortificationSystem {
       }
       if (!enemySet) continue;
 
-      const range = b.buildingType === 'castle' ? 11.0 : 8.5;
-      const rangeSq = range * range;
+      const lvl = b.level || 1;
+      const radarBonus = this.sim.getSettlementBuildingBonus?.(b.settlementId, 'radar_station')?.maxLevel || 0;
+      const radarRangeBoost = b.buildingType === 'radar_station' ? 0 : (radarBonus > 0 ? (1 + radarBonus) : 0);
+      const baseRange = b.buildingType === 'radar_station'
+        ? (16.0 + (lvl - 1) * 3.0)
+        : (b.buildingType === 'castle' ? 11.0 : 8.5) + (lvl - 1) * 1.5 + radarRangeBoost;
+      const rangeSq = baseRange * baseRange;
       const nearby = this.sim.world?.getNearbyAgents
-        ? this.sim.world.getNearbyAgents(b.x, b.y, Math.ceil(range))
+        ? this.sim.world.getNearbyAgents(b.x, b.y, Math.ceil(baseRange))
         : this.sim.agents;
 
       let target = null;
+      let targetIsAir = false;
       let bestDistSq = Infinity;
       for (let j = 0; j < nearby.length; j++) {
         const a = nearby[j];
@@ -643,12 +649,20 @@ export class FortificationSystem {
         const wb = a.warbandId != null ? warfare?.warbands?.get(a.warbandId) : null;
         const isHostile = enemySet.has(aSid) || (wb && wb.targetSettlementId === b.settlementId && !wb.isCivilWar && !wb.isRebellion);
         if (!isHostile) continue;
+        const isAir = Boolean(a.combatRole === 'plane' || a.combat?.isFlying);
+        if (b.buildingType === 'radar_station' && !isAir && targetIsAir) continue;
         const dx = a.x - b.x;
         const dy = a.y - b.y;
         const dSq = dx * dx + dy * dy;
-        if (dSq <= rangeSq && (dSq < bestDistSq || (dSq === bestDistSq && target && a.id < target.id))) {
-          bestDistSq = dSq;
-          target = a;
+        if (dSq <= rangeSq) {
+          if (b.buildingType === 'radar_station' && isAir && !targetIsAir) {
+            targetIsAir = true;
+            bestDistSq = dSq;
+            target = a;
+          } else if (dSq < bestDistSq || (dSq === bestDistSq && target && a.id < target.id)) {
+            bestDistSq = dSq;
+            target = a;
+          }
         }
       }
 
@@ -656,8 +670,15 @@ export class FortificationSystem {
 
       const eraId = this.sim.civilizationAgeSystem?.getSettlementAge?.(b.settlementId)?.ageId || 1;
       const wonderMult = this.sim.civilizationAgeSystem?.getWonderBuffs?.(b.settlementId)?.defenseMultiplier || 1.0;
-      const baseDmg = eraId >= 6 ? 30 : eraId >= 5 ? 24 : eraId >= 3 ? 18 : 13;
-      const dmg = Math.round(baseDmg * wonderMult * (b.buildingType === 'castle' ? 1.2 : 1.0));
+      const levelMult = 1 + (lvl - 1) * 0.35;
+      let dmg = 0;
+      if (b.buildingType === 'radar_station') {
+        const targetAir = Boolean(target.combatRole === 'plane' || target.combat?.isFlying);
+        dmg = Math.round((targetAir ? 42 : 16) * (1 + (lvl - 1) * 0.42));
+      } else {
+        const baseDmg = eraId >= 6 ? 30 : eraId >= 5 ? 24 : eraId >= 3 ? 18 : 13;
+        dmg = Math.round(baseDmg * wonderMult * levelMult * (b.buildingType === 'castle' ? 1.2 : 1.0));
+      }
 
       if (!target.combat) target.combat = { health: target.health ?? 100, defense: 0.05 };
       const curHp = target.combat.health ?? target.health ?? 100;
@@ -675,7 +696,7 @@ export class FortificationSystem {
           fromY: b.y + 0.5,
           toX: target.x,
           toY: target.y,
-          type: eraId >= 6 ? 'tracer_fire' : eraId >= 5 ? 'musket_shot' : 'arrow',
+          type: b.buildingType === 'radar_station' ? 'tracer_fire' : (eraId >= 6 ? 'tracer_fire' : eraId >= 5 ? 'musket_shot' : 'arrow'),
           duration: 12,
         });
       }

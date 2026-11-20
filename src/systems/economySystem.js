@@ -217,8 +217,17 @@ export class EconomySystem {
   gainExperience(agentId, amount) {
     const jobData = this.agentJobs.get(agentId);
     if (!jobData || jobData.job === 'unemployed') return;
-    
-    jobData.experience += amount;
+
+    let effAmount = amount;
+    const sid = this.sim?.settlementSystem?.agentSettlementMap?.get(agentId);
+    if (sid != null && typeof this.sim?.getSettlementBuildingBonus === 'function') {
+      const libPower = this.sim.getSettlementBuildingBonus(sid, 'library')?.power || 0;
+      if (libPower > 0) {
+        effAmount = amount * (1 + Math.min(1.5, libPower * 0.35));
+      }
+    }
+
+    jobData.experience += effAmount;
     
     // Level up every 100 experience
     const levelsGained = Math.floor(jobData.experience / 100);

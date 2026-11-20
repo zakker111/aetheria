@@ -14,8 +14,8 @@ export const CIVILIZATION_AGES = {
     color: '#b45309',
     doctrine: 'skirmish',
     description: 'Primitive hunters and foragers clustered around hearthfires.',
-    monumentType: 'monument_pyramid',
-    monumentName: 'Ancestral Stone Cairn',
+    monumentType: 'monument_cairn',
+    monumentName: 'Stonehenge Hearth Circle',
     requirements: { pop: 0, food: 0, wood: 0, ore: 0 },
   },
   BRONZE: {
@@ -47,8 +47,8 @@ export const CIVILIZATION_AGES = {
     color: '#eab308',
     doctrine: 'imperial_legion',
     description: 'Dominant empire with imperial legions, grand monuments, and statecraft.',
-    monumentType: 'monument_monolith',
-    monumentName: 'Astronomical Obelisk',
+    monumentType: 'monument_citadel',
+    monumentName: 'Grand Imperial Citadel',
     requirements: { pop: 12, food: 70, wood: 70, ore: 35, buildings: 5 },
   },
   INDUSTRIAL: {
@@ -58,7 +58,7 @@ export const CIVILIZATION_AGES = {
     color: '#f97316',
     doctrine: 'musket_line',
     description: 'Black powder volleys, field cannons, ironworks, and mechanized logistics.',
-    monumentType: 'monument_monolith',
+    monumentType: 'monument_foundry',
     monumentName: 'Grand Iron Foundry Bastion',
     requirements: { pop: 15, food: 95, wood: 95, ore: 50, buildings: 6 },
   },
@@ -70,7 +70,7 @@ export const CIVILIZATION_AGES = {
     doctrine: 'modern_fireteam',
     description: 'Armored tanks, tactical strike aircraft, precision infantry, and atomic deterrence.',
     monumentType: 'monument_monolith',
-    monumentName: 'Tactical Command Citadel',
+    monumentName: 'Tactical Sky-Spire Monolith',
     requirements: { pop: 19, food: 120, wood: 110, ore: 75, buildings: 7 },
   },
   NUCLEAR: {
@@ -80,8 +80,8 @@ export const CIVILIZATION_AGES = {
     color: '#84cc16',
     doctrine: 'nuclear_total_war',
     description: 'Heavy battle tanks, supersonic bombers, rocket artillery, and last-resort atomic arsenals.',
-    monumentType: 'monument_monolith',
-    monumentName: 'Atomic Deterrence Command',
+    monumentType: 'monument_atomic_dome',
+    monumentName: 'Orbital & Atomic Complex',
     requirements: { pop: 24, food: 145, wood: 125, ore: 90, buildings: 8 },
   },
 };
@@ -92,7 +92,7 @@ export const WONDER_CATALOG = {
     name: 'Stonehenge Hearth Circle',
     icon: '🪨',
     eraId: 1,
-    buildingType: 'monument_pyramid',
+    buildingType: 'monument_cairn',
     buffKey: 'food_yield',
     buffLabel: '+15% harvest & civic resilience',
   },
@@ -119,7 +119,7 @@ export const WONDER_CATALOG = {
     name: 'Grand Imperial Citadel',
     icon: '🏰',
     eraId: 4,
-    buildingType: 'monument_monolith',
+    buildingType: 'monument_citadel',
     buffKey: 'siege_defense',
     buffLabel: '+35% siege wall fortification',
   },
@@ -128,7 +128,7 @@ export const WONDER_CATALOG = {
     name: 'Grand Iron Foundry Bastion',
     icon: '⚒️',
     eraId: 5,
-    buildingType: 'monument_monolith',
+    buildingType: 'monument_foundry',
     buffKey: 'forge_output',
     buffLabel: '+35% armory output & metallurgy',
   },
@@ -141,16 +141,25 @@ export const WONDER_CATALOG = {
     buffKey: 'nuclear_enrichment',
     buffLabel: '+60% nuclear warhead enrichment rate',
   },
+  orbital_deterrence: {
+    key: 'orbital_deterrence',
+    name: 'Orbital & Atomic Deterrence Array',
+    icon: '🛰️',
+    eraId: 7,
+    buildingType: 'monument_atomic_dome',
+    buffKey: 'atomic_deterrence',
+    buffLabel: '+2 max warheads, +20% air interception & fallout shielding',
+  },
 };
 
-const WONDER_BY_ERA = {
+export const WONDER_BY_ERA = {
   1: WONDER_CATALOG.ancestral_cairn,
   2: WONDER_CATALOG.great_lighthouse,
   3: WONDER_CATALOG.colosseum_champions,
   4: WONDER_CATALOG.grand_citadel,
   5: WONDER_CATALOG.grand_foundry,
   6: WONDER_CATALOG.atomic_reactor,
-  7: WONDER_CATALOG.atomic_reactor,
+  7: WONDER_CATALOG.orbital_deterrence,
 };
 
 export class CivilizationAgeSystem {
@@ -164,6 +173,8 @@ export class CivilizationAgeSystem {
     this.wonders = new Map();
     // Map of settlementId -> Set/Array of completed wonder keys for stacked regional buffs
     this.completedWonders = new Map();
+    // Map of settlementId -> Array of persistent heritage monument records across eras
+    this.heritageMonuments = new Map();
     this.lastEvaluationTick = 0;
   }
 
@@ -278,8 +289,98 @@ export class CivilizationAgeSystem {
       forgeMultiplier: keys.has('grand_foundry') ? 1.35 : 1.0,
       nuclearEnrichMultiplier: keys.has('atomic_reactor') ? 1.6 : 1.0,
       foodMultiplier: keys.has('ancestral_cairn') ? 1.15 : 1.0,
+      maxWarheadsBonus: keys.has('orbital_deterrence') ? 2 : 0,
+      airDefenseBonus: keys.has('orbital_deterrence') ? 0.2 : 0,
       completedKeys: Array.from(keys),
     };
+  }
+
+  registerHeritageMonument(settlementId, building, eraId = null, eraName = null, tick = null) {
+    if (settlementId == null || !building) return null;
+    const resolvedEraId = eraId ?? building.builtInEra ?? this.getSettlementAge(settlementId)?.ageId ?? 1;
+    const ageObj = Object.values(CIVILIZATION_AGES).find(a => a.id === resolvedEraId) || CIVILIZATION_AGES.TRIBAL;
+    let list = this.heritageMonuments.get(settlementId);
+    if (!list) {
+      list = [];
+      this.heritageMonuments.set(settlementId, list);
+    }
+    const existing = list.find(m => m.buildingId === building.id);
+    if (existing) {
+      existing.name = building.customName || existing.name;
+      return existing;
+    }
+    const entry = {
+      buildingId: building.id,
+      eraId: resolvedEraId,
+      eraName: eraName || ageObj.name,
+      icon: ageObj.icon,
+      buildingType: building.buildingType,
+      name: building.customName || ageObj.monumentName || 'Monument Landmark',
+      builtTick: tick ?? (this.sim?.clock?.tick ?? 0),
+    };
+    list.push(entry);
+    return entry;
+  }
+
+  getHeritageMonuments(settlementId) {
+    const currentEra = this.getSettlementAge(settlementId)?.ageId || 1;
+    const records = this.heritageMonuments.get(settlementId) || [];
+    const seenIds = new Set();
+    const result = [];
+    const allBuildings = Array.isArray(this.sim?.buildings) ? this.sim.buildings : [];
+
+    for (const rec of records) {
+      if (!rec || seenIds.has(rec.buildingId)) continue;
+      seenIds.add(rec.buildingId);
+      const b = allBuildings.find(x => x && x.id === rec.buildingId);
+      const bEra = b?.builtInEra ?? rec.eraId ?? 1;
+      const ageObj = Object.values(CIVILIZATION_AGES).find(a => a.id === bEra);
+      const intact = b ? !b.isRuined : false;
+      result.push({
+        buildingId: rec.buildingId,
+        eraId: bEra,
+        eraName: rec.eraName || ageObj?.name || `Era ${bEra}`,
+        icon: rec.icon || ageObj?.icon || '🏛️',
+        buildingType: b?.buildingType || rec.buildingType,
+        name: b?.customName || rec.name,
+        complete: b ? Boolean(b.complete) : false,
+        intact,
+        health: b ? Math.round(b.health ?? 0) : 0,
+        maxHealth: b ? Math.round(b.maxHealth ?? 500) : 500,
+        level: b?.level || 1,
+        survivedEras: Math.max(0, currentEra - bEra),
+        survivedToModern: currentEra >= 6 && bEra <= 4 && intact,
+      });
+    }
+
+    // Also include any untracked monument buildings owned by this settlement
+    for (const b of allBuildings) {
+      if (!b || b.settlementId !== settlementId || seenIds.has(b.id)) continue;
+      const isMon = (typeof b.isMonument === 'function' && b.isMonument()) || String(b.buildingType || '').startsWith('monument_');
+      if (!isMon) continue;
+      seenIds.add(b.id);
+      const bEra = b.builtInEra ?? 1;
+      const ageObj = Object.values(CIVILIZATION_AGES).find(a => a.id === bEra);
+      const intact = !b.isRuined;
+      result.push({
+        buildingId: b.id,
+        eraId: bEra,
+        eraName: ageObj?.name || `Era ${bEra}`,
+        icon: ageObj?.icon || '🏛️',
+        buildingType: b.buildingType,
+        name: b.customName || ageObj?.monumentName || b.buildingType,
+        complete: Boolean(b.complete),
+        intact,
+        health: Math.round(b.health ?? 0),
+        maxHealth: Math.round(b.maxHealth ?? 500),
+        level: b.level || 1,
+        survivedEras: Math.max(0, currentEra - bEra),
+        survivedToModern: currentEra >= 6 && bEra <= 4 && intact,
+      });
+    }
+
+    result.sort((a, b) => (a.eraId - b.eraId) || (a.buildingId - b.buildingId));
+    return result;
   }
 
   commissionWonder(settlementId, wonderKey = null, tick = null) {
@@ -413,6 +514,7 @@ export class CivilizationAgeSystem {
     const nuclearInfra = this.getNuclearInfrastructureStatus(settlementId);
     const wonder = this.getWonderState(settlementId);
     const wonderBuffs = this.getWonderBuffs(settlementId);
+    const heritageMonuments = this.getHeritageMonuments(settlementId);
 
     return {
       id: ageConfig.id,
@@ -424,6 +526,7 @@ export class CivilizationAgeSystem {
       monumentName,
       monumentProgress,
       hasMonument,
+      heritageMonuments,
       nuclearProgram: { ...nuclearProgram, infra: nuclearInfra },
       nuclearInfra,
       wonder: wonder ? { ...wonder } : null,
@@ -516,6 +619,13 @@ export class CivilizationAgeSystem {
       const buildingsCount = settlement.buildings ? settlement.buildings.filter(b => b.complete && !b.isRuined).length : 0;
       const workshopCount = settlement.buildings ? settlement.buildings.filter(b => b.complete && !b.isRuined && b.buildingType === 'workshop').length : 0;
 
+      const libBonus = this.sim.getSettlementBuildingBonus?.(sId, 'library') || { count: 0, maxLevel: 0, power: 0 };
+      const labBonus = this.sim.getSettlementBuildingBonus?.(sId, 'research_lab') || { count: 0, maxLevel: 0, power: 0 };
+      const plantBonus = this.sim.getSettlementBuildingBonus?.(sId, 'nuclear_plant') || { count: 0, maxLevel: 0, power: 0 };
+      const siloBonus = this.sim.getSettlementBuildingBonus?.(sId, 'missile_silo') || { count: 0, maxLevel: 0, power: 0 };
+      const researchCostMult = Math.max(0.68, 1 - Math.min(0.24, libBonus.power * 0.1) - Math.min(0.12, labBonus.power * 0.06));
+      const effectiveBuildingsCount = buildingsCount + (libBonus.maxLevel >= 2 ? 1 : 0);
+
       // Check progression to next age
       let nextAge = null;
       if (current.ageId === 1) {
@@ -530,26 +640,26 @@ export class CivilizationAgeSystem {
         }
       } else if (current.ageId === 3) {
         const req = CIVILIZATION_AGES.IMPERIAL.requirements;
-        if (pop >= req.pop && totalFood >= req.food && totalWood >= req.wood && totalOre >= req.ore && buildingsCount >= req.buildings) {
+        if (pop >= req.pop && totalFood >= Math.round(req.food * researchCostMult) && totalWood >= Math.round(req.wood * researchCostMult) && totalOre >= Math.round(req.ore * researchCostMult) && effectiveBuildingsCount >= req.buildings) {
           nextAge = CIVILIZATION_AGES.IMPERIAL;
         }
       } else if (current.ageId === 4) {
         const req = CIVILIZATION_AGES.INDUSTRIAL.requirements;
-        if (pop >= req.pop && totalFood >= req.food && totalWood >= req.wood && totalOre >= req.ore && buildingsCount >= req.buildings) {
+        if (pop >= req.pop && totalFood >= Math.round(req.food * researchCostMult) && totalWood >= Math.round(req.wood * researchCostMult) && totalOre >= Math.round(req.ore * researchCostMult) && effectiveBuildingsCount >= req.buildings) {
           nextAge = CIVILIZATION_AGES.INDUSTRIAL;
         }
       } else if (current.ageId === 5) {
         const req = CIVILIZATION_AGES.MODERN.requirements;
-        if (pop >= req.pop && totalFood >= req.food && totalWood >= req.wood && totalOre >= req.ore && buildingsCount >= req.buildings) {
+        if (pop >= req.pop && totalFood >= Math.round(req.food * researchCostMult) && totalWood >= Math.round(req.wood * researchCostMult) && totalOre >= Math.round(req.ore * researchCostMult) && effectiveBuildingsCount >= req.buildings) {
           nextAge = CIVILIZATION_AGES.MODERN;
         }
       } else if (current.ageId === 6) {
         const req = CIVILIZATION_AGES.NUCLEAR.requirements;
         const prog = this.getNuclearProgram(sId);
         const hasReactor = this.getWonderBuffs(sId).completedKeys.includes('atomic_reactor');
-        if ((pop >= req.pop && totalFood >= req.food && totalWood >= req.wood && totalOre >= req.ore && buildingsCount >= req.buildings) ||
-            (hasReactor && pop >= 18 && buildingsCount >= 7) ||
-            (prog.warheads >= 2 && pop >= 20 && buildingsCount >= 7)) {
+        if ((pop >= req.pop && totalFood >= Math.round(req.food * researchCostMult) && totalWood >= Math.round(req.wood * researchCostMult) && totalOre >= Math.round(req.ore * researchCostMult) && effectiveBuildingsCount >= req.buildings) ||
+            (hasReactor && pop >= 18 && effectiveBuildingsCount >= 7) ||
+            (prog.warheads >= 2 && pop >= 20 && effectiveBuildingsCount >= 7)) {
           nextAge = CIVILIZATION_AGES.NUCLEAR;
         }
       }
@@ -571,7 +681,7 @@ export class CivilizationAgeSystem {
           tick,
         });
 
-        // Place Monument Wonder blueprint near center synchronously & deterministically
+        // Place new Era's grand monument alongside surviving earlier-era heritage structures
         this.placeMonumentBlueprint(settlement, nextAge);
         const eraWonder = WONDER_BY_ERA[nextAge.id];
         if (eraWonder) {
@@ -579,12 +689,41 @@ export class CivilizationAgeSystem {
         }
       }
 
+      // Ensure even Era 1 Tribal towns raise their foundational Ancestral Hearth Circle once established
+      if (current.ageId === 1 && pop >= 5) {
+        const hasTribalMonument = (settlement.buildings || []).some(
+          b => b && !b.isRuined && b.buildingType === CIVILIZATION_AGES.TRIBAL.monumentType
+        );
+        if (!hasTribalMonument) {
+          this.placeMonumentBlueprint(settlement, CIVILIZATION_AGES.TRIBAL);
+        }
+      }
+
+      // Heritage preservation & restoration: active cities maintain and gently repair weathered landmarks
+      if (tick % 40 === 0 && pop >= 4 && Array.isArray(settlement.buildings)) {
+        for (const mb of settlement.buildings) {
+          if (!mb) continue;
+          const isMon = (typeof mb.isMonument === 'function' && mb.isMonument()) || String(mb.buildingType || '').startsWith('monument_');
+          if (!isMon) continue;
+          if (!mb.isRuined && mb.complete && mb.health < (mb.maxHealth || 500)) {
+            mb.health = Math.min(mb.maxHealth || 500, (mb.health || 0) + 4);
+          } else if (mb.isRuined && mb.ruinedAtTick != null && (tick - mb.ruinedAtTick) >= 240 && pop >= 8) {
+            mb.isRuined = false;
+            mb.ruinedAtTick = null;
+            mb.health = Math.round((mb.maxHealth || 500) * 0.5);
+            mb.complete = true;
+            mb.constructionProgress = 100;
+          }
+        }
+      }
+
       // Advance active Cultural Wonder construction deterministically
       const activeWonder = this.wonders.get(sId);
       if (activeWonder && !activeWonder.complete && pop >= 4) {
-        const laborStep = Math.min(18, 4 + Math.floor(pop * 0.4) + (workshopCount * 3) + (totalWood >= 15 ? 2 : 0));
+        const academicBonus = Math.min(6, libBonus.maxLevel * 2) + Math.min(5, labBonus.maxLevel * 2);
+        const laborStep = Math.min(24, 4 + Math.floor(pop * 0.4) + (workshopCount * 3) + (totalWood >= 15 ? 2 : 0) + academicBonus);
         this.advanceWonderProgress(sId, laborStep, tick);
-      } else if (!activeWonder && current.ageId >= 2 && pop >= 6) {
+      } else if (!activeWonder && pop >= 5) {
         const eraWonder = WONDER_BY_ERA[current.ageId] || WONDER_CATALOG.great_lighthouse;
         this.commissionWonder(sId, eraWonder.key, tick);
       }
@@ -598,10 +737,11 @@ export class CivilizationAgeSystem {
         const infra = this.getNuclearInfrastructureStatus(sId);
         const bell = settlement.culture?.values?.belligerence ?? 0.5;
         prog.doctrine = bell >= 0.88 ? 'first_strike' : 'deterrence';
+        const siloBonusCap = (siloBonus.maxLevel > 0 ? (1 + siloBonus.maxLevel) : 0) + (buffs.maxWarheadsBonus || 0);
         if (current.ageId >= 7) {
-          prog.maxWarheads = Math.max(prog.maxWarheads || 3, 5 + (infra.hasMissileSilo ? 2 : 0));
+          prog.maxWarheads = Math.max(prog.maxWarheads || 3, 5 + siloBonusCap);
         } else if (infra.hasMissileSilo) {
-          prog.maxWarheads = Math.max(prog.maxWarheads || 3, 4);
+          prog.maxWarheads = Math.max(prog.maxWarheads || 3, 2 + siloBonusCap);
         }
         if (!prog.unlocked) {
           prog.unlocked = true;
@@ -613,9 +753,13 @@ export class CivilizationAgeSystem {
           });
         }
         if (prog.warheads < prog.maxWarheads && infra.canEnrich && totalOre >= 10) {
+          const labStep = labBonus.maxLevel > 0 ? (3 + labBonus.maxLevel * 3) : 0;
+          const plantStep = plantBonus.maxLevel > 1 ? ((plantBonus.maxLevel - 1) * 4) : 0;
+          const siloStep = siloBonus.maxLevel > 0 ? (1 + siloBonus.maxLevel * 2) : 0;
           const baseStep = 8 +
-            (infra.hasResearchLab ? 5 : 0) +
-            (infra.hasMissileSilo ? 3 : 0) +
+            labStep +
+            plantStep +
+            siloStep +
             (totalOre >= 30 ? 4 : 0) +
             (current.ageId >= 7 ? 4 : 0);
           const step = Math.round(baseStep * (buffs.nuclearEnrichMultiplier || 1.0));
@@ -640,56 +784,76 @@ export class CivilizationAgeSystem {
   }
 
   placeMonumentBlueprint(settlement, ageConfig) {
-    if (!settlement || !settlement.center) return;
+    if (!settlement || !settlement.center) return null;
 
     const monumentType = ageConfig.monumentType || 'monument_pyramid';
     const mName = ageConfig.monumentName || 'Monument Wonder';
+    const eraId = ageConfig.id || this.getSettlementAge(settlement.id)?.ageId || 1;
 
-    // Find clear tile near center
+    // Avoid duplicating an already-built monument of this same Era & type
+    const existing = (this.sim?.buildings || []).find(
+      b => b && !b.isRuined && b.settlementId === settlement.id && b.buildingType === monumentType && (b.builtInEra ?? eraId) === eraId
+    );
+    if (existing) {
+      this.registerHeritageMonument(settlement.id, existing, eraId, ageConfig.name);
+      const current = this.getSettlementAge(settlement.id);
+      current.monumentBuildingId = existing.id;
+      return existing;
+    }
+
+    // Find clear tile near center, expanding outward as older monuments and districts fill the core
     const cx = Math.floor(settlement.center.x);
     const cy = Math.floor(settlement.center.y);
     const w = this.sim.world;
 
-    let targetX = Math.max(2, Math.min(w.width - 3, cx + 2));
-    let targetY = Math.max(2, Math.min(w.height - 3, cy + 2));
+    let targetX = Math.max(3, Math.min(w.width - 4, cx + 2));
+    let targetY = Math.max(3, Math.min(w.height - 4, cy + 2));
+    let found = false;
 
-    for (let r = 2; r <= 6; r++) {
-      let found = false;
+    for (let r = 2; r <= 14 && !found; r++) {
       for (let dx = -r; dx <= r && !found; dx++) {
         for (let dy = -r; dy <= r && !found; dy++) {
+          if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
           const tx = cx + dx;
           const ty = cy + dy;
-          if (tx >= 2 && tx < w.width - 2 && ty >= 2 && ty < w.height - 2 &&
-              w.isWalkable(tx, ty) && !w.getEntitiesAt(tx, ty).some(e => e.type === 'building')) {
+          if (tx >= 3 && tx < w.width - 3 && ty >= 3 && ty < w.height - 3 &&
+              w.isWalkable(tx, ty) &&
+              !w.getEntitiesAt(tx, ty).some(e => e.type === 'building') &&
+              !this.sim?.fortificationSystem?.getSegmentAt?.(tx, ty)) {
             targetX = tx;
             targetY = ty;
             found = true;
           }
         }
       }
-      if (found) break;
     }
 
     const b = new Building(targetX, targetY, monumentType, this.sim.idGen, settlement.id, settlement.factionId ?? null);
     b.constructionProgress = 0;
     b.complete = false;
+    b.builtInEra = eraId;
+    b.isHeritage = true;
     b.customName = mName;
     this.sim.buildings.push(b);
     this.sim.world.addToSpatialIndex(targetX, targetY, b);
+    this.sim.world.entityRegistry?.set?.(b.id, b);
     if (!settlement.buildings) settlement.buildings = [];
     settlement.buildings.push(b);
 
     const current = this.getSettlementAge(settlement.id);
     current.monumentBuildingId = b.id;
+    this.registerHeritageMonument(settlement.id, b, eraId, ageConfig.name);
 
     this.sim.eventBus.emit('MONUMENT_SURVEYED', {
       settlementId: settlement.id,
       settlementName: settlement.name,
       monumentName: mName,
       monumentType,
+      eraId,
       x: targetX,
       y: targetY,
     });
+    return b;
   }
 
   serialize() {
@@ -699,6 +863,7 @@ export class CivilizationAgeSystem {
       nuclearPrograms: Array.from(this.nuclearPrograms.entries()).map(([id, p]) => [id, { ...p }]),
       wonders: Array.from(this.wonders.entries()).map(([id, w]) => [id, { ...w }]),
       completedWonders: Array.from(this.completedWonders.entries()).map(([id, arr]) => [id, [...arr]]),
+      heritageMonuments: Array.from(this.heritageMonuments.entries()).map(([id, arr]) => [id, arr.map(m => ({ ...m }))]),
     };
   }
 
@@ -717,6 +882,9 @@ export class CivilizationAgeSystem {
       }
       if (Array.isArray(data.completedWonders)) {
         sys.completedWonders = new Map(data.completedWonders.map(([id, arr]) => [id, [...arr]]));
+      }
+      if (Array.isArray(data.heritageMonuments)) {
+        sys.heritageMonuments = new Map(data.heritageMonuments.map(([id, arr]) => [id, arr.map(m => ({ ...m }))]));
       }
     }
     return sys;

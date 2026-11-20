@@ -1,6 +1,7 @@
 // Main simulation orchestrator (doc 03: high-level tick order)
 import { WorldState } from "../core/worldState.js";
 import { RNG } from "../core/rng.js";
+import { BUILDING_METADATA } from "../core/constants.js";
 
 import { SimulationClock } from "./clock.js";
 import { EventBus } from "../core/eventBus.js";
@@ -938,8 +939,10 @@ export class Simulation {
       if (this.buildings) {
         for (const b of this.buildings) {
           if (!b.isRuined && b.health > 0 && this.world.isBurning(Math.floor(b.x), Math.floor(b.y))) {
-            b.health -= 2;
-            if (b.health <= 0) {
+            const destroyed = typeof b.applyDamage === 'function'
+              ? b.applyDamage(2, { cause: 'fire', tick: this.clock.tick })
+              : (() => { b.health -= 2; return b.health <= 0; })();
+            if (destroyed || b.health <= 0) {
               b.health = 0;
               b.isRuined = true;
               b.ruinedAtTick = this.clock.tick;
@@ -1059,7 +1062,8 @@ export class Simulation {
         let bw = 0;
         for (let i = 0; i < this.buildings.length; i++) {
           const b = this.buildings[i];
-          if (b && b.isRuined && b.ruinedAtTick != null && (this.clock.tick - b.ruinedAtTick) > 1200) {
+          const isMonument = Boolean(b && (b.isHeritage || (typeof b.isMonument === 'function' && b.isMonument()) || String(b.buildingType || '').startsWith('monument_')));
+          if (b && !isMonument && b.isRuined && b.ruinedAtTick != null && (this.clock.tick - b.ruinedAtTick) > 1200) {
             pruneIds.add(b.id);
             this.world.removeFromSpatialIndex(Math.floor(b.x), Math.floor(b.y), b);
             this.world.entityRegistry?.delete(b.id);
@@ -1134,13 +1138,15 @@ export class Simulation {
         // counts feed the deterministic decisions below — never entity order.
         let houses = 0, workshops = 0, farms = 0, temples = 0, towers = 0;
         let granaries = 0, markets = 0, barracksCount = 0, warehouses = 0;
-        let factories = 0, researchLabs = 0, nuclearPlants = 0, missileSilos = 0;
+        let windmills = 0, inns = 0, libraries = 0, apothecaries = 0, banks = 0;
+        let factories = 0, researchLabs = 0, radarStations = 0, nuclearPlants = 0, missileSilos = 0;
         let pending = 0, nonRuined = 0;
         const owned = bBySettlement.get(settlement.id);
         if (owned) {
           for (const b of owned) {
-            if (!b.isRuined) nonRuined++;
-            if (!b.complete) { pending++; continue; }
+            if (!b || b.isRuined) continue;
+            nonRuined++;
+            if (!b.complete) pending++;
             switch (b.buildingType) {
               case "house": houses++; break;
               case "workshop": workshops++; break;
@@ -1151,74 +1157,118 @@ export class Simulation {
               case "market": markets++; break;
               case "barracks": barracksCount++; break;
               case "warehouse": warehouses++; break;
+              case "windmill": windmills++; break;
+              case "inn": inns++; break;
+              case "library": libraries++; break;
+              case "apothecary": apothecaries++; break;
+              case "bank": banks++; break;
               case "factory": factories++; break;
               case "research_lab": researchLabs++; break;
+              case "radar_station": radarStations++; break;
               case "nuclear_plant": nuclearPlants++; break;
               case "missile_silo": missileSilos++; break;
             }
           }
         }
         
-        // Only plan up to 2 active projects simultaneously, within per-city cap
+        // Continuous urban civic planning & outward city expansion over time
         const ageId = this.civilizationAgeSystem?.getSettlementAge?.(settlement.id)?.ageId || 1;
-        const maxBuildings = Math.min(28, Math.max(8, Math.ceil(pop * 0.7) + 5));
-        if (pending < 2 && nonRuined < maxBuildings) {
+        const maxBuildings = Math.min(72, Math.max(12, Math.ceil(pop * 1.45) + ageId * 3 + 6));
+        const maxPending = pop >= 16 ? 4 : 2;
+        if (pending < maxPending && nonRuined < maxBuildings) {
+          const targetHouses = Math.max(2, Math.ceil(pop * 0.62) + Math.floor(ageId / 2));
+          const targetFarms = pop >= 4 ? Math.max(1, Math.floor(pop / 7)) : 0;
+          const targetWorkshops = pop >= 3 ? Math.max(1, Math.floor(pop / 10)) : 0;
+          const targetGranaries = pop >= 18 ? 2 : (pop >= 6 ? 1 : 0);
+          const targetMarkets = pop >= 20 ? 2 : (pop >= 7 ? 1 : 0);
+          const targetBarracks = pop >= 22 ? 2 : (pop >= 9 ? 1 : 0);
+          const targetWarehouses = pop >= 22 ? 2 : (pop >= 11 ? 1 : 0);
+          const targetTowers = pop >= 8 ? Math.min(4, Math.max(1, Math.floor(pop / 9))) : 0;
+          const targetWindmills = (ageId >= 2 && pop >= 7) ? (pop >= 19 ? 2 : 1) : 0;
+          const targetInns = (ageId >= 2 && pop >= 8) ? (pop >= 21 ? 2 : 1) : 0;
+          const targetLibraries = (ageId >= 3 && pop >= 9) ? (pop >= 24 ? 2 : 1) : 0;
+          const targetApothecaries = (ageId >= 3 && pop >= 10) ? (pop >= 24 ? 2 : 1) : 0;
+          const targetBanks = (ageId >= 4 && pop >= 11) ? (pop >= 26 ? 2 : 1) : 0;
+          const targetFactories = (ageId >= 5 && pop >= 10) ? (pop >= 22 ? 2 : 1) : 0;
+          const targetLabs = (ageId >= 5 && pop >= 12) ? (pop >= 26 ? 2 : 1) : 0;
+          const targetPlants = (ageId >= 6 && pop >= 12) ? (pop >= 28 ? 2 : 1) : 0;
+          const targetRadars = (ageId >= 6 && pop >= 12) ? (pop >= 24 ? 2 : 1) : 0;
+          const targetSilos = (ageId >= 6 && pop >= 13) ? (pop >= 28 ? 2 : 1) : 0;
+
           let neededType = null;
-          if (houses < Math.max(1, Math.ceil(pop / 3))) {
+          if (houses < Math.max(1, Math.min(4, Math.ceil(pop / 4)))) {
             neededType = "house";
-          } else if (workshops === 0 && pop >= 3) {
+          } else if (workshops < 1 && pop >= 3) {
             neededType = "workshop";
-          } else if (farms === 0 && pop >= 4) {
+          } else if (farms < 1 && pop >= 4) {
             neededType = "farm";
           } else if (temples === 0 && pop >= 6) {
             neededType = "temple";
-          } else if (granaries === 0 && pop >= 6) {
+          } else if (granaries < targetGranaries) {
             neededType = "granary";
-          } else if (markets === 0 && pop >= 7) {
+          } else if (markets < targetMarkets) {
             neededType = "market";
-          } else if (barracksCount === 0 && pop >= 9) {
+          } else if (barracksCount < targetBarracks) {
             neededType = "barracks";
-          } else if (warehouses === 0 && pop >= 11) {
+          } else if (warehouses < targetWarehouses) {
             neededType = "warehouse";
-          } else if (houses < Math.ceil(pop / 2)) {
+          } else if (windmills < targetWindmills) {
+            neededType = "windmill";
+          } else if (inns < targetInns) {
+            neededType = "inn";
+          } else if (libraries < targetLibraries) {
+            neededType = "library";
+          } else if (apothecaries < targetApothecaries) {
+            neededType = "apothecary";
+          } else if (farms < targetFarms) {
+            neededType = "farm";
+          } else if (workshops < targetWorkshops) {
+            neededType = "workshop";
+          } else if (houses < targetHouses) {
             neededType = "house";
-          }
-
-          // Civic milestone projects: towns raise a watchtower, cities a castle.
-          if (!neededType && pop >= 8 && towers === 0) {
-            neededType = pop >= 15 ? "castle" : "tower";
-          }
-
-          // Industrial, Modern & Nuclear Age infrastructure chain:
-          // Factory -> Research Lab -> Nuclear Power Plant -> Missile Silo
-          if (!neededType && ageId >= 5 && pop >= 10 && factories === 0) {
+          } else if (towers < targetTowers) {
+            neededType = (ageId >= 4 && pop >= 15 && (towers === 0 || towers === 2)) ? "castle" : "tower";
+          } else if (banks < targetBanks) {
+            neededType = "bank";
+          } else if (factories < targetFactories) {
             neededType = "factory";
-          } else if (!neededType && ageId >= 5 && pop >= 12 && researchLabs === 0) {
+          } else if (researchLabs < targetLabs) {
             neededType = "research_lab";
-          } else if (!neededType && ageId >= 6 && pop >= 12 && factories >= 1 && nuclearPlants === 0) {
+          } else if (factories >= 1 && nuclearPlants < targetPlants) {
             neededType = "nuclear_plant";
-          } else if (!neededType && ageId >= 6 && pop >= 13 && nuclearPlants >= 1 && missileSilos === 0) {
+          } else if (radarStations < targetRadars) {
+            neededType = "radar_station";
+          } else if (nuclearPlants >= 1 && missileSilos < targetSilos) {
             neededType = "missile_silo";
+          } else if (this.clock.tick % 50 === 0) {
+            // Mature organic urban sprawl: keep adding residential/agrarian/industrial quarters as time progresses
+            const stock = settlement.stockpile || {};
+            const hasTimber = ((stock.wood || 0) + (stock.plank || 0)) >= 6;
+            if (hasTimber) {
+              const cycle = ["house", "farm", "house", "workshop", "house", ageId >= 5 ? "factory" : "tower"];
+              neededType = cycle[(nonRuined + settlement.id) % cycle.length];
+            }
           }
           
           if (neededType) {
-            // Find a suitable clear walkable tile near settlement center
-            for (let a = 0; a < 25; a++) {
+            // Multi-ring outward city expansion: inner core -> mid suburbs -> outer metropolitan districts
+            const tierRadius = this.settlementSystem.getTierInfo(pop, nonRuined).radius || 16;
+            const minR = nonRuined < 6 ? 2.5 : nonRuined < 14 ? 4 : 5.5;
+            const maxR = Math.min(26, Math.max(10, 7 + Math.floor(nonRuined * 0.48) + Math.floor(pop * 0.14), Math.floor(tierRadius * 0.72)));
+            const span = Math.max(4, maxR - minR);
+            for (let a = 0; a < 36; a++) {
               const ang = this._rng().next() * Math.PI * 2;
-              const r = 3 + this._rng().next() * 8;
+              const r = minR + this._rng().next() * span;
               const bx = Math.floor(settlement.center.x + Math.cos(ang) * r);
               const by = Math.floor(settlement.center.y + Math.sin(ang) * r);
               if (bx >= 4 && bx < this.world.width - 4 && by >= 4 && by < this.world.height - 4 && this.world.isWalkable(bx, by)) {
-                const occupied = this._occGrid[by * this.world.width + bx] === 1;
+                const occupied = this._occGrid[by * this.world.width + bx] === 1 || Boolean(this.fortificationSystem?.getSegmentAt?.(bx, by));
                 if (!occupied) {
                   const building = new Building(bx, by, neededType, this.idGen, settlement.id, settlement.factionId ?? null);
                   building.constructionProgress = 0;
                   building.complete = false;
                   this.buildings.push(building);
                   this.world.addToSpatialIndex(bx, by, building);
-                  // Keep the occupancy grid current so later settlements in
-                  // this same pass see the new site (matches the old live
-                  // `buildings.some()` scan exactly).
                   const W = this.world.width, H = this.world.height;
                   for (let dy = -2; dy <= 2; dy++) {
                     const gy = by + dy;
@@ -1246,6 +1296,38 @@ export class Simulation {
                   break;
                 }
               }
+            }
+          }
+        }
+
+        // Autonomous settlement building upgrades (deterministic, reserve-safe, every 40 ticks)
+        if (this.clock.tick % 40 === 0 && !settlement.ruined && owned && owned.length > 0) {
+          const priority = [
+            "farm", "granary", "windmill", "workshop", "house", "inn",
+            "library", "apothecary", "market", "bank", "tower", "castle",
+            "barracks", "factory", "research_lab", "nuclear_plant",
+            "radar_station", "missile_silo", "temple", "warehouse", "dock",
+            "monument_cairn", "monument_pyramid", "monument_colosseum",
+            "monument_citadel", "monument_foundry", "monument_monolith", "monument_atomic_dome"
+          ];
+          const sortedOwned = [...owned].filter(b => b && b.complete && !b.isRuined).sort((a, b) => {
+            const pa = priority.indexOf(a.buildingType);
+            const pb = priority.indexOf(b.buildingType);
+            const ra = pa === -1 ? 99 : pa;
+            const rb = pb === -1 ? 99 : pb;
+            if ((a.level || 1) !== (b.level || 1)) return (a.level || 1) - (b.level || 1);
+            if (ra !== rb) return ra - rb;
+            return (a.id || 0) - (b.id || 0);
+          });
+          const stock = settlement.stockpile || {};
+          const woodAvail = (stock.wood || 0) + (stock.plank || 0);
+          const oreAvail = (stock.ore || 0) + (stock.iron_ingot || 0);
+          for (const candidate of sortedOwned) {
+            const req = this.getUpgradeRequirements(candidate);
+            if (!req.eraMet || !req.nextLevel) continue;
+            if (woodAvail >= (req.costs.wood || 0) + 10 && oreAvail >= (req.costs.ore || 0) + 6) {
+              const res = this.upgradeBuilding(candidate.id, { byPlayer: false, tick: this.clock.tick });
+              if (res?.ok) break;
             }
           }
         }
@@ -1307,6 +1389,9 @@ export class Simulation {
       const needsFood = new Set();
       const needsHunters = new Set();
       const craftsmanSurplus = new Set();
+      const builderCountBySettlement = new Map();
+      const craftsmanCountBySettlement = new Map();
+      const workshopCapBySettlement = new Map();
       for (const [sid, settlement] of this.settlementSystem.settlements) {
         let builders = 0, foodWorkers = 0, craftsmen = 0, hunters = 0;
         for (const agentId of settlement.agentIds) {
@@ -1318,11 +1403,15 @@ export class Simulation {
           else if (a.job !== 'unemployed') foodWorkers++;
         }
         const pop = settlement.agentIds.size;
-        if (pop >= 2 && builders === 0) needsBuilders.add(sid);
+        const builderQuota = pop >= 22 ? 3 : (pop >= 10 ? 2 : 1);
+        builderCountBySettlement.set(sid, builders);
+        craftsmanCountBySettlement.set(sid, craftsmen);
+        if (pop >= 2 && builders < builderQuota) needsBuilders.add(sid);
         if (pop >= 3 && foodWorkers <= 1) needsFood.add(sid);
         if (pop >= 5 && hunters === 0) needsHunters.add(sid);
         const wsCount = wsCountBySettlement.get(sid) || 0;
         const wsCap = Math.max(1, wsCount) * 4;
+        workshopCapBySettlement.set(sid, wsCap);
         const target = Math.min(wsCap, Math.max(2, Math.floor(pop / 3)));
         if (craftsmen > target) craftsmanSurplus.add(sid);
       }
@@ -1331,6 +1420,9 @@ export class Simulation {
 
       for (const settlement of this.settlementSystem.settlements.values()) {
         const homeSid = settlement.id;
+        const sPop = settlement.agentIds.size;
+        const builderQuota = sPop >= 22 ? 3 : (sPop >= 10 ? 2 : 1);
+        const wsCap = workshopCapBySettlement.get(homeSid) || 4;
         for (const agentId of settlement.agentIds) {
           const agent = this._agentById(agentId);
           if (agent && agent.alive) {
@@ -1342,53 +1434,35 @@ export class Simulation {
               // loop that made whole towns permanently craftsmen. Give them
               // 60 ticks to seek other work first.
               if (this.clock.tick - (agent._lastJobAssignedTick ?? -9999) < 60) continue;
-              // Churn guard: an agent bounced between "unemployed" and hired
-              // several times keeps failing to hold a post (workshop roster
-              // pressure, missing skills). Let them settle permanently rather
-              // than ping-pong the whole town through the same cycle.
-              // Soldier cap: brave young adults may enlist when the town
-              // under-arms quota has room; otherwise pick from civilian jobs.
               const canEnlist = agent.lifeStage === 'adult' &&
                 agent.age >= 18 && agent.age <= 40 && (agent.personality?.brave ?? 0.5) > 0.6;
               const maxSoldiers = Math.floor((adultCountBySettlement.get(homeSid) || 0) / 8);
               const curSoldiers = soldierCountBySettlement.get(homeSid) || 0;
               const enlistOffered = canEnlist && curSoldiers < maxSoldiers;
-              // Churn guard: an agent bounced between "unemployed" and hired
-              // several times keeps failing to hold a post (workshop roster
-              // pressure, missing skills). Let them settle permanently rather
-              // than ping-pong the whole town through the same cycle. The
-              // lockout is *conditional*: a brave youth with barracks quota
-              // room still gets the recruit offer — otherwise the first three
-              // failed civilian hires would permanently close the soldier
-              // profession to every candidate (Phase 3b Step 2 audit).
               const attempts = (this._jobChangeCount.get(agent.id) || 0) + 1;
               this._jobChangeCount.set(agent.id, attempts);
               if (attempts > 3 && !enlistOffered) { agent._lastJobAssignedTick = Infinity; continue; }
               let jobPool = availableJobs;
-              if (!enlistOffered) {
-                jobPool = availableJobs.filter(j => j !== 'soldier');
-              } else {
+              const curBuilders = builderCountBySettlement.get(homeSid) || 0;
+              const curCraftsmen = craftsmanCountBySettlement.get(homeSid) || 0;
+              if (enlistOffered) {
                 soldierCountBySettlement.set(homeSid, curSoldiers + 1);
+                jobPool = ['soldier'];
+              } else if (hasPendingWork && curBuilders < builderQuota) {
+                jobPool = ['builder'];
+              } else {
+                jobPool = availableJobs.filter(j => j !== 'soldier' && (curCraftsmen < wsCap || j !== 'craftsman'));
               }
-              // When enlistment is on the table, the barracks bonus must beat
-              // the craftsman standing bonus in the scoring contest — so we
-              // hand the recruit the single-job soldier pool instead of hoping
-              // it wins a multi-way comparison. The caller already vetted age/
-              // bravery/quota, which is exactly what the standing bonuses were
-              // compensating for economy-wide.
-              if (enlistOffered) jobPool = ['soldier'];
               this.economySystem.assignJob(agent, jobPool);
-              // Only count an attempt when the agent actually landed a post.
-              // A failed pool (no qualified job) must not burn one of the 3
-              // churn attempts — otherwise a soldier-capped pool could lock
-              // brave youths out of every profession at once.
+              if (agent.job === 'builder') {
+                builderCountBySettlement.set(homeSid, curBuilders + 1);
+              } else if (agent.job === 'craftsman') {
+                craftsmanCountBySettlement.set(homeSid, curCraftsmen + 1);
+              }
               if (agent.job && agent.job !== 'unemployed') {
                 this._jobChangeCount.set(agent.id, Math.max(0, attempts - 1));
                 agent._lastJobAssignedTick = this.clock.tick;
               } else {
-                // Failed offer: undo the quota reservation and let them retry
-                // after the normal 60-tick patience window without burning
-                // another attempt next pass.
                 if (enlistOffered) soldierCountBySettlement.set(homeSid, curSoldiers);
                 this._jobChangeCount.set(agent.id, Math.max(0, attempts - 1));
                 agent._lastJobAssignedTick = this.clock.tick - 60;
@@ -1403,8 +1477,13 @@ export class Simulation {
               const sameSite = jobSid == null || jobSid === homeSid;
               if (sameSite) {
                 if (needsBuilders.has(homeSid) && hasPendingWork && agent.job !== 'builder' &&
-                    agent.skills.build >= 1.2) {
+                    agent.job !== 'soldier' && !agent.militaryDuty &&
+                    (agent.skills.build >= 1.0 || agent.job !== 'craftsman' || craftsmanSurplus.has(homeSid))) {
                   this.economySystem.assignJob(agent, ['builder']);
+                  builderCountBySettlement.set(homeSid, (builderCountBySettlement.get(homeSid) || 0) + 1);
+                  if ((builderCountBySettlement.get(homeSid) || 0) >= builderQuota) {
+                    needsBuilders.delete(homeSid);
+                  }
                   agent._jobAssignedTick = this.clock.tick;
                   agent._lastJobAssignedTick = this.clock.tick;
                   this._jobChangeCount.set(agent.id, (this._jobChangeCount.get(agent.id) || 0) + 1);
@@ -2085,39 +2164,135 @@ export class Simulation {
   }
 
   updateBuildings() {
+    const tick = this.clock.tick;
     const season = this.clock.getSeason();
     const fertility = WorldState.seasonFertility(season);
+    const settlements = this.settlementSystem?.settlements;
+
+    // Cache windmill power per settlement once per tick
+    const windmillPowerBySettlement = new Map();
+    if (settlements) {
+      for (const sId of settlements.keys()) {
+        windmillPowerBySettlement.set(sId, this.getSettlementBuildingBonus(sId, "windmill").power);
+      }
+    }
+
     for (const building of this.buildings) {
+      if (!building) continue;
       if (typeof building.update === 'function') building.update();
-      // Completed farms cultivate food nearby — yield follows the seasons:
-      // strong in spring/summer, poor in autumn, near-frozen in winter.
-      const farmInterval = season === 'winter' ? 200 : 50;
-      if (building.complete && building.buildingType === "farm" && this.clock.tick % farmInterval === 0) {
-        let nearFood = 0;
-        for (let r = 0; r < this.resources.length; r++) {
-          const res = this.resources[r];
-          if (!res.destroyed && !res.depleted && res.resourceType === "food" &&
-              Math.abs(res.x - building.x) <= 4 && Math.abs(res.y - building.y) <= 4) {
-            nearFood++;
-            if (nearFood >= 3) break;
+      if (!building.complete || building.isRuined) continue;
+
+      const lvl = building.level || 1;
+      const lvlMult = typeof building.getLevelMultiplier === 'function' ? building.getLevelMultiplier() : (1 + (lvl - 1) * 0.45);
+      const settlement = building.settlementId != null ? settlements?.get(building.settlementId) : null;
+
+      // 1. Farms cultivate seasonal food crops (faster & richer at Lv 2-3 and boosted by Windmills)
+      if (building.buildingType === "farm") {
+        const farmInterval = season === 'winter'
+          ? (lvl >= 3 ? 110 : lvl === 2 ? 150 : 200)
+          : (lvl >= 3 ? 30 : lvl === 2 ? 40 : 50);
+        if (tick % farmInterval === 0) {
+          const wmPower = building.settlementId != null ? (windmillPowerBySettlement.get(building.settlementId) || 0) : 0;
+          const cropCap = (lvl >= 2 || wmPower > 0) ? 4 : 3;
+          let nearFood = 0;
+          for (let r = 0; r < this.resources.length; r++) {
+            const res = this.resources[r];
+            if (!res.destroyed && !res.depleted && res.resourceType === "food" &&
+                Math.abs(res.x - building.x) <= 4 && Math.abs(res.y - building.y) <= 4) {
+              nearFood++;
+              if (nearFood >= cropCap) break;
+            }
           }
-        }
-        if (nearFood < 3 && this.resources.length < 700) {
-          const fx = Math.floor(building.x + (this._rng().next() - 0.5) * 4);
-          const fy = Math.floor(building.y + (this._rng().next() - 0.5) * 4);
-          if (fx >= 2 && fx < this.world.width - 2 && fy >= 2 && fy < this.world.height - 2 && this.world.isWalkable(fx, fy)) {
-            const entities = this.world.getEntitiesAt(fx, fy);
-            const hasFood = entities.some(e => e.type === "resource" && e.resourceType === "food");
-            if (!hasFood) {
-              const amount = Math.round(30 * fertility);
-              if (amount > 0) {
-                const crop = new Resource(fx, fy, "food", amount, this.idGen);
-                this.resources.push(crop);
-                this.world.addToSpatialIndex(fx, fy, crop);
+          if (nearFood < cropCap && this.resources.length < 700) {
+            const fx = Math.floor(building.x + (this._rng().next() - 0.5) * 4);
+            const fy = Math.floor(building.y + (this._rng().next() - 0.5) * 4);
+            if (fx >= 2 && fx < this.world.width - 2 && fy >= 2 && fy < this.world.height - 2 && this.world.isWalkable(fx, fy)) {
+              const entities = this.world.getEntitiesAt(fx, fy);
+              const hasFood = entities.some(e => e.type === "resource" && e.resourceType === "food");
+              if (!hasFood) {
+                const wmMult = 1 + Math.min(0.9, wmPower * 0.3);
+                const amount = Math.round(30 * fertility * lvlMult * wmMult);
+                if (amount > 0) {
+                  const crop = new Resource(fx, fy, "food", amount, this.idGen);
+                  this.resources.push(crop);
+                  this.world.addToSpatialIndex(fx, fy, crop);
+                }
               }
             }
           }
         }
+      }
+
+      // 2. Windmills mill grain into settlement food reserves (every 60 ticks)
+      if (building.buildingType === "windmill" && tick % 60 === 0 && settlement && !settlement.ruined) {
+        settlement.stockpile = settlement.stockpile || { food: 0, wood: 0, ore: 0 };
+        settlement.stockpile.food = (settlement.stockpile.food || 0) + (3 + (lvl - 1) * 2);
+      }
+
+      // 3. Upgraded Granaries (Lv 2+) actively preserve extra harvest rations (every 60 ticks)
+      if (building.buildingType === "granary" && lvl >= 2 && tick % 60 === 0 && settlement && !settlement.ruined) {
+        settlement.stockpile = settlement.stockpile || { food: 0, wood: 0, ore: 0 };
+        settlement.stockpile.food = (settlement.stockpile.food || 0) + (lvl - 1) * 2;
+      }
+
+      // 4. Houses comfort resting residents & Inns boost rest + social morale (every 40 ticks)
+      if (building.buildingType === "house" && tick % 40 === 0) {
+        const restGain = 4 + (lvl - 1) * 2;
+        const healGain = 2 + (lvl - 1);
+        for (const a of this.agents) {
+          if (!a || !a.alive) continue;
+          if (building.settlementId != null && a.settlementId !== building.settlementId) continue;
+          if (Math.abs(a.x - building.x) <= 3.5 && Math.abs(a.y - building.y) <= 3.5) {
+            if (a.needs) {
+              a.needs.rest = Math.min(100, (a.needs.rest ?? 60) + restGain);
+            }
+            if ((a.health ?? 100) < 100) {
+              a.health = Math.min(100, (a.health ?? 100) + healGain);
+              if (a.needs) a.needs.health = a.health;
+              if (a.combat) a.combat.health = a.health;
+            }
+          }
+        }
+      }
+
+      if (building.buildingType === "inn" && tick % 40 === 0 && building.settlementId != null) {
+        const restBoost = 6 + (lvl - 1) * 3;
+        const socialBoost = 10 + (lvl - 1) * 5;
+        for (const a of this.agents) {
+          if (!a || !a.alive || a.settlementId !== building.settlementId) continue;
+          if (Math.hypot(a.x - building.x, a.y - building.y) <= 12) {
+            if (a.needs) {
+              a.needs.rest = Math.min(100, (a.needs.rest ?? 60) + restBoost);
+              a.needs.social = Math.min(100, (a.needs.social ?? 60) + socialBoost);
+            }
+          }
+        }
+      }
+
+      // 5. Apothecary & Clinic treats injured soldiers & ill/irradiated citizens (every 30 ticks)
+      if (building.buildingType === "apothecary" && tick % 30 === 0 && building.settlementId != null) {
+        const healAmt = lvl >= 3 ? 18 : lvl === 2 ? 12 : 7;
+        for (const a of this.agents) {
+          if (!a || !a.alive || a.settlementId !== building.settlementId) continue;
+          if ((a.health ?? 100) >= 100 && !a.wounded) continue;
+          if (Math.hypot(a.x - building.x, a.y - building.y) <= 20) {
+            a.health = Math.min(100, (a.health ?? 100) + healAmt);
+            if (a.needs) a.needs.health = a.health;
+            if (a.combat) a.combat.health = a.health;
+            if (a.wounded && a.health >= 65) {
+              a.wounded = false;
+            }
+          }
+        }
+      }
+
+      // 6. Treasury & Bank yields civic commerce dividends (every 90 ticks)
+      if (building.buildingType === "bank" && tick % 90 === 0 && settlement && !settlement.ruined) {
+        const div = lvl >= 3 ? 5 : lvl === 2 ? 3 : 2;
+        const keys = ["food", "wood", "ore"];
+        const resKey = keys[(Math.floor(tick / 90) + (building.id || 0)) % keys.length];
+        settlement.stockpile = settlement.stockpile || { food: 0, wood: 0, ore: 0 };
+        settlement.stockpile[resKey] = (settlement.stockpile[resKey] || 0) + div;
       }
     }
   }
@@ -2417,6 +2592,194 @@ export class Simulation {
   }
 
   /**
+   * Compute aggregate count, highest level, and combined level-scaled power
+   * for completed, non-ruined buildings of `buildingType` in a settlement.
+   */
+  getSettlementBuildingBonus(settlementId, buildingType) {
+    let count = 0;
+    let maxLevel = 0;
+    let totalLevels = 0;
+    let power = 0;
+    if (settlementId == null || !Array.isArray(this.buildings)) {
+      return { count, maxLevel, totalLevels, power };
+    }
+    for (const b of this.buildings) {
+      if (!b || b.isRuined || !b.complete) continue;
+      if (b.settlementId !== settlementId || b.buildingType !== buildingType) continue;
+      const lvl = b.level || 1;
+      count++;
+      if (lvl > maxLevel) maxLevel = lvl;
+      totalLevels += lvl;
+      power += typeof b.getLevelMultiplier === "function"
+        ? b.getLevelMultiplier()
+        : (1 + Math.max(0, lvl - 1) * 0.45);
+    }
+    return { count, maxLevel, totalLevels, power };
+  }
+
+  /**
+   * Inspect upgrade eligibility, Era lock, resource costs & next-tier metadata for a Building.
+   */
+  getUpgradeRequirements(building) {
+    if (!building || building.isRuined) {
+      return { ok: false, eraMet: false, affordable: false, reason: "Building is ruined" };
+    }
+    if (!building.complete) {
+      return { ok: false, eraMet: false, affordable: false, reason: "Under construction" };
+    }
+    const meta = BUILDING_METADATA[building.buildingType];
+    const maxLevel = building.maxLevel || meta?.maxLevel || 3;
+    const currentLevel = building.level || 1;
+    if (currentLevel >= maxLevel) {
+      return { ok: false, eraMet: false, affordable: false, maxLevel, currentLevel, reason: "Max tier reached" };
+    }
+    const nextLevel = currentLevel + 1;
+    const requiredEra = meta?.upgradeEras?.[nextLevel] || (nextLevel === 2 ? 2 : 4);
+    const settlement = building.settlementId != null ? this.settlementSystem?.settlements?.get(building.settlementId) : null;
+    const ageId = building.settlementId != null
+      ? (this.civilizationAgeSystem?.getSettlementAge?.(building.settlementId)?.ageId || 1)
+      : 7;
+    const costs = meta?.upgradeCosts?.[nextLevel] || { wood: 18 * currentLevel, ore: 8 * currentLevel };
+    const stock = settlement?.stockpile || {};
+    const woodAvail = (stock.wood || 0) + (stock.plank || 0);
+    const oreAvail = (stock.ore || 0) + (stock.iron_ingot || 0);
+    const eraMet = ageId >= requiredEra;
+    const affordable = !settlement || (woodAvail >= (costs.wood || 0) && oreAvail >= (costs.ore || 0));
+    return {
+      ok: eraMet && affordable,
+      eraMet,
+      affordable,
+      currentLevel,
+      nextLevel,
+      maxLevel,
+      requiredEra,
+      currentEra: ageId,
+      costs,
+      nextName: meta?.levelNames?.[nextLevel - 1] || `Level ${nextLevel}`,
+      nextBonus: meta?.levelBonuses?.[nextLevel - 1] || "",
+      reason: !eraMet
+        ? `Requires Era ${requiredEra}`
+        : (!affordable ? `Need ${costs.wood || 0} Wood & ${costs.ore || 0} Ore` : null),
+    };
+  }
+
+  _deductUpgradeCost(stockpile, primaryKey, fallbackKey, amount) {
+    if (!stockpile || amount <= 0) return;
+    let remaining = amount;
+    const primaryHave = stockpile[primaryKey] || 0;
+    const takePrimary = Math.min(primaryHave, remaining);
+    stockpile[primaryKey] = primaryHave - takePrimary;
+    remaining -= takePrimary;
+    if (remaining > 0 && fallbackKey) {
+      const fbHave = stockpile[fallbackKey] || 0;
+      const takeFb = Math.min(fbHave, remaining);
+      stockpile[fallbackKey] = fbHave - takeFb;
+    }
+  }
+
+  /**
+   * Upgrade an existing completed building from Lv 1->2 or Lv 2->3.
+   */
+  upgradeBuilding(buildingId, { byPlayer = false, tick = this.clock?.tick ?? 0 } = {}) {
+    const building = Array.isArray(this.buildings) ? this.buildings.find(b => b && b.id === buildingId) : null;
+    if (!building) return { ok: false, reason: "Building not found" };
+    const req = this.getUpgradeRequirements(building);
+    if (!req.eraMet) return { ok: false, reason: req.reason || "Era requirement not met" };
+    if (!byPlayer && !req.affordable) return { ok: false, reason: req.reason || "Insufficient stockpile" };
+
+    const settlement = building.settlementId != null ? this.settlementSystem?.settlements?.get(building.settlementId) : null;
+    if (settlement?.stockpile) {
+      this._deductUpgradeCost(settlement.stockpile, "wood", "plank", req.costs?.wood || 0);
+      this._deductUpgradeCost(settlement.stockpile, "ore", "iron_ingot", req.costs?.ore || 0);
+    }
+
+    const upgraded = typeof building.applyUpgrade === "function" ? building.applyUpgrade(tick) : false;
+    if (!upgraded) return { ok: false, reason: "Upgrade failed" };
+
+    const meta = BUILDING_METADATA[building.buildingType];
+    const levelTitle = meta?.levelNames?.[building.level - 1] || `${meta?.name || building.buildingType} Lv ${building.level}`;
+    this.eventBus.emit("BUILDING_UPGRADED", {
+      buildingId: building.id,
+      buildingType: building.buildingType,
+      level: building.level,
+      levelTitle,
+      settlementId: building.settlementId,
+      settlementName: settlement?.name || "Realm",
+      x: building.x,
+      y: building.y,
+      byPlayer,
+    });
+    if (this.chronicleSystem?.add && building.level >= 2) {
+      this.chronicleSystem.add("construction", `${meta?.icon || "🏛️"} ${settlement?.name || "A town"} upgraded ${levelTitle} (Lv ${building.level})!`, {
+        icon: meta?.icon || "🏛️",
+        x: building.x,
+        y: building.y,
+      });
+    }
+    return { ok: true, building, level: building.level, levelTitle };
+  }
+
+  /**
+   * Commission an Era-unlocked civic building inside a settlement using deterministic clear-tile search.
+   */
+  commissionSettlementBuilding(settlementId, buildingType, { byPlayer = true } = {}) {
+    const settlement = this.settlementSystem?.settlements?.get(settlementId);
+    if (!settlement || settlement.ruined || !settlement.center) {
+      return { ok: false, reason: "Settlement not found" };
+    }
+    const meta = BUILDING_METADATA[buildingType];
+    if (!meta) return { ok: false, reason: "Unknown building type" };
+    const ageId = this.civilizationAgeSystem?.getSettlementAge?.(settlementId)?.ageId || 1;
+    if (ageId < meta.minEra) {
+      return { ok: false, reason: `${meta.name} unlocks in Era ${meta.minEra}` };
+    }
+
+    const W = this.world.width || 128;
+    const H = this.world.height || 128;
+    let chosenX = null;
+    let chosenY = null;
+    for (let r = 2; r <= 12 && chosenX === null; r++) {
+      const steps = Math.max(12, r * 8);
+      for (let s = 0; s < steps; s++) {
+        const ang = (s / steps) * Math.PI * 2;
+        const bx = Math.floor(settlement.center.x + Math.cos(ang) * r);
+        const by = Math.floor(settlement.center.y + Math.sin(ang) * r);
+        if (bx < 4 || by < 4 || bx >= W - 4 || by >= H - 4) continue;
+        if (!this.world.isWalkable(bx, by)) continue;
+        if (this.fortificationSystem?.segments?.has(`${bx},${by}`)) continue;
+        const nearBld = this.buildings.some(b => b && !b.isRuined && Math.hypot(b.x - bx, b.y - by) < 1.6);
+        if (nearBld) continue;
+        chosenX = bx;
+        chosenY = by;
+        break;
+      }
+    }
+
+    if (chosenX === null) {
+      return { ok: false, reason: "No clear buildable ground nearby" };
+    }
+
+    const building = new Building(chosenX, chosenY, buildingType, this.idGen, settlement.id, settlement.factionId ?? null);
+    building.constructionProgress = 0;
+    building.complete = false;
+    this.buildings.push(building);
+    this.world.addToSpatialIndex(chosenX, chosenY, building);
+    this.world.entityRegistry?.set(building.id, building);
+    this._occStamp = -1;
+    if (!settlement.buildings) settlement.buildings = [];
+    settlement.buildings.push(building);
+
+    this.eventBus.emit("BLUEPRINT_PLACED", {
+      type: buildingType,
+      settlementName: settlement.name,
+      x: chosenX,
+      y: chosenY,
+      byPlayer,
+    });
+    return { ok: true, building, meta };
+  }
+
+  /**
    * Detonate a tactical or strategic nuclear weapon at (x, y).
    * Pure deterministic execution (no Math.random). Stamps craters, fallout, fires,
    * ruins structures, kills/irradiates agents, records skull monuments, and triggers diplomacy outrage.
@@ -2466,14 +2829,20 @@ export class Simulation {
         if (!b || b.isRuined) continue;
         const d = Math.hypot(b.x - cx, b.y - cy);
         if (d <= buildingRadius) {
-          const dmg = d <= coreRuinRadius ? (b.maxHealth || 200) : Math.round((b.maxHealth || 200) * 0.7);
-          b.health = Math.max(0, (b.health ?? 100) - dmg);
-          if (b.health <= 0 || d <= coreRuinRadius) {
-            b.health = 0;
-            b.isRuined = true;
-            b.ruinedAtTick = tick;
-            buildingsRuined++;
-            this.eventBus.emit("building_destroyed", { building: b, cause: "nuclear_strike" });
+          const isMonument = Boolean(b.isHeritage || (typeof b.isMonument === 'function' && b.isMonument()));
+          if (isMonument && d > coreRuinRadius * 0.65 && typeof b.applyDamage === 'function') {
+            // Monumental heritage structures survive outside immediate ground-zero vaporization
+            b.applyDamage(Math.round((b.maxHealth || 500) * 0.72), { cause: 'nuclear_outer', tick, allowDestruction: false });
+          } else {
+            const dmg = d <= coreRuinRadius ? (b.maxHealth || 200) : Math.round((b.maxHealth || 200) * 0.7);
+            b.health = Math.max(0, (b.health ?? 100) - dmg);
+            if (b.health <= 0 || d <= coreRuinRadius) {
+              b.health = 0;
+              b.isRuined = true;
+              b.ruinedAtTick = tick;
+              buildingsRuined++;
+              this.eventBus.emit("building_destroyed", { building: b, cause: "nuclear_strike" });
+            }
           }
         }
       }
@@ -2895,23 +3264,44 @@ export class Simulation {
       }
       s.population = s.agentIds?.size || 0;
 
-      // Seed modern civic, industrial & nuclear complexes
-      // Era 7 superpowers begin with Factory, Research Lab, Nuclear Power Plant, and Missile Silo;
-      // Era 6 powers begin with Factory & civic core and construct Atomic infrastructure.
+      // Seed modern civic, industrial & nuclear complexes PLUS surviving ancient Era 1-4 Heritage Landmarks
+      // showing monumental architecture enduring from early civilization right into the Modern Era.
+      const heritageOffsets = idx === 0
+        ? [
+            { dx: -5, dy: -4, type: 'monument_pyramid', builtInEra: 2, customName: 'Great Pyramidal Shrine', upgradeTo: 3 },
+            { dx: 6, dy: -1, type: 'monument_atomic_dome', builtInEra: 7, customName: 'Orbital & Atomic Complex', upgradeTo: 2 },
+          ]
+        : idx === 1
+        ? [
+            { dx: -5, dy: 4, type: 'monument_colosseum', builtInEra: 3, customName: 'Colosseum of Champions', upgradeTo: 3 },
+            { dx: 5, dy: 4, type: 'monument_atomic_dome', builtInEra: 7, customName: 'Orbital & Atomic Complex', upgradeTo: 1 },
+          ]
+        : [
+            { dx: -5, dy: -3, type: 'monument_cairn', builtInEra: 1, customName: 'Stonehenge Hearth Circle', upgradeTo: 3 },
+            { dx: 5, dy: -4, type: 'monument_citadel', builtInEra: 4, customName: 'Grand Imperial Citadel', upgradeTo: 2 },
+            { dx: 5, dy: 3, type: 'monument_monolith', builtInEra: 6, customName: 'Tactical Sky-Spire Monolith', upgradeTo: 1 },
+          ];
       const offsets = [
-        { dx: -2, dy: -2, type: 'workshop' },
-        { dx: 3, dy: -2, type: 'farm' },
-        { dx: -3, dy: 0, type: 'house' },
-        { dx: 3, dy: 1, type: 'house' },
-        { dx: 0, dy: -3, type: 'granary' },
-        { dx: 0, dy: 3, type: 'barracks' },
-        { dx: -2, dy: 2, type: 'factory' },
-        { dx: 2, dy: 3, type: 'market' },
+        { dx: -2, dy: -2, type: 'workshop', upgradeTo: idx < 2 ? 3 : 2 },
+        { dx: 3, dy: -2, type: 'farm', upgradeTo: 2 },
+        { dx: -3, dy: 0, type: 'house', upgradeTo: idx < 2 ? 3 : 2 },
+        { dx: 3, dy: 1, type: 'house', upgradeTo: 2 },
+        { dx: 0, dy: -3, type: 'granary', upgradeTo: 2 },
+        { dx: 0, dy: 3, type: 'barracks', upgradeTo: 2 },
+        { dx: -2, dy: 2, type: 'factory', upgradeTo: idx < 2 ? 2 : 1 },
+        { dx: 2, dy: 3, type: 'market', upgradeTo: 2 },
+        { dx: 5, dy: -2, type: 'windmill', upgradeTo: 2 },
+        { dx: -4, dy: 2, type: 'inn', upgradeTo: 2 },
+        { dx: 2, dy: -4, type: 'library', upgradeTo: idx < 2 ? 3 : 2 },
+        { dx: -2, dy: -4, type: 'apothecary', upgradeTo: 2 },
+        { dx: 4, dy: 0, type: 'bank', upgradeTo: 2 },
+        { dx: -4, dy: 4, type: 'radar_station', upgradeTo: 1 },
         ...(idx < 2 ? [
-          { dx: 3, dy: -4, type: 'research_lab' },
-          { dx: -4, dy: -2, type: 'nuclear_plant' },
-          { dx: 4, dy: 3, type: 'missile_silo' },
+          { dx: 3, dy: -4, type: 'research_lab', upgradeTo: 2 },
+          { dx: -4, dy: -2, type: 'nuclear_plant', upgradeTo: 1 },
+          { dx: 4, dy: 3, type: 'missile_silo', upgradeTo: 1 },
         ] : []),
+        ...heritageOffsets,
       ];
       for (const off of offsets) {
         const bx = cx + off.dx;
@@ -2923,11 +3313,21 @@ export class Simulation {
         b.complete = true;
         b.isComplete = true;
         b.constructionProgress = 100;
+        if (off.builtInEra != null) b.builtInEra = off.builtInEra;
+        if (off.customName) b.customName = off.customName;
+        if (off.upgradeTo && off.upgradeTo > 1) {
+          for (let lv = 1; lv < off.upgradeTo; lv++) {
+            b.applyUpgrade?.(0);
+          }
+        }
         this.buildings.push(b);
         this.world.addToSpatialIndex(bx, by, b);
         this.world.entityRegistry?.set(b.id, b);
         if (!s.buildings) s.buildings = [];
         s.buildings.push(b);
+        if (b.isHeritage || String(b.buildingType || '').startsWith('monument_')) {
+          this.civilizationAgeSystem?.registerHeritageMonument?.(s.id, b, b.builtInEra, null, 0);
+        }
       }
 
       // Rich industrial & military stockpiles

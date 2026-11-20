@@ -808,12 +808,12 @@ export class Agent {
       this.goals.push({ type: "pray", priority: 70 });
     }
     
-    // 5. Reproduction & Family Life (Adults in prime age, carrying-capacity tapered)
+    // 5. Reproduction & Family Life (Adults in prime age, carrying-capacity & housing scaled)
     const currentPop = simulation ? simulation.agents.length : 0;
     const popCap = simulation?.maxAgents ?? 360;
     const occupancy = currentPop / Math.max(1, popCap);
-    const minFoodWater = occupancy > 0.75 ? 74 : (occupancy > 0.5 ? 60 : 48);
-    const maxChildren = occupancy > 0.65 ? 2 : 3;
+    const minFoodWater = occupancy > 0.75 ? 74 : (occupancy > 0.5 ? 58 : 46);
+    const maxChildren = occupancy > 0.7 ? 2 : (occupancy > 0.45 ? 3 : 4);
     if (currentPop < popCap &&
         this.lifeStage === "adult" &&
         this.age >= 18 && this.age <= this.maxAge - 14 && 
@@ -928,9 +928,10 @@ export class Agent {
           }
         }
 
-        // Gravitational tether: return home if wandering far from town
-        if (distToCenter > 14) {
-          const homePull = Math.min(80, 52 + Math.floor(distToCenter - 14));
+        // Gravitational tether scales with the expanding city's urban footprint
+        const urbanSpan = Math.max(14, Math.min(28, Math.round((settlement.urbanRadius || 16) * 0.85)));
+        if (distToCenter > urbanSpan) {
+          const homePull = Math.min(80, 52 + Math.floor(distToCenter - urbanSpan));
           this.goals.push({ type: "return_to_settlement", priority: homePull, target: settlement.center });
         }
     }
@@ -942,7 +943,8 @@ export class Agent {
       const distToCenter = cachedDistToCenter >= 0
         ? cachedDistToCenter
         : Math.hypot(this.x - settlement.center.x, this.y - settlement.center.y);
-      if (distToCenter <= 18) {
+      const townLifeRadius = Math.max(18, Math.min(32, (settlement.urbanRadius || 18) + 2));
+      if (distToCenter <= townLifeRadius) {
           const t = tickOf(simulation);
           const isChild = this.lifeStage === "child";
           const isGuard = job === 'soldier' || job === 'guard';
@@ -2170,10 +2172,17 @@ export class Agent {
           this.needs.food = Math.max(0, this.needs.food - 7);
           this.needs.water = Math.max(0, this.needs.water - 7);
           this.children++;
-          this.reproduceCooldown = 340; // Balanced generational cooldown (~3.4 sim years)
+          const houseBonus = (this.settlementId && this.sim?.getSettlementBuildingBonus)
+            ? this.sim.getSettlementBuildingBonus(this.settlementId, 'house').count
+            : 0;
+          const townPop = this.settlementId
+            ? (this.sim?.settlementSystem?.settlements?.get(this.settlementId)?.population || 0)
+            : 0;
+          const cooldownTicks = (houseBonus * 3 > townPop) ? 270 : 340;
+          this.reproduceCooldown = cooldownTicks;
           
           mate.children++;
-          mate.reproduceCooldown = 340;
+          mate.reproduceCooldown = cooldownTicks;
           mate.needs.social = Math.min(100, mate.needs.social + 20);
           
           const babyX = Math.max(2, Math.min(world.width - 2, this.x + (this.rng.next() - 0.5) * 2));

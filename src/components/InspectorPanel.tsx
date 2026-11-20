@@ -1,5 +1,8 @@
 import React, { useState } from 'react';
 import { AgentDossier, AgentRelativeRef, InspectedEntityData } from '../types';
+import { BUILDING_METADATA } from '../core/constants.js';
+
+const BUILDING_META_MAP = BUILDING_METADATA as Record<string, any>;
 
 interface InspectorPanelProps {
   data: InspectedEntityData | null;
@@ -10,6 +13,8 @@ interface InspectorPanelProps {
   onSpawnCitizens?: (settlementId: number, count: number) => void;
   onAdvanceWonder?: (settlementId: number) => void;
   onFortifySettlement?: (settlementId: number) => void;
+  onUpgradeBuilding?: (buildingId: number) => void;
+  onCommissionBuilding?: (settlementId: number, buildingType: string) => void;
   onClose: () => void;
 }
 
@@ -24,6 +29,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onSpawnCitizens,
   onAdvanceWonder,
   onFortifySettlement,
+  onUpgradeBuilding,
+  onCommissionBuilding,
   onClose,
 }) => {
   const [agentTab, setAgentTab] = useState<AgentTab>('overview');
@@ -208,7 +215,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {data.kind === 'agent' && `${isAlive ? '👤' : '🕯️'} ${e.name}${e.epithet ? ` "${e.epithet}"` : ''}`}
           {data.kind === 'settlement' && `${e.tierIcon || '🏡'} ${e.name} (${e.ruined ? 'Collapsed Ruins' : (e.tier || 'Village')})`}
-          {data.kind === 'building' && (e.buildingType === 'dock' ? '⚓ Harbor Dock' : `🏛️ Building: ${e.buildingType || e.type}`)}
+          {data.kind === 'building' && (() => {
+            const bType = e.buildingType || e.type;
+            const bMeta = BUILDING_META_MAP[bType];
+            const lvl = e.level || 1;
+            const maxLvl = e.maxLevel || bMeta?.maxLevel || 3;
+            return `${bMeta?.icon || '🏛️'} ${bMeta?.name || bType} · Lv ${lvl}/${maxLvl}`;
+          })()}
           {data.kind === 'resource' &&
             `${e.resourceType === 'food' ? '🌾' : e.resourceType === 'wood' ? '🌲' : e.resourceType === 'ore' ? '⛏️' : '💧'} ${e.label || e.resourceType?.toUpperCase()}`}
         </span>
@@ -618,6 +631,25 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     </div>
                   )
                 )}
+                {Array.isArray(e.age.heritageMonuments) && e.age.heritageMonuments.length > 0 && (
+                  <div style={{ marginTop: '6px', paddingTop: '5px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#fde047', marginBottom: '3px' }}>
+                      🏛️ Grand Landmarks & Heritage ({e.age.heritageMonuments.filter((m: any) => m.intact).length}/{e.age.heritageMonuments.length})
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '10px', color: '#cbd5e1', fontVariantNumeric: 'tabular-nums' }}>
+                      {e.age.heritageMonuments.map((m: any) => (
+                        <div key={m.buildingId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span>
+                            {m.icon} {m.name} <span style={{ color: '#94a3b8' }}>(Era {m.eraId})</span>
+                          </span>
+                          <span style={{ color: m.intact ? (m.survivedToModern ? '#fde047' : '#86efac') : '#f87171', fontWeight: 600 }}>
+                            {m.intact ? (m.survivedToModern ? 'Ancient Heritage' : 'Intact') : 'Ruined'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -858,6 +890,68 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               </div>
             )}
 
+            {onCommissionBuilding && !e.ruined && (() => {
+              const curEra = e.age?.id || 1;
+              const catalogKeys = [
+                'granary', 'windmill', 'inn', 'library',
+                'apothecary', 'castle', 'bank', 'factory',
+                'research_lab', 'radar_station', 'nuclear_plant', 'missile_silo'
+              ];
+              return (
+                <div
+                  style={{
+                    marginBottom: '8px',
+                    background: 'rgba(30, 41, 59, 0.5)',
+                    border: '1px solid rgba(56, 189, 248, 0.2)',
+                    borderRadius: '6px',
+                    padding: '7px 8px',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 700, color: '#38bdf8', marginBottom: '5px' }}>
+                    <span>🏗️ Commission Era Structures</span>
+                    <span style={{ fontSize: '10px', color: '#94a3b8' }}>Era {curEra}</span>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
+                    {catalogKeys.map((bKey) => {
+                      const m = BUILDING_META_MAP[bKey];
+                      if (!m) return null;
+                      const unlocked = curEra >= (m.minEra || 1);
+                      return (
+                        <button
+                          key={bKey}
+                          disabled={!unlocked}
+                          title={unlocked ? `${m.name}: ${m.roleSummary}` : `Unlocks in Era ${m.minEra}`}
+                          onClick={() => unlocked && onCommissionBuilding(e.id, bKey)}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '4px 6px',
+                            borderRadius: '4px',
+                            border: `1px solid ${unlocked ? 'rgba(56, 189, 248, 0.3)' : 'rgba(148, 163, 184, 0.14)'}`,
+                            background: unlocked ? 'rgba(15, 23, 42, 0.85)' : 'rgba(15, 23, 42, 0.4)',
+                            color: unlocked ? '#e2e8f0' : '#64748b',
+                            fontSize: '10px',
+                            fontWeight: 600,
+                            cursor: unlocked ? 'pointer' : 'not-allowed',
+                            textAlign: 'left',
+                          }}
+                        >
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {m.icon} {m.name}
+                          </span>
+                          <span style={{ fontSize: '9px', color: unlocked ? '#38bdf8' : '#64748b', flexShrink: 0 }}>
+                            {unlocked ? `E${m.minEra}` : `🔒E${m.minEra}`}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
             <div
               style={{
                 marginTop: '8px',
@@ -874,6 +968,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               </div>
               <div>
                 🏛️ Buildings: <b>{e.buildings ? e.buildings.length : 0}</b> structures
+                {e.urbanRadius ? ` · 🌆 Radius ${e.urbanRadius}t` : ''}
                 {(() => {
                   const docks = e.docksCount ?? (Array.isArray(e.buildings) ? e.buildings.filter((b: any) => (b.buildingType || b.type) === 'dock' && !b.isRuined).length : 0);
                   const fleet = e.vesselsCount ?? 0;
@@ -888,60 +983,148 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           </div>
         )}
 
-        {data.kind === 'building' && (
-          <div>
-            <div style={{ marginBottom: '8px' }}>
-              <span
-                style={{
-                  display: 'inline-block',
-                  padding: '2px 6px',
-                  borderRadius: '4px',
-                  fontSize: '10px',
-                  fontWeight: 600,
-                  textTransform: 'uppercase',
-                  background: e.complete ? '#15803d' : '#0369a1',
-                  color: e.complete ? '#bbf7d0' : '#bae6fd',
-                }}
-              >
-                {e.complete ? 'COMPLETED' : 'UNDER CONSTRUCTION'}
-              </span>
+        {data.kind === 'building' && (() => {
+          const bType = e.buildingType || e.type;
+          const bMeta = BUILDING_META_MAP[bType];
+          const lvl = e.level || 1;
+          const maxLvl = e.maxLevel || bMeta?.maxLevel || 3;
+          const tierName = bMeta?.levelNames?.[lvl - 1] || bMeta?.name || bType;
+          const currentBonus = bMeta?.levelBonuses?.[lvl - 1];
+          const upgradeReq = data.upgradeReq || null;
+          const hp = Math.round(e.health ?? 100);
+          const maxHp = Math.round(e.maxHealth ?? 100);
+
+          return (
+            <div>
+              <div style={{ marginBottom: '8px', display: 'flex', flexWrap: 'wrap', gap: '5px', alignItems: 'center' }}>
+                <span
+                  style={{
+                    display: 'inline-block',
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    fontSize: '10px',
+                    fontWeight: 600,
+                    textTransform: 'uppercase',
+                    background: e.isRuined ? '#7f1d1d' : e.complete ? '#15803d' : '#0369a1',
+                    color: e.isRuined ? '#fecaca' : e.complete ? '#bbf7d0' : '#bae6fd',
+                  }}
+                >
+                  {e.isRuined ? 'RUINED' : e.complete ? 'COMPLETED' : 'UNDER CONSTRUCTION'}
+                </span>
+                <span
+                  style={{
+                    display: 'inline-block',
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    fontSize: '10px',
+                    fontWeight: 700,
+                    background: lvl >= 3 ? 'rgba(251, 191, 36, 0.2)' : lvl === 2 ? 'rgba(56, 189, 248, 0.2)' : 'rgba(100, 116, 139, 0.25)',
+                    color: lvl >= 3 ? '#fbbf24' : lvl === 2 ? '#38bdf8' : '#cbd5e1',
+                    border: `1px solid ${lvl >= 3 ? 'rgba(251, 191, 36, 0.45)' : lvl === 2 ? 'rgba(56, 189, 248, 0.4)' : 'rgba(148, 163, 184, 0.3)'}`,
+                  }}
+                >
+                  Lv {lvl}/{maxLvl} · {tierName}
+                </span>
+                {bMeta?.minEra && (
+                  <span style={{ fontSize: '10px', color: '#94a3b8' }}>Era {bMeta.minEra}+</span>
+                )}
+                {(e.isHeritage || bMeta?.isMonument || String(bType || '').startsWith('monument_')) && (
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      background: 'rgba(234, 179, 8, 0.16)',
+                      color: '#fde047',
+                      border: '1px solid rgba(234, 179, 8, 0.4)',
+                    }}
+                  >
+                    🏛️ Heritage · Built Era {e.builtInEra || bMeta?.minEra || 1}
+                  </span>
+                )}
+              </div>
+
+              {!e.complete && renderNeedBar('Construction', e.constructionProgress || 0)}
+              {renderNeedBar(`Integrity (${hp} / ${maxHp} HP)`, (hp / Math.max(1, maxHp)) * 100)}
+
+              <div style={{ marginTop: '8px', fontSize: '11px', color: '#cbd5e1', lineHeight: 1.55, fontVariantNumeric: 'tabular-nums' }}>
+                <div>
+                  📍 Position: ({Math.floor(e.x)}, {Math.floor(e.y)})
+                  {e.settlementName ? ` · ${e.settlementName}` : ''}
+                  {e.capacity > 0 ? ` · 📦 Storage ${e.capacity}` : ''}
+                </div>
+                {bMeta?.roleSummary && (
+                  <div style={{ color: '#e2e8f0', marginTop: '4px' }}>
+                    {bMeta.icon} <b>Society Role:</b> {bMeta.roleSummary}
+                  </div>
+                )}
+                {currentBonus && (
+                  <div style={{ color: '#86efac', marginTop: '3px', fontSize: '10px' }}>
+                    ✦ Active Lv {lvl} Effect: {currentBonus}
+                  </div>
+                )}
+              </div>
+
+              {e.complete && !e.isRuined && lvl < maxLvl && upgradeReq && (
+                <div
+                  style={{
+                    marginTop: '10px',
+                    padding: '8px',
+                    borderRadius: '6px',
+                    background: 'rgba(30, 41, 59, 0.72)',
+                    border: '1px solid rgba(56, 189, 248, 0.25)',
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 700, color: '#38bdf8' }}>
+                    <span>⬆ Next: Lv {upgradeReq.nextLevel} ({upgradeReq.nextName})</span>
+                    <span style={{ fontSize: '10px', color: upgradeReq.eraMet ? '#86efac' : '#f59e0b' }}>
+                      Era {upgradeReq.requiredEra}+
+                    </span>
+                  </div>
+                  {upgradeReq.nextBonus && (
+                    <div style={{ fontSize: '10px', color: '#cbd5e1', marginTop: '3px' }}>
+                      {upgradeReq.nextBonus}
+                    </div>
+                  )}
+                  <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '4px' }}>
+                    Cost: 🌲 {upgradeReq.costs?.wood || 0} Wood · ⛏️ {upgradeReq.costs?.ore || 0} Ore
+                  </div>
+                  {onUpgradeBuilding && (
+                    <button
+                      disabled={!upgradeReq.eraMet}
+                      onClick={() => onUpgradeBuilding(e.id)}
+                      style={{
+                        marginTop: '6px',
+                        width: '100%',
+                        padding: '5px 8px',
+                        borderRadius: '5px',
+                        border: 'none',
+                        background: upgradeReq.eraMet ? '#0284c7' : '#334155',
+                        color: upgradeReq.eraMet ? '#ffffff' : '#94a3b8',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        cursor: upgradeReq.eraMet ? 'pointer' : 'not-allowed',
+                      }}
+                    >
+                      {upgradeReq.eraMet
+                        ? `⬆ Upgrade to Lv ${upgradeReq.nextLevel}`
+                        : `🔒 Requires Era ${upgradeReq.requiredEra} (Currently Era ${upgradeReq.currentEra})`}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {e.complete && !e.isRuined && lvl >= maxLvl && (
+                <div style={{ marginTop: '8px', fontSize: '10px', color: '#fbbf24', fontWeight: 700 }}>
+                  ★ Maximum Architectural Tier Reached (Lv {lvl}/{maxLvl})
+                </div>
+              )}
             </div>
-            {renderNeedBar('Construction', e.constructionProgress || (e.complete ? 100 : 0))}
-            <div style={{ marginTop: '8px', fontSize: '11px', color: '#cbd5e1', fontVariantNumeric: 'tabular-nums' }}>
-              <div>📍 Position: ({e.x}, {e.y})</div>
-              {(e.buildingType === 'tower' || e.buildingType === 'castle') && e.complete && !e.isRuined && (
-                <div style={{ color: '#fbbf24', marginTop: '3px' }}>
-                  🏹 Active Garrison Defense: fires at hostile invaders within {e.buildingType === 'castle' ? '11' : '8.5'} tiles
-                </div>
-              )}
-              {e.buildingType === 'factory' && e.complete && !e.isRuined && (
-                <div style={{ color: '#93c5fd', marginTop: '3px' }}>
-                  🏭 Heavy Industry: supports mechanized warfare &amp; nuclear centrifuge fabrication
-                </div>
-              )}
-              {e.buildingType === 'research_lab' && e.complete && !e.isRuined && (
-                <div style={{ color: '#67e8f9', marginTop: '3px' }}>
-                  🔬 Research Complex: accelerates Era advancement &amp; atomic enrichment speed
-                </div>
-              )}
-              {e.buildingType === 'nuclear_plant' && e.complete && !e.isRuined && (
-                <div style={{ color: '#bef264', marginTop: '3px' }}>
-                  ☢️ Nuclear Power Plant: supplies fission enrichment required for warhead assembly
-                </div>
-              )}
-              {e.buildingType === 'missile_silo' && e.complete && !e.isRuined && (
-                <div style={{ color: '#fca5a5', marginTop: '3px' }}>
-                  🚀 Strategic Missile Silo: expands warhead capacity (+2) &amp; enables ballistic launch
-                </div>
-              )}
-              {e.buildingType === 'granary' && e.complete && !e.isRuined && (
-                <div style={{ color: '#fde047', marginTop: '3px' }}>
-                  🌾 Communal Granary: safeguards harvest reserves &amp; buffers winter famine
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+          );
+        })()}
 
         {data.kind === 'resource' && (
           <div>

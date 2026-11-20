@@ -17,6 +17,9 @@ class SoundManager {
 
   private initCtx() {
     if (typeof window === 'undefined') return null;
+    if (typeof document !== 'undefined' && document.body?.dataset?.screen === 'title') {
+      return null;
+    }
     if (!this.ctx) {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       if (AudioContextClass) {

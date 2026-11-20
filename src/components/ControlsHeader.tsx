@@ -29,6 +29,7 @@ interface ControlsHeaderProps {
   treatiesCount?: number;
   scenario?: 'modern_nuclear' | 'warring';
   onChangeScenario?: (next: 'modern_nuclear' | 'warring') => void;
+  onReturnToMenu?: () => void;
 }
 
 export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
@@ -60,17 +61,19 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
   treatiesCount = 0,
   scenario = 'warring',
   onChangeScenario,
+  onReturnToMenu,
 }) => {
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const buttonStyle: React.CSSProperties = {
-    padding: '6px 12px',
+    padding: '5px 10px',
     background: '#1e293b',
     border: '1px solid #334155',
     borderRadius: '6px',
     color: '#e2e8f0',
     cursor: 'pointer',
-    fontSize: '12px',
+    fontSize: '11.5px',
     fontWeight: 500,
+    minHeight: '30px',
     transition: 'all 0.15s ease',
     display: 'inline-flex',
     alignItems: 'center',
@@ -85,14 +88,16 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
         background: 'rgba(15, 23, 42, 0.88)',
         backdropFilter: 'blur(8px)',
         border: '1px solid rgba(255, 255, 255, 0.12)',
-        padding: '8px 12px',
+        padding: '7px 10px',
         borderRadius: '12px',
         display: 'flex',
         alignItems: 'center',
-        gap: '8px',
+        justifyContent: 'flex-end',
+        gap: '6px',
         pointerEvents: 'auto',
         boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
         flexWrap: 'wrap',
+        maxWidth: '100%',
       }}
     >
       <button
@@ -272,6 +277,20 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
       <button style={buttonStyle} onClick={onToggleHelp} title="Divine Instructions Guide">
         ❓ Guide
       </button>
+
+      {onReturnToMenu && (
+        <button
+          style={{
+            ...buttonStyle,
+            borderColor: 'rgba(148, 163, 184, 0.35)',
+            color: '#cbd5e1',
+          }}
+          onClick={onReturnToMenu}
+          title="Return to Title Screen (New Game / Continue)"
+        >
+          🏠 Menu
+        </button>
+      )}
     </div>
   );
 };

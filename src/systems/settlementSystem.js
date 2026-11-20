@@ -36,12 +36,19 @@ export class SettlementSystem {
     this.nextSettlementId = 1;
   }
 
-  // Get settlement tier based on population
-  getTierInfo(pop) {
-    if (pop >= 40) return { tier: "Metropolis", icon: "🌆", radius: 30, bonus: "Grand Metropolis" };
-    if (pop >= 25) return { tier: "City", icon: "🏰", radius: 25, bonus: "High Bastion" };
-    if (pop >= 15) return { tier: "Town", icon: "🏛️", radius: 20, bonus: "Civic Order" };
-    if (pop >= 8)  return { tier: "Village", icon: "🏡", radius: 16, bonus: "Craft Guilds" };
+  // Get settlement tier based on population & urban footprint
+  getTierInfo(pop, buildingsCount = 0) {
+    if (pop >= 52 || (pop >= 36 && buildingsCount >= 26)) {
+      return { tier: "Grand Metropolis", icon: "🏙️", radius: 36, bonus: "Grand Metropolis" };
+    }
+    if (pop >= 36 || (pop >= 25 && buildingsCount >= 18)) {
+      return { tier: "Metropolis", icon: "🌆", radius: 30, bonus: "Metropolis" };
+    }
+    if (pop >= 22 || (pop >= 16 && buildingsCount >= 13)) {
+      return { tier: "City", icon: "🏰", radius: 25, bonus: "High Bastion" };
+    }
+    if (pop >= 13) return { tier: "Town", icon: "🏛️", radius: 20, bonus: "Civic Order" };
+    if (pop >= 7)  return { tier: "Village", icon: "🏡", radius: 16, bonus: "Craft Guilds" };
     if (pop >= 4)  return { tier: "Hamlet", icon: "🛖", radius: 12, bonus: "Cooperative" };
     return { tier: "Camp", icon: "🏕️", radius: 9, bonus: "Pioneers" };
   }
@@ -282,10 +289,14 @@ export class SettlementSystem {
       settlement.population = currentPop;
       settlement.peakPopulation = Math.max(settlement.peakPopulation || 0, currentPop);
 
-      // Update tier & title
-      const tierInfo = this.getTierInfo(currentPop);
+      // Update tier, urban footprint & title
+      const buildingsCount = Array.isArray(settlement.buildings)
+        ? settlement.buildings.filter(b => b && !b.isRuined).length
+        : 0;
+      const tierInfo = this.getTierInfo(currentPop, buildingsCount);
       settlement.tier = tierInfo.tier;
       settlement.tierIcon = tierInfo.icon;
+      settlement.urbanRadius = tierInfo.radius;
       settlement.leadershipTitle = currentPop >= 15 ? "Mayor" : currentPop >= 8 ? "Chieftain" : "Elder";
 
       // Claim dynamic territory
@@ -425,6 +436,7 @@ export class SettlementSystem {
     this.sim?.civilizationAgeSystem?.nuclearPrograms?.delete(settlementId);
     this.sim?.civilizationAgeSystem?.wonders?.delete(settlementId);
     this.sim?.civilizationAgeSystem?.completedWonders?.delete(settlementId);
+    this.sim?.civilizationAgeSystem?.heritageMonuments?.delete(settlementId);
     this.sim?.espionageSystem?.cleanupSettlement?.(settlementId);
     this.sim?.fortificationSystem?.cleanupSettlement?.(settlementId);
 
@@ -574,14 +586,39 @@ export class SettlementSystem {
       this.territories.delete(secondary.id);
     }
 
-    // Advance civilization age to highest partner epoch
+    // Advance civilization age to highest partner epoch & merge heritage landmarks
     const ageSys = this.sim?.civilizationAgeSystem;
     if (ageSys?.settlementAges) {
       const a1 = ageSys.settlementAges.get(primary.id);
       const a2 = ageSys.settlementAges.get(secondary.id);
       if (a1 && a2 && (a2.ageId || 1) > (a1.ageId || 1)) {
         a1.ageId = a2.ageId;
+        a1.ageName = a2.ageName;
+        a1.icon = a2.icon;
+        a1.color = a2.color;
         a1.unlockedAt = a2.unlockedAt;
+      }
+      if (ageSys.heritageMonuments) {
+        const h1 = ageSys.heritageMonuments.get(primary.id) || [];
+        const h2 = ageSys.heritageMonuments.get(secondary.id) || [];
+        const seen = new Set(h1.map(m => m.buildingId));
+        for (const m of h2) {
+          if (m && !seen.has(m.buildingId)) {
+            h1.push({ ...m });
+            seen.add(m.buildingId);
+          }
+        }
+        ageSys.heritageMonuments.set(primary.id, h1);
+        ageSys.heritageMonuments.delete(secondary.id);
+      }
+      if (ageSys.completedWonders) {
+        const w1 = ageSys.completedWonders.get(primary.id) || [];
+        const w2 = ageSys.completedWonders.get(secondary.id) || [];
+        for (const wk of w2) {
+          if (!w1.includes(wk)) w1.push(wk);
+        }
+        ageSys.completedWonders.set(primary.id, w1);
+        ageSys.completedWonders.delete(secondary.id);
       }
       ageSys.settlementAges.delete(secondary.id);
       ageSys.nuclearPrograms?.delete(secondary.id);

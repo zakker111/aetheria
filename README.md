@@ -1,6 +1,6 @@
 # 🌍 Aetheria — 2.5D Emergent Civilization & History Simulator
 
-[![Build & Tests](https://img.shields.io/badge/tests-20%2F20%20passing-brightgreen)](#-automated-test-suites)
+[![Build & Tests](https://img.shields.io/badge/tests-22%2F22%20passing-brightgreen)](#-automated-test-suites)
 [![React 19](https://img.shields.io/badge/React-19.3-blue)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7.x-blue)](https://www.typescriptlang.org/)
 [![Vite](https://img.shields.io/badge/Vite-8.x-purple)](https://vitejs.dev/)
@@ -37,10 +37,11 @@
 - **Succession Crises & Civil Wars**: Disputed royal claims, weak legitimacy, and sudden monarch deaths escalate tension into civil wars with loyalist and rebel warbands vying to defend or usurp the throne.
 - **Hall of Heroes & Legendary Relics**: Veteran champions forge named relic weapons and are memorialized in the Hall of Heroes upon falling in battle.
 - **Royal Marriages & Casus Belli**: Dynastic weddings forge treaties while territorial friction and grudges ignite justified wars.
-- **Combined-Arms Warfare, Nuclear Infrastructure & Last-Resort Escalation (Eras 1–7)**: Armies advance across 7 eras from spears & shields to muskets, cannons, rifles, **Battle Tanks**, **Strike Aircraft** with air overflight, and dual rocket artillery—while warhead enrichment requires operational **Factory + Nuclear Plant + Ore** (boosted by **Research Labs** & **Missile Silos**), and autonomous nuclear strikes fire only as an extreme last resort after conventional war and diplomatic ultimatums fail. The app starts in **Tribal Kingdoms** (`warring`) with a header switcher for **Modern & Nuclear**.
+- **Combined-Arms Warfare, Nuclear Infrastructure & Last-Resort Escalation (Eras 1–7)**: Armies advance across 7 eras from spears & shields to muskets, cannons, rifles, **Battle Tanks**, **Strike Aircraft** with air overflight, and dual rocket artillery—while warhead enrichment requires operational **Factory + Nuclear Plant + Ore** (boosted by **Research Labs** & **Missile Silos**), and autonomous nuclear strikes fire only as an extreme last resort after conventional war and diplomatic ultimatums fail. The frozen **Title & Start Screen** lets you launch **Tribal Kingdoms** (default Era 1 start), **Modern & Nuclear** (Era 7 sandbox), continue local saves, or import JSON snapshots.
 - **Deep Diplomacy & Grand Strategy**: Bilateral Relation Scores, Casus Belli grievances, Resource Trade & Non-Aggression Pacts, nuclear proliferation sanctions, coerced ultimatums, Tributary Vassalage (15% seasonal tribute), Defensive Alliances, and neutral third-party Peace Mediation.
-- **Lethal Sieges, City Mergers & Union Civil Wars**: Clashes and storming assaults generate real mortal casualties and named historic battles; close large peaceful cities can unite into a **Metropolis** (`🌆`), occasionally sparking dynastic union power struggles and civil wars.
-- **Cultural Wonders, Espionage Guilds & JSON Archives**: Multi-stage Wonders (`Great Maritime Lighthouse`, `Colosseum of Champions`, `Atomic Reactor Complex`), Merchant/Masons/Shadow guilds, covert sabotage (`granary`, `bridge`, `warhead`, `revolt`), Era 1–7 chronicle filtering, and downloadable JSON World & Chronicle export/import.
+- **Lethal Sieges, City Mergers & Union Civil Wars**: Clashes and storming assaults generate real mortal casualties and named historic battles; close large peaceful cities can unite into a **Metropolis** (`🌆`) and keep expanding outward across larger urban footprints (`Grand Metropolis`), occasionally sparking dynastic union power struggles and civil wars.
+- **Era 1–6 Upgradable Civic Buildings & Era 1–7 Heritage Landmarks**: Upgrade Farms, Windmills, Granaries, Inns, Libraries, Apothecaries, Castles, Banks, Factories, Research Labs, Air Defense Radars, Nuclear Plants, and Missile Silos through **Lv 1–3**, alongside distinct **Era 1–7 Grand Structures** (`Stonehenge Hearth Circle` through `Orbital & Atomic Complex`) built to endure wars, fires, and outer nuclear shockwaves into the Modern Era.
+- **Cultural Wonders, Espionage Guilds & JSON Archives**: Multi-stage Wonders, Merchant/Masons/Shadow guilds, covert sabotage (`granary`, `bridge`, `warhead`, `revolt`), Era 1–7 chronicle filtering, and downloadable JSON World & Chronicle export/import.
 - **City Walls, Active Watchtowers & Physical Siege Breaches**: Towns fortify with 4-connected octagonal walls (`Timber Palisade` → `Stone Curtain Wall` → `Reinforced Bastion Wall`), friendly/hostile gatehouses, arrow/musket/tracer-firing corner watchtowers, and physical wall breaching where besiegers blast open passable rubble gaps before storming the city.
 
 ### ⚓ Coastal, River & Bridge Engineering
@@ -113,10 +114,10 @@ Open your browser and navigate to `http://localhost:3000`.
 
 ## 🧪 Automated Test Suites
 
-Aetheria maintains 20 comprehensive automated test suites enforcing 100% save/load determinism, economic loops, living ecology, deeper structures, warfare rules, Nuclear Age deterrence, fortifications, maritime logistics, bridge engineering, espionage/wonders, carrying capacity, and high-population performance:
+Aetheria maintains 22 comprehensive automated test suites enforcing 100% save/load determinism, economic loops, living ecology, deeper structures, Era 1–6 upgradable buildings, Era 1–7 heritage landmarks, continuous city expansion, warfare rules, Nuclear Age deterrence, fortifications, maritime logistics, bridge engineering, espionage/wonders, carrying capacity, and high-population performance:
 
 ```bash
-# Run all 20 automated test suites
+# Run all 22 automated test suites
 npm test
 
 # Run code style and lint check
@@ -148,6 +149,8 @@ npm run build
 | **Modern & Nuclear Age Total Wars** | `tests/modern_nuclear_total_war.mjs` | `modern_nuclear` preset, Era 7 progression, dual rocket artillery, devastating Total Wars, MAD counter-strikes, and save/load parity |
 | **Citizen Spawning & Active Diplomacy** | `tests/spawning_and_diplomacy.mjs` | Wall-safe citizen spawning, pioneer colonization, cap expansion, alliance intervention, and causal diplomatic logging |
 | **Deep Structures, Ecology & Diplomacy** | `tests/deep_structures_ecology_diplomacy.mjs` | Tanks/aircraft air overflight, nuclear Factory+Plant+Silo gate, growing trees, finite mines, hunters, resource pacts, proliferation sanctions, mediation & vassalage |
+| **Era 1–6 Buildings & Upgradable Tiers** | `tests/era_buildings_upgrades.mjs` | Windmill, Inn, Library, Apothecary, Castle, Bank, Factory, Research Lab, Radar Station, Nuclear Plant, Lv 1–3 scaling, civic buffs, and save/load parity |
+| **Era 1–7 Landmarks & City Expansion** | `tests/city_expansion_era_landmarks.mjs` | Distinct Era 1–7 monuments, cross-era/disaster heritage survival, Modern & Nuclear ancient heritage seeding, outward urban sprawl, and determinism |
 
 ---
 
@@ -202,7 +205,7 @@ git push -u origin main
 │   │   ├── chronicleSystem.js  # Living historical chronicle and event logger
 │   │   └── religionSystem.js   # Beliefs, temples, missionaries, and inquisitions
 │   └── utils/             # Deterministic PRNG, math, and spatial hashing
-├── tests/                 # 20 automated regression & determinism test suites
+├── tests/                 # 22 automated regression & determinism test suites
 ├── index.html             # HTML5 entry point
 ├── package.json           # Scripts and dependencies
 └── vite.config.ts         # Vite bundler configuration (relative base for Pages)

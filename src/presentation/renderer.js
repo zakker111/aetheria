@@ -63,6 +63,7 @@ export class CanvasRenderer {
     this._simSpeed = 1;
     this._frameNow = Date.now();
     this._currentSimTick = 0;
+    this._isFrozen = false;
     
     this.setupInput();
     this.setupEventListeners();
@@ -72,7 +73,8 @@ export class CanvasRenderer {
     const clampedAlpha = tickAlpha < 0 ? 0 : tickAlpha > 1 ? 1 : tickAlpha;
     this._tickAlpha = clampedAlpha;
     if (speed > 0) this._lastActiveAlpha = clampedAlpha;
-    const dt = frameDtMs > 0 ? Math.min(100, frameDtMs) : 16.67;
+    this._isFrozen = frameDtMs <= 0 && (speed ?? 0) === 0;
+    const dt = this._isFrozen ? 0 : (frameDtMs > 0 ? Math.min(100, frameDtMs) : 16.67);
     this._frameDtMs = dt;
     this._frameDtSec = dt * 0.001;
     this._simSpeed = speed ?? 1;
@@ -610,7 +612,9 @@ export class CanvasRenderer {
    * Main Render Pipeline
    */
   render() {
-    this._frameNow = Date.now();
+    if (!this._isFrozen) {
+      this._frameNow = Date.now();
+    }
     this._currentSimTick = this.simulation?.clock?.tick ?? 0;
 
     // 0. Live Agent Follow + Smooth Camera Interpolation
@@ -1698,7 +1702,8 @@ export class CanvasRenderer {
     const ctx = this.ctx;
     const zoom = this.camera.zoom;
     const type = b.buildingType || b.type || "house";
-    const bs = Math.max(6, zoom * (type === "castle" ? 1.4 : type === "tower" ? 1.0 : 0.9));
+    const isMonument = Boolean(b.isHeritage || String(type).startsWith("monument_"));
+    const bs = Math.max(6, zoom * (isMonument ? 1.55 : type === "castle" ? 1.4 : type === "tower" ? 1.0 : 0.9));
     const now = this._frameNow;
 
     ctx.save();
@@ -2246,6 +2251,203 @@ export class CanvasRenderer {
       ctx.arc(screen.x + bs * 0.36, screen.y - padH * 0.35, Math.max(2, bs * 0.08), 0, Math.PI * 2);
       ctx.fill();
 
+    } else if (type === "windmill") {
+      // 2.5D Windmill Tower with Rotating Timber Sails
+      const millH = bs * 1.15;
+      ctx.fillStyle = "#e7e5e4";
+      ctx.beginPath();
+      ctx.moveTo(screen.x - bs * 0.34, screen.y);
+      ctx.lineTo(screen.x - bs * 0.22, screen.y - millH);
+      ctx.lineTo(screen.x + bs * 0.22, screen.y - millH);
+      ctx.lineTo(screen.x + bs * 0.34, screen.y);
+      ctx.closePath();
+      ctx.fill();
+
+      // Conical shingle cap
+      ctx.fillStyle = "#92400e";
+      ctx.beginPath();
+      ctx.moveTo(screen.x, screen.y - millH - bs * 0.34);
+      ctx.lineTo(screen.x - bs * 0.28, screen.y - millH);
+      ctx.lineTo(screen.x + bs * 0.28, screen.y - millH);
+      ctx.closePath();
+      ctx.fill();
+
+      // Rotating 4-blade windmill sails
+      const hubX = screen.x;
+      const hubY = screen.y - millH * 0.78;
+      const sailLen = bs * 0.72;
+      const rot = (now * 0.0022 + (b.id || 0)) % (Math.PI * 2);
+      ctx.strokeStyle = "#fef3c7";
+      ctx.lineWidth = Math.max(2, bs * 0.11);
+      for (let sIdx = 0; sIdx < 4; sIdx++) {
+        const ang = rot + (sIdx * Math.PI) / 2;
+        ctx.beginPath();
+        ctx.moveTo(hubX, hubY);
+        ctx.lineTo(hubX + Math.cos(ang) * sailLen, hubY + Math.sin(ang) * sailLen);
+        ctx.stroke();
+      }
+      ctx.fillStyle = "#78350f";
+      ctx.beginPath();
+      ctx.arc(hubX, hubY, Math.max(2, bs * 0.1), 0, Math.PI * 2);
+      ctx.fill();
+
+    } else if (type === "inn") {
+      // 2.5D Timber Tavern & Inn with Hanging Lantern Sign & Warm Hearth Windows
+      const wallH = bs * 0.85;
+      ctx.fillStyle = "#d97706";
+      ctx.fillRect(screen.x - bs * 0.54, screen.y - wallH, bs * 1.08, wallH);
+      // Timber framing beams
+      ctx.fillStyle = "#451a03";
+      ctx.fillRect(screen.x - bs * 0.54, screen.y - wallH, bs * 0.1, wallH);
+      ctx.fillRect(screen.x + bs * 0.44, screen.y - wallH, bs * 0.1, wallH);
+      ctx.fillRect(screen.x - bs * 0.54, screen.y - wallH * 0.52, bs * 1.08, bs * 0.09);
+
+      // Pitched Slate Roof
+      ctx.fillStyle = "#7c2d12";
+      ctx.beginPath();
+      ctx.moveTo(screen.x, screen.y - wallH - bs * 0.42);
+      ctx.lineTo(screen.x - bs * 0.62, screen.y - wallH);
+      ctx.lineTo(screen.x + bs * 0.62, screen.y - wallH);
+      ctx.closePath();
+      ctx.fill();
+
+      // Glowing tavern windows & swinging sign
+      ctx.fillStyle = "#fde047";
+      ctx.fillRect(screen.x - bs * 0.34, screen.y - wallH * 0.4, bs * 0.2, bs * 0.2);
+      ctx.fillRect(screen.x + bs * 0.14, screen.y - wallH * 0.4, bs * 0.2, bs * 0.2);
+      const glow = 0.7 + 0.3 * Math.sin(now * 0.007 + (b.id || 0));
+      ctx.fillStyle = `rgba(251, 191, 36, ${glow.toFixed(2)})`;
+      ctx.beginPath();
+      ctx.arc(screen.x - bs * 0.58, screen.y - wallH * 0.55, Math.max(2, bs * 0.12), 0, Math.PI * 2);
+      ctx.fill();
+
+    } else if (type === "library") {
+      // 2.5D Classical Library & Academy with Marble Portico & Cyan Skylight Dome
+      const wallH = bs * 0.92;
+      ctx.fillStyle = "#e2e8f0";
+      ctx.fillRect(screen.x - bs * 0.58, screen.y - wallH, bs * 1.16, wallH);
+      // Classical Columns
+      ctx.fillStyle = "#f8fafc";
+      for (const cxOff of [-bs * 0.44, -bs * 0.16, bs * 0.12, bs * 0.38]) {
+        ctx.fillRect(screen.x + cxOff, screen.y - wallH * 0.88, bs * 0.1, wallH * 0.88);
+      }
+      // Azure Knowledge Pediment & Skylight Dome
+      ctx.fillStyle = "#1d4ed8";
+      ctx.beginPath();
+      ctx.moveTo(screen.x, screen.y - wallH - bs * 0.38);
+      ctx.lineTo(screen.x - bs * 0.64, screen.y - wallH);
+      ctx.lineTo(screen.x + bs * 0.64, screen.y - wallH);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#38bdf8";
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - wallH - bs * 0.26, bs * 0.22, Math.PI, 0);
+      ctx.fill();
+
+    } else if (type === "apothecary") {
+      // 2.5D Apothecary & Medical Clinic with Emerald Roof & Healing Emblem
+      const wallH = bs * 0.82;
+      ctx.fillStyle = "#f1f5f9";
+      ctx.fillRect(screen.x - bs * 0.5, screen.y - wallH, bs * 1.0, wallH);
+      // Emerald / Teal Steep Roof
+      ctx.fillStyle = "#059669";
+      ctx.beginPath();
+      ctx.moveTo(screen.x, screen.y - wallH - bs * 0.4);
+      ctx.lineTo(screen.x - bs * 0.56, screen.y - wallH);
+      ctx.lineTo(screen.x + bs * 0.56, screen.y - wallH);
+      ctx.closePath();
+      ctx.fill();
+      // Distinct Red/Emerald Healing Cross Emblem on facade
+      ctx.fillStyle = "#ef4444";
+      ctx.fillRect(screen.x - bs * 0.06, screen.y - wallH * 0.72, bs * 0.12, bs * 0.36);
+      ctx.fillRect(screen.x - bs * 0.18, screen.y - wallH * 0.6, bs * 0.36, bs * 0.12);
+
+    } else if (type === "bank") {
+      // 2.5D Treasury & Reserve Bank with Gilded Pediment, Vault Columns & Gold Emblem
+      const wallH = bs * 0.95;
+      ctx.fillStyle = "#cbd5e1";
+      ctx.fillRect(screen.x - bs * 0.58, screen.y - wallH, bs * 1.16, wallH);
+      ctx.fillStyle = "#475569";
+      ctx.fillRect(screen.x - bs * 0.18, screen.y - wallH * 0.55, bs * 0.36, wallH * 0.55);
+      // Gilded Gold Crown Roof
+      ctx.fillStyle = "#d97706";
+      ctx.beginPath();
+      ctx.moveTo(screen.x, screen.y - wallH - bs * 0.42);
+      ctx.lineTo(screen.x - bs * 0.64, screen.y - wallH);
+      ctx.lineTo(screen.x + bs * 0.64, screen.y - wallH);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#fde047";
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - wallH - bs * 0.14, Math.max(2.2, bs * 0.13), 0, Math.PI * 2);
+      ctx.fill();
+
+    } else if (type === "radar_station") {
+      // 2.5D Air Defense Radar Tower with Sweeping Parabolic Dish & SAM Launcher Pod
+      const tH = bs * 1.05;
+      ctx.fillStyle = "#334155";
+      ctx.fillRect(screen.x - bs * 0.42, screen.y - bs * 0.35, bs * 0.84, bs * 0.35);
+      // Steel Lattice Mast
+      ctx.strokeStyle = "#94a3b8";
+      ctx.lineWidth = Math.max(1.5, bs * 0.1);
+      ctx.beginPath();
+      ctx.moveTo(screen.x - bs * 0.24, screen.y - bs * 0.35);
+      ctx.lineTo(screen.x, screen.y - tH);
+      ctx.lineTo(screen.x + bs * 0.24, screen.y - bs * 0.35);
+      ctx.stroke();
+
+      // Sweeping Parabolic Radar Dish
+      const sweep = Math.sin(now * 0.004 + (b.id || 0)) * (bs * 0.18);
+      ctx.fillStyle = "#e2e8f0";
+      ctx.beginPath();
+      ctx.ellipse(screen.x + sweep * 0.25, screen.y - tH - bs * 0.12, bs * 0.34, bs * 0.18, -0.35 + sweep * 0.03, 0, Math.PI * 2);
+      ctx.fill();
+      // Active tracking pulse ring
+      const ping = ((now * 0.002 + (b.id || 0) * 0.2) % 1);
+      ctx.strokeStyle = `rgba(56, 189, 248, ${(0.65 * (1 - ping)).toFixed(2)})`;
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - tH - bs * 0.12, bs * (0.25 + ping * 0.8), 0, Math.PI * 2);
+      ctx.stroke();
+
+    } else if (type === "monument_cairn") {
+      // 2.5D Stonehenge Hearth Circle & Megalithic Standing Stones (Era 1)
+      const radW = bs * 0.78;
+      // Turf & cobbled ritual dais
+      ctx.fillStyle = "#57534e";
+      ctx.beginPath();
+      ctx.ellipse(screen.x, screen.y - bs * 0.05, radW, radW * 0.44, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#a8a29e";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Standing trilithon megalith pairs
+      const pillars = [-0.46, -0.22, 0.22, 0.46];
+      for (const px of pillars) {
+        const pH = Math.abs(px) < 0.3 ? bs * 0.72 : bs * 0.56;
+        const pY = screen.y - Math.abs(px) * bs * 0.25;
+        ctx.fillStyle = "#44403c";
+        ctx.fillRect(screen.x + bs * px - bs * 0.07, pY - pH, bs * 0.14, pH);
+        ctx.fillStyle = "#78716c";
+        ctx.fillRect(screen.x + bs * px - bs * 0.05, pY - pH, bs * 0.06, pH);
+      }
+      // Stone lintels bridging trilithons
+      ctx.fillStyle = "#a8a29e";
+      ctx.fillRect(screen.x - bs * 0.52, screen.y - bs * 0.78, bs * 0.36, bs * 0.12);
+      ctx.fillRect(screen.x + bs * 0.16, screen.y - bs * 0.78, bs * 0.36, bs * 0.12);
+
+      // Eternal Tribal Hearth Altar & glowing flame
+      const hearthGlow = 0.65 + 0.35 * Math.sin(now * 0.01 + (b.id || 0));
+      ctx.fillStyle = `rgba(249, 115, 22, ${hearthGlow})`;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - bs * 0.18, bs * 0.14, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#fef08a";
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - bs * 0.22, bs * 0.07, 0, Math.PI * 2);
+      ctx.fill();
+
     } else if (type === "monument_pyramid") {
       // 2.5D Majestic Step Pyramid / Great Sun Shrine
       const pW = bs * 1.5;
@@ -2411,6 +2613,98 @@ export class CanvasRenderer {
       ctx.arc(screen.x, screen.y - oH - bs * 0.45 + orbPulse, bs * 0.4, 0, Math.PI * 2);
       ctx.fill();
 
+    } else if (type === "monument_citadel") {
+      // 2.5D Grand Imperial Citadel & Domed Palace-Fortress (Era 4)
+      const cW = bs * 1.48;
+      const cH = bs * 0.92;
+      // Bastion base
+      ctx.fillStyle = "#64748b";
+      ctx.fillRect(screen.x - cW * 0.5, screen.y - cH, cW, cH);
+      // Marble upper gallery
+      ctx.fillStyle = "#e2e8f0";
+      ctx.fillRect(screen.x - cW * 0.38, screen.y - cH * 1.32, cW * 0.76, cH * 0.34);
+      // Corner turrets
+      ctx.fillStyle = "#475569";
+      ctx.fillRect(screen.x - cW * 0.52, screen.y - cH * 1.18, bs * 0.22, cH * 1.18);
+      ctx.fillRect(screen.x + cW * 0.52 - bs * 0.22, screen.y - cH * 1.18, bs * 0.22, cH * 1.18);
+      // Grand Gilded Cupola Dome
+      ctx.fillStyle = "#eab308";
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - cH * 1.32, bs * 0.36, Math.PI, 0);
+      ctx.fill();
+      ctx.fillStyle = "#fef08a";
+      ctx.fillRect(screen.x - 1.5, screen.y - cH * 1.32 - bs * 0.52, 3, bs * 0.2);
+      // Royal arch portal
+      ctx.fillStyle = "#1e293b";
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - bs * 0.28, bs * 0.16, Math.PI, 0);
+      ctx.lineTo(screen.x + bs * 0.16, screen.y);
+      ctx.lineTo(screen.x - bs * 0.16, screen.y);
+      ctx.closePath();
+      ctx.fill();
+
+    } else if (type === "monument_foundry") {
+      // 2.5D Grand Iron Foundry Basilica & Clocktower (Era 5)
+      const fW = bs * 1.46;
+      const fH = bs * 0.88;
+      // Heavy red-brick & riveted steel hall
+      ctx.fillStyle = "#7c2d12";
+      ctx.fillRect(screen.x - fW * 0.5, screen.y - fH, fW, fH);
+      ctx.fillStyle = "#475569";
+      ctx.fillRect(screen.x - fW * 0.52, screen.y - fH - bs * 0.14, fW * 1.04, bs * 0.16);
+      // Central Iron Clocktower
+      ctx.fillStyle = "#334155";
+      ctx.fillRect(screen.x - bs * 0.2, screen.y - fH - bs * 0.72, bs * 0.4, bs * 0.72);
+      ctx.fillStyle = "#fef08a";
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - fH - bs * 0.44, bs * 0.12, 0, Math.PI * 2);
+      ctx.fill();
+      // Twin Industrial Smokestacks with steam plumes
+      ctx.fillStyle = "#1e293b";
+      ctx.fillRect(screen.x - fW * 0.4, screen.y - fH - bs * 0.58, bs * 0.14, bs * 0.58);
+      ctx.fillRect(screen.x + fW * 0.4 - bs * 0.14, screen.y - fH - bs * 0.58, bs * 0.14, bs * 0.58);
+      const steamP = ((now * 0.002 + (b.id || 0) * 0.3) % 1);
+      ctx.fillStyle = `rgba(226, 232, 240, ${(0.5 * (1 - steamP)).toFixed(2)})`;
+      ctx.beginPath();
+      ctx.arc(screen.x - fW * 0.33, screen.y - fH - bs * 0.62 - steamP * 14, 3 + steamP * 5, 0, Math.PI * 2);
+      ctx.arc(screen.x + fW * 0.33, screen.y - fH - bs * 0.62 - steamP * 14, 3 + steamP * 5, 0, Math.PI * 2);
+      ctx.fill();
+      // Glowing Blast Furnace Arch
+      ctx.fillStyle = "#f97316";
+      ctx.fillRect(screen.x - bs * 0.22, screen.y - bs * 0.34, bs * 0.44, bs * 0.34);
+
+    } else if (type === "monument_atomic_dome") {
+      // 2.5D Orbital & Atomic Deterrence Complex (Era 7)
+      const dW = bs * 1.5;
+      const dH = bs * 0.56;
+      // Reinforced concrete containment plinth
+      ctx.fillStyle = "#334155";
+      ctx.fillRect(screen.x - dW * 0.5, screen.y - dH, dW, dH);
+      // Twin flank cooling towers
+      ctx.fillStyle = "#94a3b8";
+      ctx.fillRect(screen.x - dW * 0.46, screen.y - bs * 0.95, bs * 0.24, bs * 0.95);
+      ctx.fillRect(screen.x + dW * 0.46 - bs * 0.24, screen.y - bs * 0.95, bs * 0.24, bs * 0.95);
+      // Geodesic Fusion Reactor Dome
+      ctx.fillStyle = "#0ea5e9";
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - dH, bs * 0.46, Math.PI, 0);
+      ctx.fill();
+      ctx.strokeStyle = "#e0f2fe";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      // Orbital Telemetry Spire + Pulsing Emerald/Cyan Beacon
+      ctx.strokeStyle = "#e2e8f0";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(screen.x, screen.y - dH - bs * 0.46);
+      ctx.lineTo(screen.x, screen.y - dH - bs * 0.95);
+      ctx.stroke();
+      const pulse = 0.55 + 0.45 * Math.sin(now * 0.01);
+      ctx.fillStyle = `rgba(132, 204, 22, ${pulse})`;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - dH - bs * 0.98, bs * 0.14, 0, Math.PI * 2);
+      ctx.fill();
+
     } else {
       // Generic Fortification / Mine / Structure
       const wallH = bs * 0.8;
@@ -2433,6 +2727,38 @@ export class CanvasRenderer {
       ctx.fillRect(screen.x - barW / 2, screen.y - bs * 1.5, barW, 4);
       ctx.fillStyle = "#22c55e";
       ctx.fillRect(screen.x - barW / 2, screen.y - bs * 1.5, barW * p, 4);
+    } else if (isMonument && zoom >= 8) {
+      // Heritage Era Crest Badge for Grand Landmarks (e.g. "E2 ★", "E3 II")
+      const eraTag = `E${b.builtInEra || 1}`;
+      const lvl = b.level || 1;
+      const badgeLabel = lvl >= 3 ? `${eraTag} III` : lvl === 2 ? `${eraTag} II` : `${eraTag} ★`;
+      const badgeY = screen.y - bs * 1.48;
+      ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
+      ctx.fillRect(screen.x - 14, badgeY - 7, 28, 12);
+      ctx.strokeStyle = "#fbbf24";
+      ctx.lineWidth = 1.1;
+      ctx.strokeRect(screen.x - 14, badgeY - 7, 28, 12);
+      ctx.fillStyle = "#fde047";
+      ctx.font = "bold 8px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(badgeLabel, screen.x, badgeY - 1);
+    } else if ((b.level || 1) >= 2 && zoom >= 9) {
+      // Visual Tier Trim & Level Badge (II = Cyan Stone Tier, III = Gilded Master Tier)
+      const lvl = b.level || 1;
+      const badgeColor = lvl >= 3 ? "#fbbf24" : "#38bdf8";
+      const label = lvl >= 3 ? "III" : "II";
+      const badgeY = screen.y - bs * 1.28;
+      ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+      ctx.fillRect(screen.x - 10, badgeY - 7, 20, 11);
+      ctx.strokeStyle = badgeColor;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(screen.x - 10, badgeY - 7, 20, 11);
+      ctx.fillStyle = badgeColor;
+      ctx.font = "bold 8px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, screen.x, badgeY - 1);
     }
 
     ctx.restore();
@@ -3287,8 +3613,10 @@ export class CanvasRenderer {
     const screen = this._pN;
     const ground = this._pE;
     for (const c of this.clouds) {
-      c.x += c.speed * dtFactor;
-      if (c.x > this.world.width + 30) c.x = -30;
+      if (!this._isFrozen) {
+        c.x += c.speed * dtFactor;
+        if (c.x > this.world.width + 30) c.x = -30;
+      }
 
       this.worldToScreenFast(c.x, c.y, 120, screen);
       this.worldToScreenFast(c.x, c.y, 25, ground);

@@ -301,20 +301,30 @@ class CraftingSystem {
             if (b.buildingType !== 'workshop' || !b.complete || b.isRuined) continue;
             const key = CraftingSystem.buildingKey(b);
             seen.add(key);
-            if (this.workshops.has(key)) continue;
+            const lvl = b.level || 1;
+            const scaledMaxStorage = 50 + (lvl - 1) * 35;
+            if (this.workshops.has(key)) {
+                const existing = this.workshops.get(key);
+                existing.level = lvl;
+                existing.settlementId = b.settlementId ?? existing.settlementId ?? null;
+                existing.maxStorage = scaledMaxStorage;
+                continue;
+            }
             const ws = {
                 id: key,
                 type: 'workshop',
                 subtype: 'general',
                 name: `Workshop #${b.id}`,
                 buildingId: b.id,
+                settlementId: b.settlementId ?? null,
+                level: lvl,
                 x: b.x,
                 y: b.y,
                 queue: [],
                 activeTask: null,
                 progress: 0,
                 storage: new Map(),
-                maxStorage: 50,
+                maxStorage: scaledMaxStorage,
                 assignedWorkers: []
             };
             this.workshops.set(key, ws);
@@ -495,7 +505,12 @@ class CraftingSystem {
                 
                 const baseSpeed = 1;
                 const skillBonus = totalSkill > 0 ? (totalSkill / workshop.assignedWorkers.length) * 0.5 : 0;
-                const progressRate = baseSpeed + skillBonus;
+                const wsLevelMult = 1 + Math.max(0, (workshop.level || 1) - 1) * 0.35;
+                const factoryPower = (workshop.settlementId != null && typeof this.simulation?.getSettlementBuildingBonus === 'function')
+                    ? (this.simulation.getSettlementBuildingBonus(workshop.settlementId, 'factory')?.power || 0)
+                    : 0;
+                const factoryMult = 1 + Math.min(1.0, factoryPower * 0.25);
+                const progressRate = (baseSpeed + skillBonus) * wsLevelMult * factoryMult;
 
                 workshop.progress += progressRate;
 

@@ -29,6 +29,7 @@ export class Interaction {
     window.addEventListener("worldclick", this._onWorldClick);
 
     this._onKeyDown = (e) => {
+      if (document.body?.dataset?.screen === "title") return;
       const tag = document.activeElement?.tagName || "";
       if (/^(INPUT|TEXTAREA|SELECT)$/.test(tag)) return;
       switch (e.key) {

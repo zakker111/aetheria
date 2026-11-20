@@ -619,14 +619,21 @@ export class NavalSystem {
       const arrived = this.moveVesselToward(v, v.targetX, v.targetY, 0.34);
       if (arrived || Math.hypot(v.x - v.targetX, v.y - v.targetY) <= 1.2) {
         if (v.cargo?.amount > 0) {
-          this.sim.settlementSystem?.depositToStockpile(toS.id, v.cargo.resource, v.cargo.amount);
+          const bankPower = Math.max(
+            this.sim.getSettlementBuildingBonus?.(fromS.id, 'bank')?.power || 0,
+            this.sim.getSettlementBuildingBonus?.(toS.id, 'bank')?.power || 0
+          );
+          const delivered = bankPower > 0
+            ? Math.max(v.cargo.amount, Math.round(v.cargo.amount * (1 + Math.min(0.75, bankPower * 0.25))))
+            : v.cargo.amount;
+          this.sim.settlementSystem?.depositToStockpile(toS.id, v.cargo.resource, delivered);
           this.stats.bargeDeliveries++;
-          this.stats.bargeCargoMoved += v.cargo.amount;
+          this.stats.bargeCargoMoved += delivered;
           this.sim.eventBus?.emit('BARGE_TRADE_COMPLETED', {
             from: fromS.name,
             to: toS.name,
             resource: v.cargo.resource,
-            amount: v.cargo.amount
+            amount: delivered
           });
           v.cargo.amount = 0;
         }
@@ -638,14 +645,21 @@ export class NavalSystem {
       const arrived = this.moveVesselToward(v, v.homeWaterX, v.homeWaterY, 0.34);
       if (arrived || Math.hypot(v.x - v.homeWaterX, v.y - v.homeWaterY) <= 1.2) {
         if (v.cargo?.amount > 0) {
-          this.sim.settlementSystem?.depositToStockpile(fromS.id, v.cargo.resource, v.cargo.amount);
+          const bankPower = Math.max(
+            this.sim.getSettlementBuildingBonus?.(fromS.id, 'bank')?.power || 0,
+            this.sim.getSettlementBuildingBonus?.(toS.id, 'bank')?.power || 0
+          );
+          const delivered = bankPower > 0
+            ? Math.max(v.cargo.amount, Math.round(v.cargo.amount * (1 + Math.min(0.75, bankPower * 0.25))))
+            : v.cargo.amount;
+          this.sim.settlementSystem?.depositToStockpile(fromS.id, v.cargo.resource, delivered);
           this.stats.bargeDeliveries++;
-          this.stats.bargeCargoMoved += v.cargo.amount;
+          this.stats.bargeCargoMoved += delivered;
           this.sim.eventBus?.emit('BARGE_TRADE_COMPLETED', {
             from: toS.name,
             to: fromS.name,
             resource: v.cargo.resource,
-            amount: v.cargo.amount
+            amount: delivered
           });
           v.cargo.amount = 0;
         }
