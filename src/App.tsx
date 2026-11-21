@@ -111,7 +111,11 @@ export const App: React.FC = () => {
   const societiesOpenRef = useRef(societiesOpen);
   societiesOpenRef.current = societiesOpen;
   const [civilizationOpen, setCivilizationOpen] = useState(false);
+  const civilizationOpenRef = useRef(civilizationOpen);
+  civilizationOpenRef.current = civilizationOpen;
   const [helpOpen, setHelpOpen] = useState(false);
+  const helpOpenRef = useRef(helpOpen);
+  helpOpenRef.current = helpOpen;
   const [currentWeather, setCurrentWeather] = useState<{
     name: string;
     icon: string;
@@ -183,6 +187,15 @@ export const App: React.FC = () => {
     if (sim.agents.length > 0) {
       renderer.centerOn(sim.agents[0].x, sim.agents[0].y, 14, true);
     }
+
+    // Reset React HUD state cleanly for fresh world initialization
+    setCurrentTool('inspect');
+    setChronicleEvents(['World awakened with 128×128 terrain and biomes.']);
+    setChronicleEntries([]);
+    setDiplomaticHistory([]);
+    setWars([]);
+    setTreaties([]);
+    setRelations([]);
 
     // Set initial tool
     interaction.setTool('inspect');
@@ -588,7 +601,8 @@ export const App: React.FC = () => {
               }
             }
             setRelations(relArr);
-            setDiplomaticHistory(Array.isArray(diplomacy.diplomaticHistory) ? [...diplomacy.diplomaticHistory].reverse().slice(0, 40) : []);
+            // DiplomacySystem.recordDiplomaticEvent uses unshift(), so index 0 is newest
+            setDiplomaticHistory(Array.isArray(diplomacy.diplomaticHistory) ? diplomacy.diplomaticHistory.slice(0, 40) : []);
           }
         }
 
@@ -638,7 +652,7 @@ export const App: React.FC = () => {
           } else if (currentInspect.kind === 'building') {
             const bId = currentInspect.entity.id;
             const stillBuilding = sim.buildings.find((b: any) => b.id === bId);
-            if (stillBuilding && (stillBuilding.health === undefined || stillBuilding.health > 0)) {
+            if (stillBuilding) {
               const sName = stillBuilding.settlementId != null
                 ? sim.settlementSystem?.settlements?.get(stillBuilding.settlementId)?.name
                 : null;
@@ -710,16 +724,26 @@ export const App: React.FC = () => {
       return;
     }
 
+    if (e.key === 'Escape') {
+      setCivilizationOpen(false);
+      setHelpOpen(false);
+      return;
+    }
+    if (e.key === 'c' || e.key === 'C') {
+      if (!helpOpenRef.current) {
+        setCivilizationOpen((prev) => !prev);
+      }
+      return;
+    }
+    if (civilizationOpenRef.current || helpOpenRef.current) {
+      return;
+    }
+
     if (e.code === 'Space') {
       e.preventDefault();
       handleTogglePause();
     } else if (e.key === 'w' || e.key === 'W') {
       setDiplomacyOpen((prev) => !prev);
-    } else if (e.key === 'c' || e.key === 'C') {
-      setCivilizationOpen((prev) => !prev);
-    } else if (e.key === 'Escape') {
-      setCivilizationOpen(false);
-      setHelpOpen(false);
     } else {
       const keyMap: { [k: string]: ToolType } = {
         '1': 'inspect',
@@ -895,6 +919,25 @@ export const App: React.FC = () => {
       if (live && live.alive) {
         rendererRef.current.centerOn(live.x, live.y, Math.max(rendererRef.current.camera.zoom, 15));
       }
+    }
+  }, []);
+
+  const handleSelectBuildingById = useCallback((buildingId: number) => {
+    const sim = simRef.current;
+    if (!sim || !Array.isArray(sim.buildings)) return;
+    const b = sim.buildings.find((item: any) => item && item.id === buildingId);
+    if (!b) return;
+    const sName = b.settlementId != null ? sim.settlementSystem?.settlements?.get(b.settlementId)?.name : null;
+    const upgradeReq = typeof sim.getUpgradeRequirements === 'function' ? sim.getUpgradeRequirements(b) : null;
+    const target: InspectedEntityData = {
+      kind: 'building',
+      entity: { ...b, settlementName: sName },
+      upgradeReq,
+    };
+    setInspectedEntity(target);
+    if (rendererRef.current) {
+      rendererRef.current.selectedEntity = target;
+      rendererRef.current.centerOn(b.x, b.y, Math.max(rendererRef.current.camera.zoom, 16));
     }
   }, []);
 
@@ -1194,11 +1237,16 @@ export const App: React.FC = () => {
 
   const handleSave = () => {
     if (!simRef.current) return;
-    const data = simRef.current.serialize();
-    localStorage.setItem('aetheria_save', JSON.stringify(data));
-    setSavedMeta(readSavedWorldMeta());
-    soundManager.playClick();
-    showNotification('Game progress saved to local storage!');
+    try {
+      const data = simRef.current.serialize();
+      localStorage.setItem('aetheria_save', JSON.stringify(data));
+      setSavedMeta(readSavedWorldMeta());
+      soundManager.playClick();
+      showNotification('Game progress saved to local storage!');
+    } catch (err) {
+      console.error('Failed to save game to localStorage:', err);
+      showNotification('⚠️ Save failed: browser storage quota exceeded or unavailable. Use Export JSON instead.');
+    }
   };
 
   const applyLoadedSimulation = (loaded: Simulation, toastMsg: string) => {
@@ -1225,13 +1273,18 @@ export const App: React.FC = () => {
     if (interactionRef.current) {
       interactionRef.current.simulation = loaded;
       interactionRef.current.renderer = rendererRef.current;
+      interactionRef.current.selectedEntity = null;
+      interactionRef.current.setTool('inspect');
     }
+    setCurrentTool('inspect');
     setSimInstance(loaded);
     setInspectedEntity(null);
     setFollowAgentId(null);
     setSpeed(loaded.clock?.speed ?? 1);
     setIsPaused((loaded.clock?.speed ?? 1) === 0);
+    setChronicleEvents([]);
     setChronicleEntries(loaded.chronicleSystem?.getHighlights?.(80) || []);
+    setDiplomaticHistory(Array.isArray(loaded.diplomacySystem?.diplomaticHistory) ? loaded.diplomacySystem.diplomaticHistory.slice(0, 40) : []);
     if (typeof document !== 'undefined') {
       document.body.dataset.screen = 'playing';
     }
@@ -1306,7 +1359,7 @@ export const App: React.FC = () => {
       entries: sim.chronicleSystem?.entries || [],
       diplomaticHistory: sim.diplomacySystem?.diplomaticHistory || [],
       warHistory: sim.diplomacySystem?.warHistory || [],
-      fallenHeroes: sim.dynastySystem?.fallenHeroes || [],
+      fallenHeroes: sim.fallenHeroes || [],
       espionageOps: sim.espionageSystem?.operationsLog || [],
     };
     downloadJsonFile(`aetheria-chronicle-tick-${sim.clock?.tick ?? 0}.json`, payload);
@@ -1478,6 +1531,8 @@ export const App: React.FC = () => {
                       }
                       onFollowAgent={handleFollowAgent}
                       onSelectAgent={handleSelectAgentById}
+                      onSelectBuilding={handleSelectBuildingById}
+                      onPanTo={handlePanTo}
                       onRallyWarband={handleRallyWarband}
                       onSpawnCitizens={handleSpawnSettlementCitizens}
                       onAdvanceWonder={handleAdvanceWonder}
@@ -1534,6 +1589,8 @@ export const App: React.FC = () => {
                     onExportWorld={handleExportWorld}
                     onExportChronicle={handleExportChronicle}
                     onPanTo={handlePanTo}
+                    onSelectAgent={handleSelectAgentById}
+                    onSelectBuilding={handleSelectBuildingById}
                   />
                 </div>
               </div>
@@ -1559,6 +1616,8 @@ export const App: React.FC = () => {
             onClose={() => setCivilizationOpen(false)}
             simulation={simInstance || simRef.current}
             onSelectAgent={handleSelectAgentById}
+            onSelectBuilding={handleSelectBuildingById}
+            onFollowAgent={handleFollowAgent}
             onImposeSanctions={handleImposeSanctions}
             onIssueUltimatum={handleIssueUltimatum}
             onLaunchNuke={handleLaunchNuke}

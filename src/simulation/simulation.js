@@ -6,7 +6,7 @@ import { BUILDING_METADATA } from "../core/constants.js";
 import { SimulationClock } from "./clock.js";
 import { EventBus } from "../core/eventBus.js";
 import { IDGenerator } from "../core/idGen.js";
-import { Agent } from "./agent.js";
+import { Agent, assignDeterministicSurname, formatAgentFullName } from "./agent.js";
 import { Resource } from "./resource.js";
 import { Building } from "./building.js";
 import { GroundItem } from "./groundItem.js";
@@ -62,6 +62,9 @@ export class Simulation {
   // Central entity intake: registers agents in the O(1) id registry so
   // getEntityById works for every spawn path (init, god powers, births).
   addAgent(agent) {
+    if (agent && !agent.surname) {
+      assignDeterministicSurname(agent, this.seed ?? 0);
+    }
     this.agents.push(agent);
     this.world.entityRegistry.set(agent.id, agent);
     // Perf: keep the id -> array-slot map in sync so _agentById() resolves
@@ -310,18 +313,26 @@ export class Simulation {
           ? (this.settlementSystem?.settlements?.get(fallenAgent.settlementId)?.name || 'Wilds')
           : 'Wilds';
         if (!this.fallenHeroes.some(h => h.id === fallenAgent.id)) {
+          const deathAge = Math.floor(fallenAgent.age || data.age || 0);
+          const cause = data.cause || 'natural';
           this.fallenHeroes.push({
             id: fallenAgent.id,
             name: fallenAgent.name,
+            surname: fallenAgent.surname || null,
+            fullName: formatAgentFullName(fallenAgent),
             epithet: fallenAgent.epithet || (fallenAgent.isMonarch ? 'Sovereign' : null),
             legendaryWeapon: fallenAgent.legendaryWeapon || null,
+            heirloom: fallenAgent.heirloom ? { ...fallenAgent.heirloom } : null,
+            buildingsBuilt: fallenAgent.buildingsBuilt || 0,
+            generation: fallenAgent.generation ?? 1,
             kills: fallenAgent.kills || 0,
             battlesFought: fallenAgent.battlesFought || 0,
             settlementName: sName,
             isMonarch: !!fallenAgent.isMonarch,
-            age: Math.floor(fallenAgent.age || data.age || 0),
+            age: deathAge,
             deathTick: this.clock?.tick ?? 0,
-            cause: data.cause || 'natural',
+            cause,
+            biography: this.buildAgentBiography(fallenAgent, { alive: false, deathCause: cause, age: deathAge, settlementName: sName }),
             x: fallenAgent.x,
             y: fallenAgent.y
           });
@@ -357,6 +368,36 @@ export class Simulation {
       this.relationshipSystem.modifyRelationship(data.agentId1, data.agentId2, {
         friendship: data.change
       });
+    });
+
+    // Record major treaties, alliances, and war declarations in reigning monarchs' life histories
+    this.eventBus.on("DIPLOMATIC_EVENT", (data) => {
+      if (!data || !this.dynastySystem) return;
+      const tick = this.clock?.tick ?? 0;
+      const title = data.title || "Diplomatic Accord";
+      const sids = [data.settlementA_id, data.settlementB_id].filter((id) => id != null);
+      for (const sid of sids) {
+        const dyn = this.dynastySystem.getSettlementDynasty?.(sid);
+        let monarch = dyn?.monarchId != null ? this._agentById(dyn.monarchId) : null;
+        if (!monarch || !monarch.alive) {
+          monarch = this.agents.find(a => a && a.alive && a.settlementId === sid && a.isMonarch) || null;
+        }
+        if (monarch && monarch.alive && typeof monarch.addLifeEvent === "function") {
+          const otherName = sid === data.settlementA_id ? (data.settlementB || "a rival realm") : (data.settlementA || "a rival realm");
+          const isWar = /war/i.test(title);
+          const isPeace = /peace|treaty/i.test(title);
+          const isAlliance = /alliance/i.test(title);
+          const icon = isWar ? "⚔️" : isPeace ? "🕊️" : isAlliance ? "🤝" : "📜";
+          const verb = isWar
+            ? `Entered war with ${otherName}`
+            : isPeace
+              ? `Signed ${title} with ${otherName}`
+              : isAlliance
+                ? `Forged alliance with ${otherName}`
+                : `${title} with ${otherName}`;
+          monarch.addLifeEvent("TREATY", verb, tick, icon, true);
+        }
+      }
     });
   }
 
@@ -1779,8 +1820,13 @@ export class Simulation {
       this._incompleteBuildingsTick = this.clock.tick;
       const list = this._incompleteBuildingsBuffer || (this._incompleteBuildingsBuffer = []);
       list.length = 0;
+      const realList = this._incompleteRealBuildingsBuffer || (this._incompleteRealBuildingsBuffer = []);
+      realList.length = 0;
       for (const b of this.buildings) {
-        if (!b.complete && (b.constructionProgress || 0) < 100) list.push(b);
+        if (!b.complete && (b.constructionProgress || 0) < 100) {
+          list.push(b);
+          realList.push(b);
+        }
       }
       if (this.constructionSystem && this.constructionSystem.pendingBuildings) {
         for (const b of this.constructionSystem.pendingBuildings) {
@@ -1788,6 +1834,7 @@ export class Simulation {
         }
       }
       this.incompleteBuildings = list;
+      this._incompleteRealBuildings = realList;
     }
     
     const currentTick = this.clock.tick;
@@ -1829,7 +1876,19 @@ export class Simulation {
     this.lodStats.total = this.agents.length;
     this.lodStats.tickedThisFrame = activeAgentsThisTick.length;
 
+    // Pre-filter active non-empty ground items once per tick so Pass 2 skips
+    // repeating destroyed/total() checks across hundreds of T0/T1 agents.
+    const activeGroundItems = this._activeGroundItemsBuffer || (this._activeGroundItemsBuffer = []);
+    activeGroundItems.length = 0;
+    if (this.groundItems.length > 0) {
+      for (let i = 0; i < this.groundItems.length; i++) {
+        const it = this.groundItems[i];
+        if (!it.destroyed && it.total() > 0) activeGroundItems.push(it);
+      }
+    }
+
     // Pass 2: prepare perception state for all active detailed agents
+    const hasGroundItems = activeGroundItems.length > 0;
     for (let i = 0; i < activeAgentsThisTick.length; i++) {
       const agent = activeAgentsThisTick[i];
       if (!agent.alive) continue;
@@ -1838,12 +1897,14 @@ export class Simulation {
       agent.invalidatePerception();
 
       // Ground loot direct scan
-      if (this.groundItems.length > 0) {
-        for (const it of this.groundItems) {
-          if (it.destroyed || it.total() <= 0) continue;
-          const dx = it.x - agent.x, dy = it.y - agent.y;
-          if (dx * dx + dy * dy <= 484 && perception.nearbyItems.length < 4) {
-            perception.nearbyItems.push(it);
+      if (hasGroundItems) {
+        const ax = agent.x, ay = agent.y;
+        const nearbyItems = perception.nearbyItems;
+        for (let j = 0; j < activeGroundItems.length; j++) {
+          const it = activeGroundItems[j];
+          const dx = it.x - ax, dy = it.y - ay;
+          if (dx * dx + dy * dy <= 484 && nearbyItems.length < 4) {
+            nearbyItems.push(it);
           }
         }
       }
@@ -1906,7 +1967,7 @@ export class Simulation {
         baby.lifeStage = 'child';
         baby.parents = [birth.parentId1, birth.parentId2];
         
-        // Inherit some traits from parents
+        // Inherit some traits, surname & family generation from parents
         const parent1 = this._agentById(birth.parentId1);
         const parent2 = this._agentById(birth.parentId2);
         if (parent1 && parent2) {
@@ -1916,26 +1977,54 @@ export class Simulation {
           baby.skills.gather = (parent1.skills.gather + parent2.skills.gather) / 2;
           baby.settlementId = parent1.settlementId || parent2.settlementId;
         }
+        if (parent1 || parent2) {
+          baby.surname = parent1?.surname || parent2?.surname || assignDeterministicSurname(baby, this.seed ?? 0);
+          baby.generation = Math.max(parent1?.generation || 1, parent2?.generation || 1) + 1;
+        } else {
+          assignDeterministicSurname(baby, this.seed ?? 0);
+        }
         this.addAgent(baby);
         this.world.addToSpatialIndex(Math.floor(birth.x), Math.floor(birth.y), baby);
         this.eventBus.emit("AGENT_CREATED", { agentId: baby.id, name: baby.name, x: baby.x, y: baby.y, reason: "birth" });
-        // Synchronously link parent-child relationships (replaces old setTimeout hack)
+        // Synchronously link parent-child & family union records (zero RNG)
         this.relationshipSystem.initializeAgent(baby.id);
         if (parent1) this.relationshipSystem.addParentChild(parent1.id, baby.id);
         if (parent2) this.relationshipSystem.addParentChild(parent2.id, baby.id);
-        if (parent1 && parent2) this.relationshipSystem.addChildToMarriage(parent1.id, parent2.id, baby.id);
+        if (parent1 && parent2 && parent1 !== parent2) {
+          const relSys = this.relationshipSystem;
+          const coupleKey = relSys.getCoupleKey(parent1.id, parent2.id);
+          if (!relSys.marriages.has(coupleKey)) {
+            relSys.marriages.set(coupleKey, {
+              partners: [parent1.id, parent2.id],
+              marriedAt: currentTick,
+              children: [],
+              status: 'married',
+            });
+            const f1 = relSys.familyTrees.get(parent1.id);
+            const f2 = relSys.familyTrees.get(parent2.id);
+            if (f1 && f1.spouse == null) f1.spouse = parent2.id;
+            if (f2 && f2.spouse == null) f2.spouse = parent1.id;
+            if (typeof parent1.addLifeEvent === 'function') {
+              parent1.addLifeEvent('MARRIAGE', `United in family bond with ${formatAgentFullName(parent2)}`, currentTick, '💍', true);
+            }
+            if (typeof parent2.addLifeEvent === 'function') {
+              parent2.addLifeEvent('MARRIAGE', `United in family bond with ${formatAgentFullName(parent1)}`, currentTick, '💍', true);
+            }
+          }
+          relSys.addChildToMarriage(parent1.id, parent2.id, baby.id);
+        }
         if (this.dynastySystem) {
           this.dynastySystem.onAgentBorn(baby, parent1, parent2);
         }
         if (typeof baby.addLifeEvent === 'function') {
-          const pText = parent1 ? ` to ${parent1.name}${parent2 && parent2 !== parent1 ? ` & ${parent2.name}` : ''}` : '';
-          baby.addLifeEvent('BIRTH', `Born${pText}`, currentTick, '👶', true);
+          const pText = parent1 ? ` to ${formatAgentFullName(parent1)}${parent2 && parent2 !== parent1 ? ` & ${formatAgentFullName(parent2)}` : ''}` : '';
+          baby.addLifeEvent('BIRTH', `Born into House ${baby.surname}${pText}`, currentTick, '👶', true);
         }
         if (parent1 && typeof parent1.addLifeEvent === 'function') {
-          parent1.addLifeEvent('CHILD', `Welcomed newborn ${baby.name}`, currentTick, '👶', true);
+          parent1.addLifeEvent('CHILD', `Welcomed newborn ${formatAgentFullName(baby)}`, currentTick, '👶', true);
         }
         if (parent2 && parent2 !== parent1 && typeof parent2.addLifeEvent === 'function') {
-          parent2.addLifeEvent('CHILD', `Welcomed newborn ${baby.name}`, currentTick, '👶', true);
+          parent2.addLifeEvent('CHILD', `Welcomed newborn ${formatAgentFullName(baby)}`, currentTick, '👶', true);
         }
       }
     }
@@ -1957,6 +2046,9 @@ export class Simulation {
       }
       for (const dead of deadAgents) {
         const deathCause = dead.deathCause || "natural";
+        if (!dead._heirloomBequeathed && this.ageSystem?._bequeathHeirloomOnDeath) {
+          this.ageSystem._bequeathHeirloomOnDeath(dead);
+        }
         if (typeof dead.addLifeEvent === 'function' && (!dead.lifeHistory || !dead.lifeHistory.some(e => e.kind === 'DEATH'))) {
           dead.addLifeEvent('DEATH', `Died of ${deathCause} at age ${Math.floor(dead.age || 0)}`, currentTick, '🕯️', true);
         }
@@ -2310,6 +2402,9 @@ export class Simulation {
       agent.alive = false;
       const finalCause = cause || agent.deathCause || "removed";
       if (cause && !agent.deathCause) agent.deathCause = cause;
+      if (!agent._heirloomBequeathed && this.ageSystem?._bequeathHeirloomOnDeath) {
+        this.ageSystem._bequeathHeirloomOnDeath(agent);
+      }
       if (typeof agent.addLifeEvent === 'function' && (!agent.lifeHistory || !agent.lifeHistory.some(e => e.kind === 'DEATH'))) {
         agent.addLifeEvent('DEATH', `Died of ${finalCause} at age ${Math.floor(agent.age || 0)}`, this.clock?.tick ?? 0, '🕯️', true);
       }
@@ -2383,8 +2478,11 @@ export class Simulation {
     if (resource) {
       this.resources = this.resources.filter(r => r.id !== resource.id);
       this.world.removeFromSpatialIndex(Math.floor(x), Math.floor(y), resource);
+      this.world.entityRegistry?.delete(resource.id);
       this.eventBus.emit("GOD_POWER_USED", { power: "remove_resource", x, y });
+      return true;
     }
+    return false;
   }
 
   spawnAgent(x, y) {
@@ -2696,6 +2794,39 @@ export class Simulation {
     const upgraded = typeof building.applyUpgrade === "function" ? building.applyUpgrade(tick) : false;
     if (!upgraded) return { ok: false, reason: "Upgrade failed" };
 
+    const dyn = building.settlementId != null ? this.dynastySystem?.getSettlementDynasty?.(building.settlementId) : null;
+    const monarch = dyn?.monarchId != null ? this._agentById(dyn.monarchId) : null;
+    let renovatorId = null;
+    if (monarch && monarch.alive) {
+      renovatorId = monarch.id;
+      building.upgradedByName = formatAgentFullName(monarch);
+    } else if (Array.isArray(building.contributors) && building.contributors.length > 0) {
+      renovatorId = building.contributors[0].id ?? null;
+      building.upgradedByName = building.contributors[0].name || "Civic Guilds";
+    } else if (building.builtByName) {
+      renovatorId = building.builtByAgentId ?? null;
+      building.upgradedByName = building.builtByName;
+    } else {
+      building.upgradedByName = byPlayer ? "Royal Decree" : "Civic Guilds";
+    }
+    building.upgradedByAgentId = renovatorId;
+
+    const ageSummary = building.settlementId != null
+      ? this.civilizationAgeSystem?.getSettlementAge?.(building.settlementId)
+      : this.civilizationAgeSystem?.getDominantAge?.();
+    const eraId = ageSummary?.ageId ?? ageSummary?.id ?? 1;
+    const eraName = ageSummary?.name || "Tribal Era";
+    const year = Math.floor(tick / 400) + 1;
+    if (!Array.isArray(building.upgradeHistory)) building.upgradeHistory = [];
+    building.upgradeHistory.push({
+      level: building.level,
+      byAgentId: renovatorId,
+      byName: building.upgradedByName,
+      year,
+      eraId,
+      eraName,
+    });
+
     const meta = BUILDING_METADATA[building.buildingType];
     const levelTitle = meta?.levelNames?.[building.level - 1] || `${meta?.name || building.buildingType} Lv ${building.level}`;
     this.eventBus.emit("BUILDING_UPGRADED", {
@@ -2712,6 +2843,8 @@ export class Simulation {
     if (this.chronicleSystem?.add && building.level >= 2) {
       this.chronicleSystem.add("construction", `${meta?.icon || "🏛️"} ${settlement?.name || "A town"} upgraded ${levelTitle} (Lv ${building.level})!`, {
         icon: meta?.icon || "🏛️",
+        buildingId: building.id,
+        agentId: renovatorId,
         x: building.x,
         y: building.y,
       });
@@ -2867,6 +3000,9 @@ export class Simulation {
       if (!a || !a.alive) continue;
       const d = Math.hypot(a.x - cx, a.y - cy);
       if (d <= vaporizeRadius) {
+        if (!a._heirloomBequeathed && this.ageSystem?._bequeathHeirloomOnDeath) {
+          this.ageSystem._bequeathHeirloomOnDeath(a);
+        }
         a.health = 0;
         if (a.needs) a.needs.health = 0;
         if (a.combat) a.combat.health = 0;
@@ -2883,6 +3019,9 @@ export class Simulation {
         if (a.needs) a.needs.health = a.health;
         if (a.combat) a.combat.health = a.health;
         if (a.health <= 0) {
+          if (!a._heirloomBequeathed && this.ageSystem?._bequeathHeirloomOnDeath) {
+            this.ageSystem._bequeathHeirloomOnDeath(a);
+          }
           a.alive = false;
           a.deathCause = "nuclear_blast";
           if (typeof a.addLifeEvent === "function") {
@@ -3041,6 +3180,98 @@ export class Simulation {
     return dossier;
   }
 
+  /**
+   * Pure zero-RNG 1-2 sentence historical biography or epitaph synthesized from an agent's life record.
+   */
+  buildAgentBiography(agentOrDossier, overrides = {}) {
+    if (!agentOrDossier) return "";
+    const alive = overrides.alive !== undefined ? overrides.alive : (agentOrDossier.alive !== false);
+    const fullName = overrides.fullName || agentOrDossier.fullName || formatAgentFullName(agentOrDossier);
+    const surname = agentOrDossier.surname || null;
+    const gen = agentOrDossier.generation ?? 1;
+    const age = Math.floor(overrides.age ?? agentOrDossier.age ?? 0);
+    const home = overrides.settlementName || agentOrDossier.settlementName || (
+      agentOrDossier.settlementId != null
+        ? (this.settlementSystem?.settlements?.get(agentOrDossier.settlementId)?.name || "the Wilds")
+        : "the Wilds"
+    );
+    const job = String(agentOrDossier.jobTitle || agentOrDossier.job || "citizen");
+    const kills = agentOrDossier.kills || 0;
+    const battles = agentOrDossier.battlesFought || 0;
+    const built = agentOrDossier.buildingsBuilt || 0;
+    const isMonarch = !!agentOrDossier.isMonarch;
+    const heirloomName = agentOrDossier.heirloom?.name || null;
+    const weapon = agentOrDossier.legendaryWeapon || null;
+    const childCount = Array.isArray(agentOrDossier.children)
+      ? agentOrDossier.children.length
+      : (agentOrDossier.children || 0);
+    const deathCause = overrides.deathCause || agentOrDossier.deathCause || "natural causes";
+
+    let roleClause = `a ${job.toLowerCase()} of ${home}`;
+    if (isMonarch) {
+      roleClause = `sovereign ruler of ${home}`;
+    } else if (weapon || kills >= 3) {
+      roleClause = `a decorated champion of ${home} (${kills} kills across ${battles} battles)`;
+    } else if (built >= 2) {
+      roleClause = `a master builder of ${home} who raised ${built} structures`;
+    } else if (age >= 58) {
+      roleClause = `a respected elder ${job.toLowerCase()} of ${home}`;
+    }
+
+    const houseClause = surname ? ` (House ${surname}, Gen ${gen})` : "";
+    const firstSentence = alive
+      ? `${fullName}${houseClause} is ${roleClause}, now aged ${age}.`
+      : `${fullName}${houseClause} served as ${roleClause} before passing at age ${age} (${String(deathCause).replace(/_/g, " ")}).`;
+
+    const details = [];
+    if (weapon && !isMonarch && kills < 3) details.push(`wielded ${weapon}`);
+    if (built === 1) details.push("raised 1 civic landmark");
+    else if (built >= 2 && (isMonarch || weapon || kills >= 3)) details.push(`built ${built} landmarks`);
+    if (heirloomName) details.push(`${alive ? "guards" : "carried"} the heirloom "${heirloomName}"`);
+    if (childCount > 0) details.push(`parented ${childCount} ${childCount === 1 ? "child" : "children"}`);
+
+    if (details.length === 0) return firstSentence;
+    const secondSentence = details.length === 1
+      ? `In life they ${details[0]}.`
+      : `In life they ${details.slice(0, -1).join(", ")} and ${details[details.length - 1]}.`;
+    return `${firstSentence} ${secondSentence}`;
+  }
+
+  _getBuiltStructuresForAgent(agentId) {
+    if (agentId == null || !Array.isArray(this.buildings)) return [];
+    const results = [];
+    for (const b of this.buildings) {
+      if (!b) continue;
+      const isLead = b.builtByAgentId === agentId;
+      const isRenovator = b.upgradedByAgentId === agentId ||
+        (Array.isArray(b.upgradeHistory) && b.upgradeHistory.some(u => u && u.byAgentId === agentId));
+      const isContrib = Array.isArray(b.contributors) && b.contributors.some(c => c && c.id === agentId);
+      if (!isLead && !isRenovator && !isContrib) continue;
+      const bType = b.buildingType || b.type || "structure";
+      const meta = BUILDING_METADATA[bType];
+      const sName = b.settlementId != null ? (this.settlementSystem?.settlements?.get(b.settlementId)?.name || null) : null;
+      results.push({
+        id: b.id,
+        buildingType: bType,
+        name: b.customName || meta?.name || String(bType).replace(/_/g, " "),
+        customName: b.customName || null,
+        level: b.level || 1,
+        maxLevel: b.maxLevel || meta?.maxLevel || 3,
+        settlementName: sName,
+        builtYear: b.builtYear ?? null,
+        builtInEra: b.builtInEra ?? meta?.minEra ?? 1,
+        builtEraName: b.builtEraName ?? null,
+        isHeritage: Boolean(b.isHeritage || meta?.isMonument || String(bType).startsWith("monument_")),
+        isRuined: Boolean(b.isRuined),
+        role: isLead ? "lead" : (isRenovator ? "renovator" : "contributor"),
+        x: b.x,
+        y: b.y,
+      });
+    }
+    results.sort((a, b) => (Number(b.isHeritage) - Number(a.isHeritage)) || (b.level - a.level) || (a.id - b.id));
+    return results.slice(0, 16);
+  }
+
   buildAgentDossier(agent, overrides = {}) {
     if (!agent) return null;
     const settlementName = agent.settlementId
@@ -3050,11 +3281,11 @@ export class Simulation {
     const resolveRef = (id) => {
       if (id == null) return null;
       const live = this._agentById(id);
-      if (live) return { id: live.id, name: live.name, alive: !!live.alive };
+      if (live) return { id: live.id, name: formatAgentFullName(live), alive: !!live.alive };
       const archived = Array.isArray(this._deadDossiers) ? this._deadDossiers.find(d => d.id === id) : null;
-      if (archived) return { id: archived.id, name: archived.name, alive: false };
+      if (archived) return { id: archived.id, name: archived.fullName || archived.name, alive: false };
       const hero = Array.isArray(this.fallenHeroes) ? this.fallenHeroes.find(h => h.id === id) : null;
-      if (hero) return { id: hero.id, name: hero.name, alive: false };
+      if (hero) return { id: hero.id, name: hero.fullName || hero.name, alive: false };
       return { id, name: `#${id}`, alive: false };
     };
 
@@ -3089,23 +3320,33 @@ export class Simulation {
       rivals.sort((a, b) => b.score - a.score || a.id - b.id);
     }
 
-    return {
+    const aliveFlag = overrides.alive !== undefined ? overrides.alive : agent.alive !== false;
+    const deathCause = overrides.deathCause ?? agent.deathCause ?? null;
+    const fullName = formatAgentFullName(agent);
+    const builtStructures = this._getBuiltStructuresForAgent(agent.id);
+    const dossier = {
       id: agent.id,
       name: agent.name,
       surname: agent.surname ?? null,
+      fullName,
       epithet: agent.epithet ?? null,
       age: Math.floor(agent.age || 0),
       maxAge: Math.floor(agent.maxAge || 72),
       lifeStage: agent.lifeStage || "adult",
       gender: agent.gender || "neutral",
-      alive: overrides.alive !== undefined ? overrides.alive : agent.alive !== false,
-      deathCause: overrides.deathCause ?? agent.deathCause ?? null,
-      deathTick: overrides.alive === false ? (this.clock?.tick ?? 0) : null,
+      alive: aliveFlag,
+      deathCause,
+      deathTick: aliveFlag === false ? (this.clock?.tick ?? 0) : null,
       job: agent.job || "unemployed",
       jobTitle: agent.jobTitle || agent.job || "Unemployed",
       settlementId: agent.settlementId ?? null,
       settlementName,
       generation: agent.generation ?? 1,
+      buildingsBuilt: agent.buildingsBuilt || 0,
+      builtStructures,
+      heirloom: agent.heirloom ? { ...agent.heirloom } : null,
+      x: agent.x,
+      y: agent.y,
       traits: agent.personality ? { ...agent.personality } : {},
       skills: agent.skills ? { ...agent.skills } : {},
       kills: agent.kills || 0,
@@ -3127,6 +3368,11 @@ export class Simulation {
       rivals: rivals.slice(0, 6),
       lifeHistory: Array.isArray(agent.lifeHistory) ? agent.lifeHistory.map(e => ({ ...e })) : []
     };
+    dossier.biography = this.buildAgentBiography({
+      ...dossier,
+      children: children.length
+    }, { alive: aliveFlag, deathCause, settlementName, fullName });
+    return dossier;
   }
 
   getAgentDossier(agentOrId) {
@@ -3138,15 +3384,25 @@ export class Simulation {
     }
     if (Array.isArray(this._deadDossiers)) {
       const archived = this._deadDossiers.find(d => d.id === id);
-      if (archived) return archived;
+      if (archived) {
+        if (!archived.biography) archived.biography = this.buildAgentBiography(archived, { alive: false });
+        if (!archived.fullName) archived.fullName = formatAgentFullName(archived);
+        const liveBuilt = this._getBuiltStructuresForAgent(id);
+        return liveBuilt.length > 0 || !archived.builtStructures
+          ? { ...archived, builtStructures: liveBuilt }
+          : archived;
+      }
     }
     if (Array.isArray(this.fallenHeroes)) {
       const hero = this.fallenHeroes.find(h => h.id === id);
       if (hero) {
+        const deathTick = hero.deathTick || 0;
+        const fullName = hero.fullName || formatAgentFullName(hero);
         return {
           id: hero.id,
           name: hero.name,
-          surname: null,
+          surname: hero.surname || null,
+          fullName,
           epithet: hero.epithet || null,
           age: hero.age || 0,
           maxAge: hero.age || 72,
@@ -3154,12 +3410,17 @@ export class Simulation {
           gender: "neutral",
           alive: false,
           deathCause: hero.cause || "combat",
-          deathTick: hero.deathTick || 0,
+          deathTick,
           job: "soldier",
-          jobTitle: "Fallen Hero",
+          jobTitle: hero.isMonarch ? "Fallen Sovereign" : "Fallen Hero",
           settlementId: null,
           settlementName: hero.settlementName || "Wilds",
-          generation: 1,
+          generation: hero.generation ?? 1,
+          buildingsBuilt: hero.buildingsBuilt || 0,
+          builtStructures: this._getBuiltStructuresForAgent(hero.id),
+          heirloom: hero.heirloom ? { ...hero.heirloom } : null,
+          x: hero.x,
+          y: hero.y,
           traits: {},
           skills: {},
           kills: hero.kills || 0,
@@ -3179,8 +3440,9 @@ export class Simulation {
           siblings: [],
           friends: [],
           rivals: [],
+          biography: hero.biography || this.buildAgentBiography(hero, { alive: false, fullName }),
           lifeHistory: [
-            { tick: hero.deathTick || 0, year: Math.floor((hero.deathTick || 0) / 100) + 1, kind: "DEATH", icon: "🕯️", text: `Fell (${hero.cause || "combat"}) with ${hero.kills || 0} kills.`, milestone: true }
+            { tick: deathTick, year: Math.floor(deathTick / 400) + 1, kind: "DEATH", icon: "🕯️", text: `Fell (${hero.cause || "combat"}) with ${hero.kills || 0} kills.`, milestone: true }
           ]
         };
       }
@@ -3189,6 +3451,230 @@ export class Simulation {
       return this.buildAgentDossier(agentOrId, { alive: false });
     }
     return null;
+  }
+
+  /**
+   * Read-only roster of living notables, multi-generation family bloodlines, and fallen memorials.
+   * Deterministic: zero RNG draws, pure sort by notability & ID.
+   */
+  getHistoricalPeopleRoster() {
+    const settlementNameOf = (sid) =>
+      sid != null ? (this.settlementSystem?.settlements?.get(sid)?.name || "Wilds") : "Wilds";
+
+    const scoreLiving = (a) => (
+      (a.isMonarch ? 100 : 0) +
+      (a.legendaryWeapon ? 45 : 0) +
+      (a.heirloom ? 30 : 0) +
+      ((a.kills || 0) * 14) +
+      ((a.buildingsBuilt || 0) * 12) +
+      (a.epithet ? 18 : 0) +
+      ((a.lifeHistory?.length || 0) * 2) +
+      (a.age >= 58 ? 8 : 0)
+    );
+
+    const livingAgents = (this.agents || []).filter(a => a && a.alive);
+    const livingLegends = livingAgents
+      .slice()
+      .sort((a, b) => (scoreLiving(b) - scoreLiving(a)) || (a.id - b.id))
+      .slice(0, 60)
+      .map(a => {
+        const sName = settlementNameOf(a.settlementId);
+        const fullName = formatAgentFullName(a);
+        return {
+          id: a.id,
+          name: a.name,
+          surname: a.surname || null,
+          fullName,
+          epithet: a.epithet || null,
+          age: Math.floor(a.age || 0),
+          job: a.job || "unemployed",
+          jobTitle: a.jobTitle || a.job || "Citizen",
+          settlementId: a.settlementId ?? null,
+          settlementName: sName,
+          generation: a.generation ?? 1,
+          isMonarch: !!a.isMonarch,
+          kills: a.kills || 0,
+          battlesFought: a.battlesFought || 0,
+          buildingsBuilt: a.buildingsBuilt || 0,
+          legendaryWeapon: a.legendaryWeapon || null,
+          heirloom: a.heirloom ? { ...a.heirloom } : null,
+          biography: this.buildAgentBiography(a, { alive: true, settlementName: sName, fullName }),
+          x: a.x,
+          y: a.y,
+          lifeHistoryCount: Array.isArray(a.lifeHistory) ? a.lifeHistory.length : 0,
+        };
+      });
+
+    // Fallen Archives: merge _deadDossiers & fallenHeroes keyed by id
+    const fallenMap = new Map();
+    if (Array.isArray(this._deadDossiers)) {
+      for (const d of this._deadDossiers) {
+        if (!d || d.id == null) continue;
+        fallenMap.set(d.id, {
+          id: d.id,
+          name: d.name,
+          surname: d.surname || null,
+          fullName: d.fullName || formatAgentFullName(d),
+          epithet: d.epithet || null,
+          age: Math.floor(d.age || 0),
+          deathCause: d.deathCause || "natural",
+          deathTick: d.deathTick ?? 0,
+          settlementId: d.settlementId ?? null,
+          settlementName: d.settlementName || "Wilds",
+          generation: d.generation ?? 1,
+          isMonarch: !!d.isMonarch,
+          kills: d.kills || 0,
+          battlesFought: d.battlesFought || 0,
+          buildingsBuilt: d.buildingsBuilt || 0,
+          legendaryWeapon: d.legendaryWeapon || null,
+          heirloom: d.heirloom ? { ...d.heirloom } : null,
+          biography: d.biography || this.buildAgentBiography(d, { alive: false }),
+          x: d.x ?? null,
+          y: d.y ?? null,
+          lifeHistoryCount: Array.isArray(d.lifeHistory) ? d.lifeHistory.length : 0,
+        });
+      }
+    }
+    if (Array.isArray(this.fallenHeroes)) {
+      for (const h of this.fallenHeroes) {
+        if (!h || h.id == null || fallenMap.has(h.id)) continue;
+        const fullName = h.fullName || formatAgentFullName(h);
+        fallenMap.set(h.id, {
+          id: h.id,
+          name: h.name,
+          surname: h.surname || null,
+          fullName,
+          epithet: h.epithet || null,
+          age: Math.floor(h.age || 0),
+          deathCause: h.cause || "combat",
+          deathTick: h.deathTick ?? 0,
+          settlementId: h.settlementId ?? null,
+          settlementName: h.settlementName || "Wilds",
+          generation: h.generation ?? 1,
+          isMonarch: !!h.isMonarch,
+          kills: h.kills || 0,
+          battlesFought: h.battlesFought || 0,
+          buildingsBuilt: h.buildingsBuilt || 0,
+          legendaryWeapon: h.legendaryWeapon || null,
+          heirloom: h.heirloom ? { ...h.heirloom } : null,
+          biography: h.biography || this.buildAgentBiography(h, { alive: false, fullName }),
+          x: h.x ?? null,
+          y: h.y ?? null,
+          lifeHistoryCount: 1,
+        });
+      }
+    }
+
+    const scoreFallen = (d) => (
+      (d.isMonarch ? 100 : 0) +
+      (d.legendaryWeapon ? 45 : 0) +
+      (d.heirloom ? 25 : 0) +
+      ((d.kills || 0) * 12) +
+      ((d.buildingsBuilt || 0) * 10) +
+      ((d.deathTick || 0) * 0.001)
+    );
+    const fallenArchives = Array.from(fallenMap.values())
+      .sort((a, b) => (scoreFallen(b) - scoreFallen(a)) || ((b.deathTick || 0) - (a.deathTick || 0)) || (a.id - b.id))
+      .slice(0, 60);
+
+    // Group Family Bloodlines by surname across living + archived dead
+    const houses = new Map();
+    const touchHouse = (person, alive) => {
+      if (!person?.surname) return;
+      let house = houses.get(person.surname);
+      if (!house) {
+        house = {
+          surname: person.surname,
+          livingCount: 0,
+          fallenCount: 0,
+          maxGeneration: 1,
+          totalKills: 0,
+          totalBuildingsBuilt: 0,
+          originSettlement: null,
+          _originGen: 999,
+          _originId: 999999999,
+          settlementSet: new Set(),
+          heirloomSet: new Set(),
+          heirloomMap: new Map(),
+          members: [],
+        };
+        houses.set(person.surname, house);
+      }
+      if (alive) house.livingCount++;
+      else house.fallenCount++;
+      const gen = person.generation ?? 1;
+      house.maxGeneration = Math.max(house.maxGeneration, gen);
+      house.totalKills += person.kills || 0;
+      house.totalBuildingsBuilt += person.buildingsBuilt || 0;
+      const sName = alive ? settlementNameOf(person.settlementId) : person.settlementName;
+      if (sName && sName !== "Wilds") {
+        house.settlementSet.add(sName);
+        if (gen < house._originGen || (gen === house._originGen && person.id < house._originId)) {
+          house._originGen = gen;
+          house._originId = person.id;
+          house.originSettlement = sName;
+        }
+      }
+      const fullName = formatAgentFullName(person);
+      if (person.heirloom?.name) {
+        house.heirloomSet.add(person.heirloom.name);
+        const prev = house.heirloomMap.get(person.heirloom.name);
+        if (!prev || (alive && !prev.holderAlive) || (person.heirloom.generationsHeld || 1) > (prev.generationsHeld || 1)) {
+          house.heirloomMap.set(person.heirloom.name, {
+            ...person.heirloom,
+            holderId: person.id,
+            holderName: fullName,
+            holderAlive: alive,
+          });
+        }
+      }
+      house.members.push({
+        id: person.id,
+        fullName,
+        alive,
+        age: Math.floor(person.age || 0),
+        generation: gen,
+        isMonarch: !!person.isMonarch,
+        jobTitle: person.jobTitle || person.job || (alive ? "Citizen" : "Fallen"),
+        settlementName: sName || "Wilds",
+        epithet: person.epithet || null,
+        kills: person.kills || 0,
+        buildingsBuilt: person.buildingsBuilt || 0,
+        heirloomName: person.heirloom?.name || null,
+        heirloom: person.heirloom ? { ...person.heirloom } : null,
+      });
+    };
+
+    for (const a of livingAgents) touchHouse(a, true);
+    for (const d of fallenMap.values()) touchHouse(d, false);
+
+    const familyLines = Array.from(houses.values())
+      .map(h => {
+        h.members.sort((a, b) => (Number(b.alive) - Number(a.alive)) || (b.generation - a.generation) || (b.kills - a.kills) || (a.id - b.id));
+        const heirlooms = Array.from(h.heirloomMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+        return {
+          surname: h.surname,
+          livingCount: h.livingCount,
+          fallenCount: h.fallenCount,
+          maxGeneration: h.maxGeneration,
+          totalKills: h.totalKills,
+          totalBuildingsBuilt: h.totalBuildingsBuilt,
+          originSettlement: h.originSettlement,
+          totalMembersCount: h.members.length,
+          activeSettlements: Array.from(h.settlementSet).sort(),
+          heirloomNames: Array.from(h.heirloomSet).sort(),
+          heirlooms,
+          members: h.members.slice(0, 24),
+        };
+      })
+      .sort((a, b) =>
+        (b.maxGeneration - a.maxGeneration) ||
+        ((b.livingCount * 2 + b.fallenCount) - (a.livingCount * 2 + a.fallenCount)) ||
+        a.surname.localeCompare(b.surname)
+      )
+      .slice(0, 24);
+
+    return { livingLegends, familyLines, fallenArchives };
   }
 
   // Step H: "Warring Kingdoms" starter scenario. Takes the towns founded at

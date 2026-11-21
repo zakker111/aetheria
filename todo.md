@@ -94,3 +94,10 @@
 - [x] **Era 7 `Nuclear Age` (`☢️`)**: Automatic progression from Modern Era via resources/Atomic Reactor/warheads, expanding warhead capacity to 5, boosting enrichment, mobilizing up to 12-troop squads with dual heavy rocket artillery (`dmg 72+`, `splash 3.8`) and upgraded rifles (`dmg 52+`).
 - [x] **Devastating Total Wars & MAD Retaliation**: `totalWar` flag propagation on high-stakes & Nuclear Age wars with higher casualty tolerance (`78%` pop / `125` weariness), brutal siege bombardment/urban destruction, autonomous nuclear escalation, atomic casualty tracking in war ledgers, and automatic Mutual Assured Destruction (MAD) nuclear counter-strikes.
 - [x] **18 Automated Test Suites** (`tests/modern_nuclear_total_war.mjs`).
+
+## ✅ Phase 12 — Era 1–7 Heritage Landmarks, City Expansion & Historical Agent Lives (COMPLETE)
+- [x] **Era 1–6 Upgradable Civic Buildings & Era 1–7 Heritage Landmarks**: Lv 1–3 civic structure scaling (Windmill, Inn, Library, Apothecary, Castle, Bank, Factory, Research Lab, Radar Station, Nuclear Plant) plus distinct resilient Era 1–7 Grand Landmarks surviving cross-era conflicts and fires into the Modern Era.
+- [x] **Outward Urban Sprawl**: Continuously growing settlements expand outward into surrounding districts and Grand Metropolises.
+- [x] **Full Historical Lives, Houses & People Browser**: Deterministic multi-generation family surnames, Era-stamped `lifeHistory` timelines, landmark builder/upgrade attributions, heirloom weapon/artifact inheritance, synthesized biographies/epitaphs, and the searchable **People & Legends** roster inside Chancellery (`C`).
+- [x] **25 Automated Test Suites** (`tests/era_buildings_upgrades.mjs`, `tests/city_expansion_era_landmarks.mjs`, `tests/historical_lives_and_people.mjs`, `tests/combatdepth.mjs`, `tests/soldiers.mjs`).
+

@@ -156,6 +156,7 @@ export class ChronicleSystem {
       const locus = d.battleName ? `in the ${d.battleName}` : 'in mortal combat';
       this.add('war', `⚔️ ${killerStr} struck down ${victimStr} ${locus}.`, {
         icon: '⚔️',
+        agentId: d.killerId ?? d.victimId ?? null,
         killerId: d.killerId,
         victimId: d.victimId,
         x: d.x,
@@ -165,12 +166,14 @@ export class ChronicleSystem {
     bus.on('SUCCESSION_CRISIS_STARTED', (d) => {
       this.add('war', `👑 Succession Crisis in ${d.settlementName || 'a realm'}! ${d.claimantName || 'A pretender'} raised banners against ${d.monarchName || 'the crown'} (${d.reason || 'Disputed Legitimacy'}).`, {
         icon: '⚔️',
+        agentId: d.claimantId ?? null,
         settlementId: d.settlementId
       });
     });
     bus.on('CROWN_USURPED', (d) => {
       this.add('era', `👑 Usurpation! ${d.usurperName || 'A claimant'} seized the throne of ${d.settlementName || 'the realm'} (${d.dynastyName || 'Royal House'}).`, {
         icon: '👑',
+        agentId: d.usurperId ?? null,
         settlementId: d.settlementId
       });
     });
@@ -200,9 +203,22 @@ export class ChronicleSystem {
       });
     });
     bus.on('CONSTRUCTION_COMPLETED', (d) => {
-      if (d?.buildingType === 'dock') {
-        this.add('founding', `⚓ A harbor dock was completed at (${Math.round(d.x || 0)}, ${Math.round(d.y || 0)}), opening the waters to fishing and trade.`, {
+      const bt = d?.buildingType || '';
+      const builderBit = d?.builderName ? ` led by ${d.builderName}` : '';
+      if (bt === 'dock') {
+        this.add('founding', `⚓ A harbor dock${builderBit} was completed at (${Math.round(d.x || 0)}, ${Math.round(d.y || 0)}), opening the waters to fishing and trade.`, {
           icon: '⚓',
+          agentId: d.builderId ?? null,
+          buildingId: d.buildingId ?? null,
+          x: d.x,
+          y: d.y
+        });
+      } else if (String(bt).startsWith('monument_') || bt === 'castle' || bt === 'nuclear_plant') {
+        const label = d.customName || bt.replace(/_/g, ' ');
+        this.add('wonder', `🏛️ ${label}${builderBit} was completed at (${Math.round(d.x || 0)}, ${Math.round(d.y || 0)}).`, {
+          icon: '🏛️',
+          agentId: d.builderId ?? null,
+          buildingId: d.buildingId ?? null,
           x: d.x,
           y: d.y
         });

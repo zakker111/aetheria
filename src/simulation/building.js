@@ -51,7 +51,17 @@ export class Building {
     this.maxLevel = meta?.maxLevel || 3;
     this.upgradedAtTick = null;
     this.builtInEra = meta?.minEra || 1;
+    this.builtEraName = null;
     this.isHeritage = Boolean(meta?.isMonument || isMonumentBuildingType(buildingType));
+    this.customName = null;
+    this.builtByAgentId = null;
+    this.builtByName = null;
+    this.builtYear = null;
+    this.contributors = [];
+    this.upgradedByAgentId = null;
+    this.upgradedByName = null;
+    this.upgradeHistory = [];
+    this.dedication = null;
     // Apply storage capacity for the building type (drives warehouse demand)
     const cap = STORAGE_CAPACITY[buildingType];
     if (cap) this.capacity = cap;
@@ -157,8 +167,17 @@ export class Building {
       maxLevel: this.maxLevel || 3,
       upgradedAtTick: this.upgradedAtTick ?? null,
       builtInEra: this.builtInEra ?? 1,
+      builtEraName: this.builtEraName ?? null,
       isHeritage: Boolean(this.isHeritage),
       customName: this.customName ?? null,
+      builtByAgentId: this.builtByAgentId ?? null,
+      builtByName: this.builtByName ?? null,
+      builtYear: this.builtYear ?? null,
+      contributors: Array.isArray(this.contributors) ? this.contributors.map(c => ({ ...c })) : [],
+      upgradedByAgentId: this.upgradedByAgentId ?? null,
+      upgradedByName: this.upgradedByName ?? null,
+      upgradeHistory: Array.isArray(this.upgradeHistory) ? this.upgradeHistory.map(u => ({ ...u })) : [],
+      dedication: this.dedication ?? null,
       storage: { ...this.storage }
     };
   }
@@ -183,8 +202,17 @@ export class Building {
     building.maxLevel = data.maxLevel ?? (BUILDING_METADATA[data.buildingType]?.maxLevel || 3);
     building.upgradedAtTick = data.upgradedAtTick ?? null;
     if (data.builtInEra != null) building.builtInEra = data.builtInEra;
+    if (data.builtEraName != null) building.builtEraName = data.builtEraName;
     if (data.isHeritage != null) building.isHeritage = Boolean(data.isHeritage);
     if (data.customName != null) building.customName = data.customName;
+    if (data.builtByAgentId != null) building.builtByAgentId = data.builtByAgentId;
+    if (data.builtByName != null) building.builtByName = data.builtByName;
+    if (data.builtYear != null) building.builtYear = data.builtYear;
+    if (Array.isArray(data.contributors)) building.contributors = data.contributors.map(c => ({ ...c }));
+    if (data.upgradedByAgentId != null) building.upgradedByAgentId = data.upgradedByAgentId;
+    if (data.upgradedByName != null) building.upgradedByName = data.upgradedByName;
+    if (Array.isArray(data.upgradeHistory)) building.upgradeHistory = data.upgradeHistory.map(u => ({ ...u }));
+    if (data.dedication != null) building.dedication = data.dedication;
     building.storage = { ...data.storage };
     return building;
   }

@@ -991,11 +991,16 @@ export class WorldState {
 
   startFire(x, y, duration = 60) {
     if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
-    const idx = y * this.width + x;
+    const fx = x | 0, fy = y | 0;
+    const idx = fy * this.width + fx;
     this.fireTiles[idx] = Math.max(this.fireTiles[idx], duration);
     if (this.scorchedTiles) {
       this.scorchedTiles[idx] = Math.min(255, (this.scorchedTiles[idx] || 0) + 120);
     }
+    if (this._fireMinX === undefined || fx < this._fireMinX) this._fireMinX = fx;
+    if (this._fireMaxX === undefined || fx > this._fireMaxX) this._fireMaxX = fx;
+    if (this._fireMinY === undefined || fy < this._fireMinY) this._fireMinY = fy;
+    if (this._fireMaxY === undefined || fy > this._fireMaxY) this._fireMaxY = fy;
     // Perf: wake the fire tick loop in Simulation.updateEnvironment()
     if (this.simulation) this.simulation._fireActive = true;
     return true;
@@ -1128,6 +1133,7 @@ export class WorldState {
     const maxForestMoisture = isDrought ? 0.92 : 0.78;
     const maxGrassMoisture = isDrought ? 0.65 : 0.40;
 
+    let fMinX = w, fMaxX = -1, fMinY = h, fMaxY = -1;
     for (let y = 0; y < h; y++) {
       const row = y * w;
       for (let x = 0; x < w; x++) {
@@ -1140,7 +1146,14 @@ export class WorldState {
           continue;
         }
         burning++;
-        ft[idx] = burn - 1;
+        const nextBurn = burn - 1;
+        ft[idx] = nextBurn;
+        if (nextBurn > 0) {
+          if (x < fMinX) fMinX = x;
+          if (x > fMaxX) fMaxX = x;
+          if (y < fMinY) fMinY = y;
+          if (y > fMaxY) fMaxY = y;
+        }
         if (st) {
           st[idx] = Math.min(255, st[idx] + 2);
         }
@@ -1206,10 +1219,20 @@ export class WorldState {
       const nidx = cand[i];
       if (ft[nidx] <= 0) {
         ft[nidx] = newBurnDuration;
+        const nx = nidx % w;
+        const ny = (nidx / w) | 0;
+        if (nx < fMinX) fMinX = nx;
+        if (nx > fMaxX) fMaxX = nx;
+        if (ny < fMinY) fMinY = ny;
+        if (ny > fMaxY) fMaxY = ny;
         if (st) st[nidx] = Math.min(255, (st[nidx] || 0) + 90);
         burning++;
       }
     }
+    this._fireMinX = fMinX;
+    this._fireMaxX = fMaxX;
+    this._fireMinY = fMinY;
+    this._fireMaxY = fMaxY;
     return burning;
   }
 
@@ -1492,14 +1515,16 @@ export class WorldState {
     return pair;
   }
 
-  // Type-partitioned canonical scan cache: splits sorted entities once per
-  // (tile, r) cache miss into { agents, resources, buildings, animals } so
-  // Agent.perceive() stops scanning each category immediately upon hitting its cap.
+  // Type-partitioned canonical scan cache: partitions entities once per
+  // (tile, r) cache miss into { agents, resources, buildings, animals } and
+  // sorts each smaller bucket individually (numeric id sort avoids typeof
+  // branches in the common case) so Agent.perceive() stops immediately on cap.
   _getScanBuckets(x, y, r) {
     const key = ((y * this.width + x) << 6) | (r & 63);
     let buckets = this._scanBucketCache.get(key);
     if (buckets !== undefined) return buckets;
-    const list = this._getScan(x, y, r);
+    const cachedFull = this._scanCache.get(key);
+    const list = cachedFull !== undefined ? cachedFull : this.getEntitiesNear(x, y, r);
     const agents = [];
     const resources = [];
     const buildings = [];
@@ -1510,6 +1535,12 @@ export class WorldState {
       else if (e.type === 'resource') resources.push(e);
       else if (e.type === 'building') buildings.push(e);
       else if (e.type === 'animal' && e.alive !== false) animals.push(e);
+    }
+    if (cachedFull === undefined) {
+      if (agents.length > 1) agents.sort((a, b) => a.id - b.id);
+      if (resources.length > 1) resources.sort(_cmpEntityId);
+      if (buildings.length > 1) buildings.sort(_cmpEntityId);
+      if (animals.length > 1) animals.sort(_cmpEntityId);
     }
     buckets = { agents, resources, buildings, animals };
     this._scanBucketCache.set(key, buckets);

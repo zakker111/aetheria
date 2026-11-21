@@ -4632,6 +4632,7 @@ export class CanvasRenderer {
   renderUI() {
     if (!this.selectedEntity) return;
     const e = this.selectedEntity.entity || this.selectedEntity;
+    if (this.selectedEntity.kind === "agent" && e?.alive === false) return;
     if (e && (e.x !== undefined || e.centroidX !== undefined)) {
       const coords = this.getEntityRenderCoords(e);
       const elev = this.getInterpolatedElevation(coords.x, coords.y);

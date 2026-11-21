@@ -19,6 +19,8 @@ lerna-debug.log*
 diag*.log
 diag*.mjs
 coverage/
+playwright-report/
+test-results/
 
 # Environment files
 .env

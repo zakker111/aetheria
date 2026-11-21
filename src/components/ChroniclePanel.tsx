@@ -7,6 +7,8 @@ interface ChroniclePanelProps {
   onExportWorld?: () => void;
   onExportChronicle?: () => void;
   onPanTo?: (x: number, y: number) => void;
+  onSelectAgent?: (agentId: number) => void;
+  onSelectBuilding?: (buildingId: number) => void;
 }
 
 const ERA_FILTERS: Array<{ id: number | null; label: string }> = [
@@ -26,6 +28,8 @@ const ChroniclePanelComponent: React.FC<ChroniclePanelProps> = ({
   onExportWorld,
   onExportChronicle,
   onPanTo,
+  onSelectAgent,
+  onSelectBuilding,
 }) => {
   const [eraFilter, setEraFilter] = useState<number | null>(null);
 
@@ -152,28 +156,87 @@ const ChroniclePanelComponent: React.FC<ChroniclePanelProps> = ({
               No chronicle highlights recorded in Era {eraFilter} yet.
             </div>
           ) : (
-            filteredEntries.slice(0, 35).map((entry) => (
-              <div
-                key={entry.id}
-                onClick={() => {
-                  if (onPanTo && typeof entry.x === 'number' && typeof entry.y === 'number') {
-                    onPanTo(entry.x, entry.y);
-                  }
-                }}
-                style={{
-                  padding: '4px 0',
-                  borderBottom: '1px solid rgba(255, 255, 255, 0.04)',
-                  fontSize: '11px',
-                  color: '#cbd5e1',
-                  cursor: typeof entry.x === 'number' ? 'pointer' : 'default',
-                }}
-              >
-                <span style={{ fontSize: '9px', color: '#64748b', marginRight: '5px', fontVariantNumeric: 'tabular-nums' }}>
-                  {entry.date}
-                </span>
-                <span>{entry.text}</span>
-              </div>
-            ))
+            filteredEntries.slice(0, 35).map((entry) => {
+              const targetAgentId = entry.agentId ?? entry.killerId ?? entry.builderId ?? entry.victimId ?? null;
+              return (
+                <div
+                  key={entry.id}
+                  onClick={() => {
+                    if (onPanTo && typeof entry.x === 'number' && typeof entry.y === 'number') {
+                      onPanTo(entry.x, entry.y);
+                    }
+                  }}
+                  style={{
+                    padding: '4px 0',
+                    borderBottom: '1px solid rgba(255, 255, 255, 0.04)',
+                    fontSize: '11px',
+                    color: '#cbd5e1',
+                    cursor: typeof entry.x === 'number' ? 'pointer' : 'default',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start',
+                    gap: '6px',
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ fontSize: '9px', color: '#64748b', marginRight: '5px', fontVariantNumeric: 'tabular-nums' }}>
+                      {entry.date}
+                    </span>
+                    <span>{entry.text}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
+                    {entry.buildingId != null && onSelectBuilding && (
+                      <button
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          onSelectBuilding(entry.buildingId!);
+                        }}
+                        title="Inspect landmark structure"
+                        style={{
+                          background: 'rgba(245, 158, 11, 0.14)',
+                          border: '1px solid rgba(245, 158, 11, 0.35)',
+                          borderRadius: '4px',
+                          color: '#fbbf24',
+                          fontSize: '9px',
+                          fontWeight: 600,
+                          padding: '1px 5px',
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                          flexShrink: 0,
+                          marginTop: '1px',
+                        }}
+                      >
+                        🏛️ Site
+                      </button>
+                    )}
+                    {targetAgentId != null && onSelectAgent && (
+                      <button
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          onSelectAgent(targetAgentId);
+                        }}
+                        title="Inspect historical figure"
+                        style={{
+                          background: 'rgba(56, 189, 248, 0.14)',
+                          border: '1px solid rgba(56, 189, 248, 0.35)',
+                          borderRadius: '4px',
+                          color: '#38bdf8',
+                          fontSize: '9px',
+                          fontWeight: 600,
+                          padding: '1px 5px',
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                          flexShrink: 0,
+                          marginTop: '1px',
+                        }}
+                      >
+                        👤 Inspect
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })
           )
         ) : events.length === 0 ? (
           <div style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: '11px' }}>

@@ -27,55 +27,12 @@ export class Interaction {
       this.useTool(x, y);
     };
     window.addEventListener("worldclick", this._onWorldClick);
-
-    this._onKeyDown = (e) => {
-      if (document.body?.dataset?.screen === "title") return;
-      const tag = document.activeElement?.tagName || "";
-      if (/^(INPUT|TEXTAREA|SELECT)$/.test(tag)) return;
-      switch (e.key) {
-        case "1":
-          this.setTool("inspect");
-          break;
-        case "2":
-          this.setTool("spawn_agent");
-          break;
-        case "3":
-          this.setTool("create_food");
-          break;
-        case "4":
-          this.setTool("create_water");
-          break;
-        case "5":
-          this.setTool("create_wood");
-          break;
-        case "6":
-          this.setTool("create_ore");
-          break;
-        case "7":
-          this.setTool("build_house");
-          break;
-        case "8":
-          this.setTool("build_workshop");
-          break;
-        case "9":
-          this.setTool("build_farm");
-          break;
-        case "0":
-          this.setTool("bless");
-          break;
-      }
-    };
-    document.addEventListener("keydown", this._onKeyDown);
   }
 
   destroy() {
     if (typeof window !== "undefined" && this._onWorldClick) {
       window.removeEventListener("worldclick", this._onWorldClick);
       this._onWorldClick = null;
-    }
-    if (typeof document !== "undefined" && this._onKeyDown) {
-      document.removeEventListener("keydown", this._onKeyDown);
-      this._onKeyDown = null;
     }
   }
   
@@ -499,19 +456,68 @@ export class Interaction {
       }
 
       case "remove": {
-        this.simulation.removeResource(x, y);
-        // Also check if any building at tile
         const bIdx = this.simulation.buildings.findIndex(b => Math.hypot(b.x - x, b.y - y) < 1.5);
         if (bIdx !== -1) {
           const b = this.simulation.buildings[bIdx];
           this.simulation.world.removeFromSpatialIndex(Math.floor(b.x), Math.floor(b.y), b);
+          this.simulation.world.entityRegistry?.delete(b.id);
           this.simulation.buildings.splice(bIdx, 1);
+          if (b.settlementId != null) {
+            const ownerSettlement = this.simulation.settlementSystem?.settlements?.get(b.settlementId);
+            if (ownerSettlement && Array.isArray(ownerSettlement.buildings)) {
+              ownerSettlement.buildings = ownerSettlement.buildings.filter(item => item && item.id !== b.id);
+            }
+          }
+          if (b.buildingType === "workshop" && this.simulation.craftingSystem?.workshops) {
+            this.simulation.craftingSystem.workshops.delete(b.id);
+          }
+          if (this.selectedEntity?.kind === "building" && this.selectedEntity.entity?.id === b.id) {
+            this.selectedEntity = null;
+            if (this.renderer) this.renderer.selectedEntity = null;
+          }
           soundManager.playBuild();
           this.notify("Building removed!");
-        } else {
+          break;
+        }
+
+        const removedRes = this.simulation.removeResource(x, y);
+        if (removedRes) {
           soundManager.playClick();
           this.notify("Resource removed!");
+          break;
         }
+
+        const fort = this.simulation.fortificationSystem;
+        const seg = fort?.getSegmentAt?.(tx, ty);
+        if (seg && fort) {
+          fort.segments.delete(seg.tileIdx);
+          const sList = fort.segmentsBySettlement?.get(seg.settlementId);
+          if (Array.isArray(sList)) {
+            fort.segmentsBySettlement.set(seg.settlementId, sList.filter(item => item.id !== seg.id));
+          }
+          if (fort._wallGrid && seg.tileIdx >= 0 && seg.tileIdx < fort._wallGrid.length) {
+            fort._wallGrid[seg.tileIdx] = 0;
+          }
+          soundManager.playBuild();
+          this.notify("Fortification segment removed!");
+          break;
+        }
+
+        if (this.simulation.world.isBridge?.(tx, ty)) {
+          this.simulation.world.setBridge(tx, ty, false);
+          if (Array.isArray(this.simulation.infrastructureSystem?.bridges)) {
+            this.simulation.infrastructureSystem.bridges = this.simulation.infrastructureSystem.bridges.filter(br => {
+              if (!Array.isArray(br.tiles)) return true;
+              br.tiles = br.tiles.filter(t => !(t.x === tx && t.y === ty));
+              return br.tiles.length > 0;
+            });
+          }
+          soundManager.playBuild();
+          this.notify("Bridge deck removed!");
+          break;
+        }
+
+        this.notify("Nothing to remove here.");
         break;
       }
     }

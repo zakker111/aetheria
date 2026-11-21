@@ -681,6 +681,23 @@ export class CivilizationAgeSystem {
           tick,
         });
 
+        // Record Era transition milestone on living citizens of the settlement (deterministic id order)
+        if (settlement.agentIds && typeof this.sim._agentById === 'function') {
+          const citizenIds = Array.from(settlement.agentIds).sort((a, b) => a - b);
+          for (const cid of citizenIds) {
+            const cit = this.sim._agentById(cid);
+            if (cit && cit.alive && (cit.age >= 12 || cit.isMonarch) && typeof cit.addLifeEvent === 'function') {
+              cit.addLifeEvent(
+                'ERA_DAWN',
+                `Witnessed ${settlement.name} enter the ${nextAge.name}`,
+                tick,
+                nextAge.icon || '🌟',
+                true
+              );
+            }
+          }
+        }
+
         // Place new Era's grand monument alongside surviving earlier-era heritage structures
         this.placeMonumentBlueprint(settlement, nextAge);
         const eraWonder = WONDER_BY_ERA[nextAge.id];

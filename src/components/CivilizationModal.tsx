@@ -1,11 +1,11 @@
-import React, { useState, useMemo } from 'react';
-import { Simulation } from '../simulation/simulation.js';
+import React, { useState, useEffect } from 'react';
 
 interface CivilizationModalProps {
   isOpen: boolean;
   onClose: () => void;
   simulation: any;
   onSelectAgent?: (id: number) => void;
+  onSelectBuilding?: (buildingId: number) => void;
   onImposeSanctions?: (fromId: number, targetId: number) => void;
   onIssueUltimatum?: (fromId: number, targetId: number, demand?: string) => void;
   onLaunchNuke?: (attackerId: number, targetId: number) => void;
@@ -16,6 +16,7 @@ interface CivilizationModalProps {
   onExportChronicle?: () => void;
   onImportWorld?: (file: File) => void;
   onPanTo?: (x: number, y: number) => void;
+  onFollowAgent?: (id: number) => void;
 }
 
 export const CivilizationModal: React.FC<CivilizationModalProps> = ({
@@ -23,6 +24,7 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
   onClose,
   simulation,
   onSelectAgent,
+  onSelectBuilding,
   onImposeSanctions,
   onIssueUltimatum,
   onLaunchNuke,
@@ -33,6 +35,7 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
   onExportChronicle,
   onImportWorld,
   onPanTo,
+  onFollowAgent,
 }) => {
   const [activeTab, setActiveTab] = useState<'dynasties' | 'diplomacy' | 'warroom' | 'wonders' | 'heroes'>('dynasties');
   const [selectedDynastyId, setSelectedDynastyId] = useState<number | null>(null);
@@ -42,8 +45,24 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
   const [spyFromId, setSpyFromId] = useState<number | null>(null);
   const [spyTargetId, setSpyTargetId] = useState<number | null>(null);
   const [archiveEraFilter, setArchiveEraFilter] = useState<number | null>(null);
+  const [peopleSearch, setPeopleSearch] = useState('');
+  const [peopleFilter, setPeopleFilter] = useState<'all' | 'legends' | 'builders' | 'heirlooms'>('all');
+  const [peopleSettlementFilter, setPeopleSettlementFilter] = useState<string>('all');
+  const [selectedHouseSurname, setSelectedHouseSurname] = useState<string | null>(null);
   const [, setUiRevision] = useState(0);
   const archiveFileInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    setSelectedDynastyId(null);
+    setSelectedNodeId(null);
+    setSelectedSettlementId(null);
+    setMarriageTargetDynastyId(null);
+    setSpyFromId(null);
+    setSpyTargetId(null);
+    setSelectedHouseSurname(null);
+    setPeopleSearch('');
+    setPeopleSettlementFilter('all');
+  }, [simulation]);
 
   if (!isOpen || !simulation) return null;
 
@@ -102,13 +121,58 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
     bumpUi();
   };
 
-  // Living champions & fallen legends for Hall of Heroes
-  const livingHeroes = (sim.agents || [])
-    .filter((a: any) => a.alive && ((a.kills || 0) >= 1 || a.legendaryWeapon || a.epithet))
+  // Living legends, multi-generation bloodlines, and fallen memorials
+  const roster = sim.getHistoricalPeopleRoster?.() || null;
+  const rawLivingLegends: any[] = roster?.livingLegends || (sim.agents || [])
+    .filter((a: any) => a.alive)
     .slice()
-    .sort((a: any, b: any) => ((b.kills || 0) - (a.kills || 0)) || ((b.battlesFought || 0) - (a.battlesFought || 0)) || (a.id - b.id))
-    .slice(0, 18);
-  const fallenLegends = (sim.fallenHeroes || []).slice(0, 18);
+    .sort((a: any, b: any) => ((b.kills || 0) - (a.kills || 0)) || ((b.buildingsBuilt || 0) - (a.buildingsBuilt || 0)) || (a.id - b.id))
+    .slice(0, 48);
+  const rawFallenArchives: any[] = roster?.fallenArchives || (sim.fallenHeroes || []).slice(0, 36);
+  const rawFamilyLines: any[] = roster?.familyLines || [];
+
+  const settlementFilterOptions: string[] = Array.from(
+    new Set([
+      ...settlements.map((s: any) => s?.name).filter(Boolean),
+      ...rawLivingLegends.map((p: any) => p?.settlementName).filter((n: any) => n && n !== 'Wilds'),
+      ...rawFallenArchives.map((p: any) => p?.settlementName).filter((n: any) => n && n !== 'Wilds'),
+    ])
+  ).sort((a, b) => a.localeCompare(b));
+
+  const q = peopleSearch.trim().toLowerCase();
+  const matchesSettlement = (p: any) => {
+    if (peopleSettlementFilter === 'all') return true;
+    const sName = p.settlementName || (p.settlementId ? (settlements.find((s: any) => s.id === p.settlementId)?.name || 'Wilds') : 'Wilds');
+    return sName === peopleSettlementFilter;
+  };
+  const matchesRole = (p: any) => {
+    if (peopleFilter === 'legends') return Boolean(p.isMonarch || (p.kills || 0) >= 1 || p.legendaryWeapon || p.epithet);
+    if (peopleFilter === 'builders') return Boolean((p.buildingsBuilt || 0) >= 1 || p.job === 'builder' || /builder/i.test(p.jobTitle || ''));
+    if (peopleFilter === 'heirlooms') return Boolean(p.heirloom || p.legendaryWeapon);
+    return true;
+  };
+  const matchesQuery = (p: any) => {
+    if (!q) return true;
+    const hay = `${p.fullName || p.name || ''} ${p.surname || ''} ${p.settlementName || ''} ${p.jobTitle || ''} ${p.heirloom?.name || ''} ${p.legendaryWeapon || ''} ${p.biography || ''}`.toLowerCase();
+    return hay.includes(q);
+  };
+  const livingHeroes = rawLivingLegends.filter((p) => matchesSettlement(p) && matchesRole(p) && matchesQuery(p));
+  const fallenLegends = rawFallenArchives.filter((p) => matchesSettlement(p) && matchesRole(p) && matchesQuery(p));
+  const familyLines = rawFamilyLines.filter((f) => {
+    if (peopleSettlementFilter !== 'all') {
+      const hasTown = (f.activeSettlements || []).includes(peopleSettlementFilter) || f.originSettlement === peopleSettlementFilter;
+      if (!hasTown) return false;
+    }
+    if (!q) return true;
+    return f.surname.toLowerCase().includes(q)
+      || (f.activeSettlements || []).some((s: string) => s.toLowerCase().includes(q))
+      || (f.heirloomNames || []).some((h: string) => h.toLowerCase().includes(q))
+      || (f.members || []).some((m: any) => (m.fullName || '').toLowerCase().includes(q));
+  });
+  const selectedHouse = selectedHouseSurname
+    ? familyLines.find((f: any) => f.surname === selectedHouseSurname) || rawFamilyLines.find((f: any) => f.surname === selectedHouseSurname) || null
+    : null;
+
   const historicBattles = [...wars, ...warHistory]
     .flatMap((w: any) => (w.battles || []).map((b: any) => ({ ...b, attackerName: w.attackerName, defenderName: w.defenderName })))
     .filter((b: any) => b && b.name)
@@ -304,8 +368,8 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
               transition: 'all 0.15s ease',
             }}
           >
-            <span>🏆</span>
-            <span>Hall & Archives</span>
+            <span>👑</span>
+            <span>People & Legends</span>
           </button>
         </div>
 
@@ -898,7 +962,7 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
             >
               {(() => {
                 const diplomaticHistory: any[] = Array.isArray(sim.diplomacySystem?.diplomaticHistory)
-                  ? sim.diplomacySystem.diplomaticHistory.slice().reverse().slice(0, 24)
+                  ? sim.diplomacySystem.diplomaticHistory.slice(0, 24)
                   : [];
                 const activeSettlement = selectedSettlementId
                   ? settlements.find((s: any) => s.id === selectedSettlementId)
@@ -1661,10 +1725,10 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
                 <div>
                   <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#f8fafc' }}>
-                    Living Champions & Relic Bearers ({livingHeroes.length})
+                    People & Historical Archives ({livingHeroes.length} Living · {familyLines.length} Houses · {fallenLegends.length} Fallen)
                   </h2>
                   <div style={{ fontSize: '12px', color: '#94a3b8' }}>
-                    Warriors earn epithets on the field and forge named blades at three or more victories.
+                    Browse living citizens, monarchs, master builders, multi-generation bloodlines, and heirloom bearers.
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1741,6 +1805,75 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
                 </div>
               </div>
 
+              {/* Search, Settlement & Role Filter Bar */}
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', padding: '10px 12px', borderRadius: '10px', background: 'rgba(15, 23, 42, 0.7)', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                <input
+                  type="text"
+                  value={peopleSearch}
+                  onChange={(e) => setPeopleSearch(e.target.value)}
+                  placeholder="Search citizen, House surname, settlement, or heirloom..."
+                  style={{
+                    flex: '1 1 200px',
+                    padding: '6px 10px',
+                    borderRadius: '6px',
+                    border: '1px solid rgba(148, 163, 184, 0.28)',
+                    background: 'rgba(30, 41, 59, 0.85)',
+                    color: '#f8fafc',
+                    fontSize: '12px',
+                    outline: 'none',
+                  }}
+                />
+                <select
+                  aria-label="Filter by settlement"
+                  value={peopleSettlementFilter}
+                  onChange={(e) => setPeopleSettlementFilter(e.target.value)}
+                  style={{
+                    padding: '6px 10px',
+                    borderRadius: '6px',
+                    border: '1px solid rgba(148, 163, 184, 0.28)',
+                    background: 'rgba(30, 41, 59, 0.9)',
+                    color: '#f8fafc',
+                    fontSize: '12px',
+                    outline: 'none',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <option value="all">All Settlements</option>
+                  {settlementFilterOptions.map((sName) => (
+                    <option key={`sf_${sName}`} value={sName}>
+                      {sName}
+                    </option>
+                  ))}
+                </select>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {([
+                    { id: 'all', label: 'All People' },
+                    { id: 'legends', label: '👑 Monarchs & Heroes' },
+                    { id: 'builders', label: '🔨 Master Builders' },
+                    { id: 'heirlooms', label: '💍 Heirloom Bearers' },
+                  ] as const).map((rf) => (
+                    <button
+                      key={rf.id}
+                      onClick={() => setPeopleFilter(rf.id)}
+                      style={{
+                        padding: '5px 10px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        background: peopleFilter === rf.id ? '#f59e0b' : 'rgba(30, 41, 59, 0.85)',
+                        color: peopleFilter === rf.id ? '#0f172a' : '#cbd5e1',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {rf.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* Era-by-Era World History Timeline Filter */}
               <div style={{ padding: '14px', borderRadius: '10px', background: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
@@ -1778,127 +1911,489 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
                     ))}
                   </div>
                 </div>
-                <div style={{ maxHeight: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ maxHeight: '165px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                   {(() => {
                     const items = sim.chronicleSystem?.getHighlights?.(40, archiveEraFilter) || [];
                     if (items.length === 0) {
                       return <div style={{ fontSize: '12px', color: '#64748b' }}>No highlights recorded for this era yet.</div>;
                     }
-                    return items.map((ev: any) => (
-                      <div key={ev.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', fontSize: '12px', padding: '4px 6px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                        <span style={{ color: '#e2e8f0' }}>
-                          <span style={{ color: '#94a3b8', fontSize: '10px', marginRight: '6px', fontVariantNumeric: 'tabular-nums' }}>{ev.date}</span>
-                          {ev.text}
-                        </span>
-                        {onPanTo && typeof ev.x === 'number' && typeof ev.y === 'number' && (
-                          <button
-                            onClick={() => {
-                              onPanTo(ev.x, ev.y);
-                              onClose();
-                            }}
-                            style={{ background: 'transparent', border: 'none', color: '#38bdf8', fontSize: '11px', cursor: 'pointer', whiteSpace: 'nowrap' }}
-                          >
-                            Locate
-                          </button>
-                        )}
-                      </div>
-                    ));
+                    return items.map((ev: any) => {
+                      const targetAgentId = ev.agentId ?? ev.killerId ?? ev.builderId ?? ev.victimId ?? null;
+                      return (
+                        <div key={ev.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', fontSize: '12px', padding: '4px 6px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                          <span style={{ color: '#e2e8f0' }}>
+                            <span style={{ color: '#94a3b8', fontSize: '10px', marginRight: '6px', fontVariantNumeric: 'tabular-nums' }}>{ev.date}</span>
+                            {ev.text}
+                          </span>
+                          <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                            {ev.buildingId != null && onSelectBuilding && (
+                              <button
+                                onClick={() => {
+                                  onSelectBuilding(ev.buildingId);
+                                  onClose();
+                                }}
+                                style={{ background: 'transparent', border: 'none', color: '#f59e0b', fontSize: '11px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                              >
+                                Inspect Structure
+                              </button>
+                            )}
+                            {targetAgentId != null && onSelectAgent && (
+                              <button
+                                onClick={() => {
+                                  onSelectAgent(targetAgentId);
+                                  onClose();
+                                }}
+                                style={{ background: 'transparent', border: 'none', color: '#fbbf24', fontSize: '11px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                              >
+                                Inspect Person
+                              </button>
+                            )}
+                            {onPanTo && typeof ev.x === 'number' && typeof ev.y === 'number' && (
+                              <button
+                                onClick={() => {
+                                  onPanTo(ev.x, ev.y);
+                                  onClose();
+                                }}
+                                style={{ background: 'transparent', border: 'none', color: '#38bdf8', fontSize: '11px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                              >
+                                Locate
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    });
                   })()}
                 </div>
               </div>
 
-              {livingHeroes.length > 0 ? (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
-                  {livingHeroes.map((h: any) => {
-                    const homeName = h.settlementId ? (settlements.find(s => s.id === h.settlementId)?.name || 'Wilds') : 'Wilds';
-                    return (
-                      <div
-                        key={h.id}
-                        style={{
-                          padding: '14px',
-                          borderRadius: '10px',
-                          background: 'rgba(30, 41, 59, 0.65)',
-                          border: '1px solid rgba(255, 255, 255, 0.08)',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '6px',
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                          <div style={{ fontWeight: 700, fontSize: '14px', color: '#f8fafc' }}>
-                            {h.name}{h.epithet ? ` ${h.epithet}` : ''}
+              {/* Living People & Legends */}
+              <div>
+                <h3 style={{ margin: '0 0 8px', fontSize: '15px', fontWeight: 700, color: '#f8fafc' }}>
+                  Living Citizens & Legends ({livingHeroes.length})
+                </h3>
+                {livingHeroes.length > 0 ? (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '12px' }}>
+                    {livingHeroes.map((h: any) => {
+                      const homeName = h.settlementName || (h.settlementId ? (settlements.find(s => s.id === h.settlementId)?.name || 'Wilds') : 'Wilds');
+                      const displayName = h.fullName || `${h.name}${h.surname ? ` ${h.surname}` : ''}${h.epithet ? ` ${h.epithet}` : ''}`;
+                      return (
+                        <div
+                          key={h.id}
+                          style={{
+                            padding: '13px',
+                            borderRadius: '10px',
+                            background: 'rgba(30, 41, 59, 0.65)',
+                            border: `1px solid ${h.isMonarch ? 'rgba(251, 191, 36, 0.35)' : 'rgba(255, 255, 255, 0.08)'}`,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '6px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, fontSize: '14px', color: '#f8fafc' }}>
+                                {h.isMonarch ? '👑 ' : ''}{displayName}
+                              </div>
+                              <div style={{ fontSize: '11px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums', marginTop: '2px' }}>
+                                {homeName} · {h.jobTitle || 'Citizen'} · Age {Math.floor(h.age || 0)} · Gen {h.generation ?? 1}
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '5px', flexShrink: 0 }}>
+                              {onSelectAgent && (
+                                <button
+                                  onClick={() => {
+                                    onSelectAgent(h.id);
+                                    if (onPanTo && typeof h.x === 'number' && typeof h.y === 'number') onPanTo(h.x, h.y);
+                                    onClose();
+                                  }}
+                                  style={{
+                                    padding: '4px 8px',
+                                    background: 'rgba(56, 189, 248, 0.14)',
+                                    border: '1px solid rgba(56, 189, 248, 0.35)',
+                                    borderRadius: '6px',
+                                    color: '#38bdf8',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
+                                  Inspect
+                                </button>
+                              )}
+                              {onFollowAgent && (
+                                <button
+                                  onClick={() => {
+                                    if (onSelectAgent) onSelectAgent(h.id);
+                                    onFollowAgent(h.id);
+                                    onClose();
+                                  }}
+                                  style={{
+                                    padding: '4px 8px',
+                                    background: 'rgba(16, 185, 129, 0.14)',
+                                    border: '1px solid rgba(16, 185, 129, 0.35)',
+                                    borderRadius: '6px',
+                                    color: '#34d399',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
+                                  Follow
+                                </button>
+                              )}
+                            </div>
                           </div>
-                          {onPanTo && (
+                          <div style={{ fontSize: '11px', color: '#cbd5e1', fontVariantNumeric: 'tabular-nums' }}>
+                            ⚔️ {h.kills || 0} Kills · 🔨 {h.buildingsBuilt || 0} Built
+                            {h.lifeHistoryCount ? ` · 📜 ${h.lifeHistoryCount} Milestones` : ''}
+                          </div>
+                          {(h.heirloom || h.legendaryWeapon) && (
+                            <div style={{ fontSize: '11px', color: '#fbbf24', fontWeight: 600 }}>
+                              {h.heirloom ? `💍 Heirloom: ${h.heirloom.name}` : `🗡️ Relic: ${h.legendaryWeapon}`}
+                            </div>
+                          )}
+                          {h.biography && (
+                            <div style={{ fontSize: '11px', color: '#94a3b8', lineHeight: 1.45 }}>
+                              {h.biography}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={{ color: '#64748b', fontSize: '13px' }}>No living citizens match the current filter.</div>
+                )}
+              </div>
+
+              {/* Multi-Generation Family Bloodlines */}
+              {familyLines.length > 0 && (
+                <div>
+                  <h3 style={{ margin: '4px 0 8px', fontSize: '15px', fontWeight: 700, color: '#f8fafc' }}>
+                    Family Bloodlines & Houses ({familyLines.length})
+                  </h3>
+
+                  {selectedHouse && (
+                    <div
+                      style={{
+                        marginBottom: '12px',
+                        padding: '14px',
+                        borderRadius: '10px',
+                        background: 'rgba(15, 23, 42, 0.88)',
+                        border: '1px solid rgba(56, 189, 248, 0.35)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '10px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: '15px', color: '#bae6fd' }}>
+                            🛡️ House {selectedHouse.surname} Chronicle
+                          </div>
+                          <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
+                            {selectedHouse.originSettlement ? `Origin: ${selectedHouse.originSettlement} · ` : ''}
+                            Gen {selectedHouse.maxGeneration} · {selectedHouse.livingCount} Living · {selectedHouse.fallenCount} Fallen · ⚔️ {selectedHouse.totalKills || 0} Kills · 🔨 {selectedHouse.totalBuildingsBuilt || 0} Built
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => setSelectedHouseSurname(null)}
+                          style={{
+                            padding: '4px 10px',
+                            borderRadius: '6px',
+                            border: '1px solid rgba(148, 163, 184, 0.3)',
+                            background: 'rgba(30, 41, 59, 0.85)',
+                            color: '#cbd5e1',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          Close House View
+                        </button>
+                      </div>
+
+                      {Array.isArray(selectedHouse.heirlooms) && selectedHouse.heirlooms.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(234, 179, 8, 0.08)', border: '1px solid rgba(234, 179, 8, 0.22)' }}>
+                          <div style={{ fontSize: '11px', fontWeight: 700, color: '#fbbf24' }}>
+                            House Heirlooms &amp; Provenance ({selectedHouse.heirlooms.length})
+                          </div>
+                          {selectedHouse.heirlooms.map((hl: any) => (
+                            <div key={`hl_${hl.name}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', fontSize: '11px', color: '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
+                              <span>
+                                💍 <b>{hl.name}</b>
+                                {hl.originName ? ` · Origin: ${hl.originName}` : ''}
+                                {hl.originYear ? ` (Y${hl.originYear})` : ''}
+                                {hl.generationsHeld ? ` · ${hl.generationsHeld} gen` : ''}
+                                {` · ${hl.holderAlive ? 'Held by' : 'Last held by'} ${hl.holderName}`}
+                              </span>
+                              {onSelectAgent && hl.holderId != null && (
+                                <button
+                                  onClick={() => {
+                                    onSelectAgent(hl.holderId);
+                                    onClose();
+                                  }}
+                                  style={{ background: 'transparent', border: 'none', color: '#38bdf8', fontSize: '11px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                                >
+                                  Inspect Bearer
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '6px' }}>
+                        {(selectedHouse.members || []).map((m: any) => (
+                          <div
+                            key={`hd_${m.id}`}
+                            style={{
+                              padding: '7px 9px',
+                              borderRadius: '6px',
+                              background: 'rgba(30, 41, 59, 0.72)',
+                              border: `1px solid ${m.alive ? 'rgba(52, 211, 153, 0.28)' : 'rgba(148, 163, 184, 0.18)'}`,
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              gap: '6px',
+                            }}
+                          >
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: '11px', fontWeight: 700, color: m.alive ? '#f8fafc' : '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {m.isMonarch ? '👑 ' : m.alive ? '' : '🕯️ '}
+                                {m.fullName}
+                              </div>
+                              <div style={{ fontSize: '10px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+                                Gen {m.generation} · {m.jobTitle} · {m.settlementName || 'Wilds'} · {m.kills}K / {m.buildingsBuilt}B
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                              {onSelectAgent && (
+                                <button
+                                  onClick={() => {
+                                    onSelectAgent(m.id);
+                                    onClose();
+                                  }}
+                                  style={{
+                                    padding: '2px 6px',
+                                    borderRadius: '4px',
+                                    border: '1px solid rgba(56, 189, 248, 0.35)',
+                                    background: 'rgba(56, 189, 248, 0.14)',
+                                    color: '#38bdf8',
+                                    fontSize: '10px',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
+                                  Inspect
+                                </button>
+                              )}
+                              {m.alive && onFollowAgent && (
+                                <button
+                                  onClick={() => {
+                                    if (onSelectAgent) onSelectAgent(m.id);
+                                    onFollowAgent(m.id);
+                                    onClose();
+                                  }}
+                                  style={{
+                                    padding: '2px 6px',
+                                    borderRadius: '4px',
+                                    border: '1px solid rgba(16, 185, 129, 0.35)',
+                                    background: 'rgba(16, 185, 129, 0.14)',
+                                    color: '#34d399',
+                                    fontSize: '10px',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
+                                  Follow
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: '10px' }}>
+                    {familyLines.map((fam: any) => {
+                      const isExpanded = selectedHouseSurname === fam.surname;
+                      return (
+                        <div
+                          key={`house_${fam.surname}`}
+                          style={{
+                            padding: '12px',
+                            borderRadius: '8px',
+                            background: isExpanded ? 'rgba(30, 41, 59, 0.85)' : 'rgba(15, 23, 42, 0.65)',
+                            border: `1px solid ${isExpanded ? 'rgba(56, 189, 248, 0.5)' : 'rgba(56, 189, 248, 0.18)'}`,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '6px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ fontWeight: 700, fontSize: '13px', color: '#bae6fd' }}>
+                              🛡️ House {fam.surname}
+                            </span>
                             <button
-                              onClick={() => {
-                                if (onSelectAgent) onSelectAgent(h.id);
-                                onPanTo(h.x, h.y);
-                                onClose();
-                              }}
+                              onClick={() => setSelectedHouseSurname(isExpanded ? null : fam.surname)}
                               style={{
-                                padding: '4px 10px',
-                                background: 'rgba(56, 189, 248, 0.14)',
+                                padding: '2px 8px',
+                                borderRadius: '5px',
                                 border: '1px solid rgba(56, 189, 248, 0.35)',
-                                borderRadius: '6px',
-                                color: '#38bdf8',
-                                fontSize: '11px',
-                                fontWeight: 600,
+                                background: isExpanded ? '#38bdf8' : 'rgba(56, 189, 248, 0.12)',
+                                color: isExpanded ? '#0f172a' : '#38bdf8',
+                                fontSize: '10px',
+                                fontWeight: 700,
                                 cursor: 'pointer',
                                 whiteSpace: 'nowrap',
                               }}
                             >
-                              Locate
+                              {isExpanded ? 'Selected' : 'Explore Lineage'}
                             </button>
-                          )}
-                        </div>
-                        <div style={{ fontSize: '12px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
-                          {homeName} · {h.kills || 0} Kills · {h.battlesFought || 0} Battles · Age {Math.floor(h.age || 0)}
-                        </div>
-                        {h.legendaryWeapon && (
-                          <div style={{ fontSize: '12px', color: '#fbbf24', fontWeight: 600 }}>
-                            Relic Blade: {h.legendaryWeapon}
                           </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                          <div style={{ fontSize: '11px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+                            Gen {fam.maxGeneration} · {fam.livingCount} Living · {fam.fallenCount} Fallen
+                            {(fam.totalKills || 0) > 0 ? ` · ⚔️ ${fam.totalKills}` : ''}
+                            {(fam.totalBuildingsBuilt || 0) > 0 ? ` · 🔨 ${fam.totalBuildingsBuilt}` : ''}
+                          </div>
+                          {fam.activeSettlements?.length > 0 && (
+                            <div style={{ fontSize: '11px', color: '#cbd5e1' }}>
+                              🏘️ {fam.activeSettlements.join(', ')}
+                            </div>
+                          )}
+                          {fam.heirloomNames?.length > 0 && (
+                            <div style={{ fontSize: '11px', color: '#fbbf24' }}>
+                              💍 {fam.heirloomNames.join(', ')}
+                            </div>
+                          )}
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
+                            {(fam.members || []).slice(0, 8).map((m: any) => (
+                              <button
+                                key={`fam_m_${m.id}`}
+                                onClick={() => {
+                                  if (onSelectAgent) {
+                                    onSelectAgent(m.id);
+                                    onClose();
+                                  }
+                                }}
+                                style={{
+                                  padding: '2px 7px',
+                                  borderRadius: '4px',
+                                  border: `1px solid ${m.alive ? 'rgba(52, 211, 153, 0.35)' : 'rgba(148, 163, 184, 0.25)'}`,
+                                  background: m.alive ? 'rgba(16, 185, 129, 0.12)' : 'rgba(30, 41, 59, 0.6)',
+                                  color: m.alive ? '#a7f3d0' : '#94a3b8',
+                                  fontSize: '10px',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                {m.isMonarch ? '👑 ' : m.alive ? '' : '🕯️ '}
+                                {m.fullName} (G{m.generation})
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-              ) : (
-                <div style={{ color: '#64748b', fontSize: '13px' }}>No living champions have claimed battlefield laurels yet.</div>
               )}
 
+              {/* Fallen Memorials */}
               <div>
                 <h3 style={{ margin: '8px 0 4px', fontSize: '15px', fontWeight: 700, color: '#f8fafc' }}>
-                  Memorial of Fallen Legends ({fallenLegends.length})
+                  Memorial of Fallen Citizens & Legends ({fallenLegends.length})
                 </h3>
                 {fallenLegends.length > 0 ? (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '10px', marginTop: '8px' }}>
-                    {fallenLegends.map((h: any) => (
-                      <div
-                        key={`fallen_${h.id}`}
-                        style={{
-                          padding: '12px',
-                          borderRadius: '8px',
-                          background: 'rgba(15, 23, 42, 0.65)',
-                          border: '1px solid rgba(255, 255, 255, 0.07)',
-                        }}
-                      >
-                        <div style={{ fontWeight: 600, fontSize: '13px', color: '#e2e8f0' }}>
-                          {h.name}{h.epithet ? ` ${h.epithet}` : ''}
-                        </div>
-                        <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
-                          {h.settlementName} · {h.kills || 0} Kills · Died Age {h.age} ({h.cause})
-                        </div>
-                        {h.legendaryWeapon && (
-                          <div style={{ fontSize: '11px', color: '#d97706', marginTop: '2px' }}>
-                            Wielded {h.legendaryWeapon}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px', marginTop: '8px' }}>
+                    {fallenLegends.map((h: any) => {
+                      const displayName = h.fullName || `${h.name}${h.surname ? ` ${h.surname}` : ''}${h.epithet ? ` ${h.epithet}` : ''}`;
+                      return (
+                        <div
+                          key={`fallen_${h.id}`}
+                          style={{
+                            padding: '12px',
+                            borderRadius: '8px',
+                            background: 'rgba(15, 23, 42, 0.65)',
+                            border: '1px solid rgba(255, 255, 255, 0.08)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '5px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                            <div style={{ fontWeight: 600, fontSize: '13px', color: '#e2e8f0' }}>
+                              🕯️ {displayName}
+                            </div>
+                            <div style={{ display: 'flex', gap: '5px', flexShrink: 0 }}>
+                              {onSelectAgent && (
+                                <button
+                                  onClick={() => {
+                                    onSelectAgent(h.id);
+                                    onClose();
+                                  }}
+                                  style={{
+                                    padding: '3px 7px',
+                                    background: 'rgba(56, 189, 248, 0.14)',
+                                    border: '1px solid rgba(56, 189, 248, 0.35)',
+                                    borderRadius: '5px',
+                                    color: '#38bdf8',
+                                    fontSize: '10px',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  Inspect Dossier
+                                </button>
+                              )}
+                              {onPanTo && typeof h.x === 'number' && typeof h.y === 'number' && (
+                                <button
+                                  onClick={() => {
+                                    onPanTo(h.x, h.y);
+                                    onClose();
+                                  }}
+                                  style={{
+                                    padding: '3px 7px',
+                                    background: 'rgba(245, 158, 11, 0.14)',
+                                    border: '1px solid rgba(245, 158, 11, 0.35)',
+                                    borderRadius: '5px',
+                                    color: '#fbbf24',
+                                    fontSize: '10px',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  Locate
+                                </button>
+                              )}
+                            </div>
                           </div>
-                        )}
-                      </div>
-                    ))}
+                          <div style={{ fontSize: '11px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+                            {h.settlementName} · {h.kills || 0} Kills · {h.buildingsBuilt || 0} Built · Died Age {h.age} ({String(h.deathCause || h.cause || 'natural').replace(/_/g, ' ')})
+                          </div>
+                          {(h.heirloom || h.legendaryWeapon) && (
+                            <div style={{ fontSize: '11px', color: '#d97706' }}>
+                              {h.heirloom ? `💍 Carried "${h.heirloom.name}"` : `🗡️ Wielded ${h.legendaryWeapon}`}
+                            </div>
+                          )}
+                          {h.biography && (
+                            <div style={{ fontSize: '11px', color: '#cbd5e1', fontStyle: 'italic', lineHeight: 1.4 }}>
+                              “{h.biography}”
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
-                  <div style={{ color: '#64748b', fontSize: '12px' }}>No fallen champions or monarchs recorded yet.</div>
+                  <div style={{ color: '#64748b', fontSize: '12px' }}>No fallen citizens or legends recorded yet.</div>
                 )}
               </div>
             </div>
@@ -1937,7 +2432,9 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
                     <div>
                       <div style={{ fontWeight: 600, fontSize: '13px', color: '#f8fafc' }}>{b.name}</div>
                       <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
-                        {b.attackerName} vs {b.defenderName} · Day {Math.floor((b.tick || 0) / 100) + 1}
+                        {b.attackerName} vs {b.defenderName} · Year {Math.floor((b.tick || 0) / 400) + 1}
+                        {b.eraId ? ` · Era ${b.eraId}` : ''}
+                        {b.casualties ? ` · ${b.casualties} Fallen` : ''}
                       </div>
                     </div>
                     {onPanTo && typeof b.x === 'number' && typeof b.y === 'number' && (

@@ -9,6 +9,32 @@ const FIRST_NAMES = [
   "Hadrian", "Iris", "Jorah", "Kendra", "Lorcan", "Mira", "Nesta", "Osric"
 ];
 
+export const FAMILY_SURNAMES = [
+  "Ashford", "Blackwood", "Crestfall", "Dunmore", "Eldridge", "Fairbrook",
+  "Greymane", "Hawthorne", "Ironwood", "Kestrel", "Lockhart", "Moorland",
+  "Northwind", "Oakheart", "Pendleton", "Ravenscroft", "Stonehelm", "Thornwood",
+  "Underhill", "Valen", "Westbrook", "Windham", "Wintermere", "Alden",
+  "Bramwell", "Cromwell", "Davenport", "Everett", "Fletcher", "Galloway",
+  "Halstead", "Kensington"
+];
+
+// Zero-RNG deterministic surname helper derived from agent id + world seed.
+export function assignDeterministicSurname(agent, seed = 0) {
+  if (!agent) return FAMILY_SURNAMES[0];
+  if (agent.surname) return agent.surname;
+  const h = (((agent.id || 1) * 2654435761) ^ ((seed || 0) * 1597334677)) >>> 0;
+  agent.surname = FAMILY_SURNAMES[h % FAMILY_SURNAMES.length];
+  return agent.surname;
+}
+
+export function formatAgentFullName(agent) {
+  if (!agent) return "Unknown";
+  const base = agent.surname && !String(agent.name || "").includes(agent.surname)
+    ? `${agent.name || "Citizen"} ${agent.surname}`
+    : (agent.name || "Citizen");
+  return agent.epithet ? `${base} ${agent.epithet}` : base;
+}
+
 // Deterministic tick accessor: never consumes RNG, safe for goal scheduling.
 function tickOf(simulation) {
   return (simulation && simulation.clock && simulation.clock.tick) || 0;
@@ -58,6 +84,8 @@ export class Agent {
     this.name = FIRST_NAMES[Math.floor(this.rng.next() * FIRST_NAMES.length)];
     this.surname = null;      // family lineage name; assigned at birth or founding
     this.generation = 1;      // dynasty depth (children of surnamed parents = max+1)
+    this.heirloom = null;     // inherited or forged personal heirloom ({ name, kind, originName, originYear })
+    this.buildingsBuilt = 0;  // completed civic/monumental structures credited to this builder
     // Default initial agents are young adults (18-32), newborns are passed 0
     this.age = initialAge !== null ? initialAge : (18 + Math.floor(this.rng.next() * 14));
     this.maxAge = 58 + Math.floor(this.rng.next() * 24); // 58-81 years balanced lifespan
@@ -649,10 +677,10 @@ export class Agent {
           // a radius-10 spatial scan covers 100% of threats in O(1) vs O(agents).
           const scanList = desperate
             ? simulation.agents
-            : simulation.world._getScan(Math.floor(this.x), Math.floor(this.y), 10);
+            : simulation.world._getScanBuckets(Math.floor(this.x), Math.floor(this.y), 10).agents;
           for (let i = 0; i < scanList.length; i++) {
             const other = scanList[i];
-            if (other.type !== "agent" || !other.alive || other.militaryDuty) continue;
+            if (!other.alive || other.militaryDuty) continue;
             const osid = other.settlementId || (agentSetMap ? agentSetMap.get(other.id) : null);
             if (osid == null) continue;
             if (singleHostile !== -1 ? osid !== singleHostile : !hostileSet.has(osid)) continue;
@@ -667,17 +695,24 @@ export class Agent {
         threatX = this._warThreat.x; threatY = this._warThreat.y;
         threatDist = this._warThreat.dist; threatKind = "war";
       }
-      // Fire nearby? Only scan 7x7 tile window when fires actually exist in the world.
+      // Fire nearby? Only scan 7x7 tile window when agent is within 3 tiles of active fire bounds.
       const w = simulation.world;
-      if (simulation._fireActive && w.fireTiles) {
+      if (simulation._fireActive && w.fireTiles && threatKind !== "war") {
         const px = Math.floor(this.x), py = Math.floor(this.y);
-        for (let dy = -3; dy <= 3 && threatKind !== "war"; dy++) {
-          for (let dx = -3; dx <= 3; dx++) {
-            const fx = px + dx, fy = py + dy;
-            if (fx < 0 || fy < 0 || fx >= w.width || fy >= w.height) continue;
-            if (w.fireTiles[fy * w.width + fx] > 0) {
-              const d = Math.hypot(dx, dy);
-              if (d < threatDist) { threatDist = d; threatX = fx; threatY = fy; threatKind = "fire"; }
+        const fMinX = w._fireMinX ?? 0, fMaxX = w._fireMaxX ?? w.width;
+        const fMinY = w._fireMinY ?? 0, fMaxY = w._fireMaxY ?? w.height;
+        if (px + 3 >= fMinX && px - 3 <= fMaxX && py + 3 >= fMinY && py - 3 <= fMaxY) {
+          for (let dy = -3; dy <= 3; dy++) {
+            const fy = py + dy;
+            if (fy < 0 || fy >= w.height) continue;
+            const rowOffset = fy * w.width;
+            for (let dx = -3; dx <= 3; dx++) {
+              const fx = px + dx;
+              if (fx < 0 || fx >= w.width) continue;
+              if (w.fireTiles[rowOffset + fx] > 0) {
+                const d = Math.hypot(dx, dy);
+                if (d < threatDist) { threatDist = d; threatX = fx; threatY = fy; threatKind = "fire"; }
+              }
             }
           }
         }
@@ -711,18 +746,21 @@ export class Agent {
       if (this._pendingBuildTick !== tickNow) {
         this._pendingBuildTick = tickNow;
         this._hasPendingBuild = false;
-        const homeSid = this.settlementId ||
-          (simulation.settlementSystem ? simulation.settlementSystem.agentSettlementMap.get(this.id) : null);
-        for (const b of simulation.buildings) {
-          if (!b.complete && (b.constructionProgress || 0) < 100) {
-            const sid = b.settlementId ?? null;
-            if (sid == null || sid === homeSid) { this._hasPendingBuild = true; break; }
-            // foreign site: only counts as civic work if friendly (not at war)
-            if (homeSid != null && simulation.diplomacySystem) {
-              try {
-                const rel = simulation.diplomacySystem.getRelation(homeSid, sid);
-                if (rel && rel.status !== 'war' && rel.score >= 40) { this._hasPendingBuild = true; break; }
-              } catch { /* ignore */ }
+        const bldList = simulation._incompleteRealBuildings || simulation.buildings;
+        if (bldList.length > 0) {
+          const homeSid = this.settlementId ||
+            (simulation.settlementSystem ? simulation.settlementSystem.agentSettlementMap.get(this.id) : null);
+          for (const b of bldList) {
+            if (!b.complete && (b.constructionProgress || 0) < 100) {
+              const sid = b.settlementId ?? null;
+              if (sid == null || sid === homeSid) { this._hasPendingBuild = true; break; }
+              // foreign site: only counts as civic work if friendly (not at war)
+              if (homeSid != null && simulation.diplomacySystem) {
+                try {
+                  const rel = simulation.diplomacySystem.getRelation(homeSid, sid);
+                  if (rel && rel.status !== 'war' && rel.score >= 40) { this._hasPendingBuild = true; break; }
+                } catch { /* ignore */ }
+              }
             }
           }
         }
@@ -1061,6 +1099,16 @@ export class Agent {
         this.perceive(world, [], 12);
       }
     };
+    const isDominated = (maxPossibleScore) => {
+      for (let i = 0; i < actions.length; i++) {
+        const a = actions[i];
+        const t = a.target;
+        if (t && typeof t === "object" && t.type === "agent") continue;
+        const floor = (t && typeof t.x === "number") ? a.score - 10 : a.score;
+        if (floor > maxPossibleScore) return true;
+      }
+      return false;
+    };
     
     for (const goal of this.goals) {
       switch (goal.type) {
@@ -1151,6 +1199,7 @@ export class Agent {
         }
 
         case "socialize":
+          if (!_lazyChecked && isDominated(goal.priority + 32)) break;
           needScan();
           for (const agent of perception.nearbyAgents) {
             if (agent.alive && agent !== this) {
@@ -1259,6 +1308,7 @@ export class Agent {
           
         case "farm":
         case "find_food":
+          if (!_lazyChecked && isDominated(goal.priority + 15)) break;
           needScan();
           for (const res of perception.nearbyResources) {
             if (res.resourceType === "food" && res.amount > 0 && !res.depleted) {
@@ -1271,9 +1321,10 @@ export class Agent {
           }
           break;
           
-        case "gather_resources":
         case "forage_nearby":
+        case "gather_resources":
         case "gather_supplies":
+          if (!_lazyChecked && isDominated(goal.priority + 16)) break;
           // Phase 2 spatial memory: nudge toward remembered rich nodes so a
           // hungry agent prefers the grove it discovered last season over an
           // equally-close blind patch. Pure scoring — no RNG, deterministic.
@@ -1321,6 +1372,7 @@ export class Agent {
           break;
           
         case "find_water":
+          if (!_lazyChecked && isDominated(goal.priority + 15)) break;
           needScan();
           for (const res of perception.nearbyResources) {
             if (res.resourceType === "water" && res.amount > 0 && !res.depleted) {
@@ -1351,6 +1403,7 @@ export class Agent {
           break;
 
         case "visit_neighbor": {
+          if (!_lazyChecked && isDominated(goal.priority + 38)) break;
           // Walk over to a nearby friend/relative's position and chat on arrival
           let best = null;
           let bestScore = -Infinity;
@@ -1693,8 +1746,25 @@ export class Agent {
     if (prev && prev.kind === kind && prev.text === text && (safeTick - (prev.tick || 0)) < 15) {
       return this;
     }
-    const year = Math.floor(safeTick / 100) + 1;
-    this.lifeHistory.push({ tick: safeTick, year, kind, icon, text, milestone: Boolean(milestone) });
+    const year = Math.floor(safeTick / 400) + 1;
+    const ageSys = this.sim?.civilizationAgeSystem;
+    const eraObj = (this.settlementId != null && ageSys?.getSettlementAge?.(this.settlementId))
+      || ageSys?.getDominantAge?.()
+      || null;
+    const eraId = eraObj?.ageId ?? eraObj?.id ?? 1;
+    const eraName = eraObj?.ageName ?? eraObj?.name ?? "Tribal Era";
+    const eraIcon = eraObj?.icon ?? "🏕️";
+    this.lifeHistory.push({
+      tick: safeTick,
+      year,
+      eraId,
+      eraName,
+      eraIcon,
+      kind,
+      icon,
+      text,
+      milestone: Boolean(milestone)
+    });
     if (this.lifeHistory.length > Agent.LIFE_HISTORY_MAX) {
       // Evict oldest non-milestone entry first so key biography anchors stay intact
       const evictIdx = this.lifeHistory.findIndex((e, idx) => idx > 0 && !e.milestone);
@@ -2130,6 +2200,13 @@ export class Agent {
             woodUsed = 1;
           }
 
+          // Record deterministic contributor credit on structure
+          const fullName = formatAgentFullName(this);
+          if (!Array.isArray(action.target.contributors)) action.target.contributors = [];
+          if (!action.target.contributors.some(c => c.id === this.id) && action.target.contributors.length < 4) {
+            action.target.contributors.push({ id: this.id, name: fullName });
+          }
+
           // Progress scales with resource investment and builder skill
           const progressInc = woodUsed > 0 ? 5 : 2;
           action.target.constructionProgress = (action.target.constructionProgress || 0) + progressInc;
@@ -2139,12 +2216,47 @@ export class Agent {
           }
           
           if (action.target.constructionProgress >= 100) {
+            const wasComplete = action.target.complete === true;
             action.target.isComplete = true;
             action.target.complete = true;
+            if (!wasComplete) {
+              const tickNow = tickOf(simulation);
+              const builtYear = Math.floor(tickNow / 400) + 1;
+              const targetSid = action.target.settlementId ?? sid ?? null;
+              const homeName = targetSid != null
+                ? (simulation?.settlementSystem?.settlements?.get(targetSid)?.name || null)
+                : null;
+              const ageSummary = targetSid != null
+                ? simulation?.civilizationAgeSystem?.getSettlementAge?.(targetSid)
+                : simulation?.civilizationAgeSystem?.getDominantAge?.();
+              const builtEraId = ageSummary?.ageId ?? ageSummary?.id ?? action.target.builtInEra ?? 1;
+              const builtEraName = ageSummary?.name || 'Tribal Era';
+
+              if (!action.target.builtByAgentId) {
+                action.target.builtByAgentId = this.id;
+                action.target.builtByName = fullName;
+                action.target.builtYear = builtYear;
+              }
+              action.target.builtInEra = builtEraId;
+              action.target.builtEraName = builtEraName;
+              this.buildingsBuilt = (this.buildingsBuilt || 0) + 1;
+              const bType = action.target.buildingType || action.target.type || "structure";
+              const bLabel = action.target.customName || bType.replace(/_/g, " ");
+              const isGrand = String(bType).startsWith("monument_") || bType === "castle" || bType === "nuclear_plant" || bType === "research_lab" || Boolean(action.target.isHeritage);
+              if (isGrand && !action.target.dedication) {
+                action.target.dedication = `Raised in Year ${builtYear} (${builtEraName}) by ${fullName}${homeName ? ` of ${homeName}` : ""}`;
+              }
+              this.addLifeEvent("BUILT", `Led construction of ${bLabel} (Year ${builtYear})`, tickNow, isGrand ? "🏛️" : "🔨", isGrand || this.buildingsBuilt === 1);
+            }
             if (eventBus) {
               eventBus.emit("CONSTRUCTION_COMPLETED", { 
                 buildingId: action.target.id,
                 buildingType: action.target.buildingType || action.target.type,
+                customName: action.target.customName || null,
+                settlementId: action.target.settlementId ?? sid ?? null,
+                builderId: this.id,
+                builderName: fullName,
+                builtYear: action.target.builtYear ?? null,
                 x: action.target.x,
                 y: action.target.y
               });
@@ -3255,6 +3367,8 @@ export class Agent {
       kills: this.kills || 0,
       epithet: this.epithet ?? null,
       legendaryWeapon: this.legendaryWeapon ?? null,
+      heirloom: this.heirloom ? { ...this.heirloom } : null,
+      buildingsBuilt: this.buildingsBuilt || 0,
       isRebel: this.isRebel === true,
       battlesFought: this.battlesFought || 0,
       needs: { ...this.needs },
@@ -3408,6 +3522,8 @@ export class Agent {
     agent.kills = data.kills || 0;
     agent.epithet = data.epithet ?? null;
     agent.legendaryWeapon = data.legendaryWeapon ?? null;
+    agent.heirloom = data.heirloom ? { ...data.heirloom } : null;
+    agent.buildingsBuilt = data.buildingsBuilt || 0;
     agent.isRebel = data.isRebel === true;
     agent.battlesFought = data.battlesFought || 0;
     agent.needs = { ...data.needs };

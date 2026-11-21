@@ -129,6 +129,11 @@ export class AgeSystem {
             }
         }
         
+        // Deterministic heirloom inheritance: transfer existing heirloom, relic weapon,
+        // or newly consecrated family keepsake (for monarchs, veterans, master builders)
+        // to the eldest living child (or sibling/spouse fallback). Zero RNG.
+        this._bequeathHeirloomOnDeath(agent);
+
         agent.alive = false;
         agent.deathCause = cause || 'old_age';
         this.sim.removeAgent(agent.id, agent.deathCause);
@@ -251,6 +256,61 @@ export class AgeSystem {
             }
         }
         return false;
+    }
+
+    _bequeathHeirloomOnDeath(agent) {
+        if (!agent || agent._heirloomBequeathed) return null;
+        agent._heirloomBequeathed = true;
+        const tick = this.sim?.clock?.tick ?? 0;
+        const year = Math.floor(tick / 400) + 1;
+        const surname = agent.surname || 'House';
+        const fullName = agent.surname && !String(agent.name || '').includes(agent.surname)
+            ? `${agent.name} ${agent.surname}`
+            : (agent.name || 'Ancestor');
+
+        let heirloom = agent.heirloom ? { ...agent.heirloom } : null;
+        if (!heirloom) {
+            if (agent.legendaryWeapon) {
+                heirloom = { name: agent.legendaryWeapon, kind: 'relic', originName: fullName, originYear: year, generationsHeld: 1 };
+            } else if (agent.isMonarch) {
+                heirloom = { name: `${surname} Royal Signet`, kind: 'crown', originName: fullName, originYear: year, generationsHeld: 1 };
+            } else if ((agent.buildingsBuilt || 0) >= 2) {
+                heirloom = { name: `${surname} Master Compasses`, kind: 'craft', originName: fullName, originYear: year, generationsHeld: 1 };
+            } else if ((agent.kills || 0) >= 2) {
+                heirloom = { name: `${surname} Veteran Blade`, kind: 'blade', originName: fullName, originYear: year, generationsHeld: 1 };
+            } else if ((agent.age || 0) >= 62 && (agent.children || 0) >= 1) {
+                heirloom = { name: `${surname} Hearth Seal`, kind: 'keepsake', originName: fullName, originYear: year, generationsHeld: 1 };
+            }
+        }
+        if (!heirloom) return null;
+
+        const rels = this.sim?.relationshipSystem?.getRelatives?.(agent.id);
+        const resolveLiving = (ids) => (ids || [])
+            .map(id => (typeof this.sim?._agentById === 'function' ? this.sim._agentById(id) : null))
+            .filter(a => a && a.alive && a.id !== agent.id)
+            .sort((a, b) => (b.age - a.age) || (a.id - b.id));
+
+        const livingChildren = resolveLiving(rels?.children);
+        const livingSiblings = resolveLiving(rels?.siblings);
+        const livingSpouse = rels?.spouse ? resolveLiving([rels.spouse]) : [];
+        const heir = livingChildren[0] || livingSiblings[0] || livingSpouse[0] || null;
+        if (!heir) return null;
+
+        heir.heirloom = {
+            ...heirloom,
+            inheritedFrom: fullName,
+            generationsHeld: (heirloom.generationsHeld || 1) + (agent.heirloom ? 1 : 0)
+        };
+        const heirFull = heir.surname && !String(heir.name || '').includes(heir.surname)
+            ? `${heir.name} ${heir.surname}`
+            : (heir.name || 'Heir');
+        if (typeof heir.addLifeEvent === 'function') {
+            heir.addLifeEvent('HEIRLOOM', `Inherited "${heir.heirloom.name}" from ${fullName}`, tick, '💍', true);
+        }
+        if (typeof agent.addLifeEvent === 'function') {
+            agent.addLifeEvent('HEIRLOOM', `Bequeathed "${heirloom.name}" to ${heirFull}`, tick, '💍', true);
+        }
+        return heir;
     }
 
     serialize() {

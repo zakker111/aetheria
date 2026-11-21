@@ -1737,6 +1737,7 @@ export class WarfareSystem {
         war.battles.push({
           name: battleName,
           tick: tickNow,
+          eraId: warband.eraId || 1,
           x: defender.x,
           y: defender.y,
           casualties: war.casualties[defenderSettlementId]

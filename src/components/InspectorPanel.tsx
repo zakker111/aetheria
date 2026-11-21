@@ -9,6 +9,8 @@ interface InspectorPanelProps {
   isFollowing?: boolean;
   onFollowAgent?: (agentId: number | null) => void;
   onSelectAgent?: (agentId: number) => void;
+  onSelectBuilding?: (buildingId: number) => void;
+  onPanTo?: (x: number, y: number) => void;
   onRallyWarband?: (settlementId: number) => void;
   onSpawnCitizens?: (settlementId: number, count: number) => void;
   onAdvanceWonder?: (settlementId: number) => void;
@@ -25,6 +27,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   isFollowing = false,
   onFollowAgent,
   onSelectAgent,
+  onSelectBuilding,
+  onPanTo,
   onRallyWarband,
   onSpawnCitizens,
   onAdvanceWonder,
@@ -213,7 +217,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
         }}
       >
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {data.kind === 'agent' && `${isAlive ? '👤' : '🕯️'} ${e.name}${e.epithet ? ` "${e.epithet}"` : ''}`}
+          {data.kind === 'agent' && (() => {
+            const full = dossier?.fullName || `${e.name || 'Citizen'}${e.surname && !String(e.name || '').includes(e.surname) ? ` ${e.surname}` : ''}${e.epithet ? ` ${e.epithet}` : ''}`;
+            return `${isAlive ? '👤' : '🕯️'} ${full}`;
+          })()}
           {data.kind === 'settlement' && `${e.tierIcon || '🏡'} ${e.name} (${e.ruined ? 'Collapsed Ruins' : (e.tier || 'Village')})`}
           {data.kind === 'building' && (() => {
             const bType = e.buildingType || e.type;
@@ -309,8 +316,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   {dossier?.deathTick != null ? ` · Tick ${dossier.deathTick}` : ''}
                 </div>
                 <div style={{ fontSize: '10px', color: '#fca5a5', marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
-                  Legacy: {dossier?.kills ?? e.kills ?? 0} Kills · {dossier?.battlesFought ?? e.battlesFought ?? 0} Battles · {dossier?.settlementName || 'Wilds'}
+                  Legacy: {dossier?.kills ?? e.kills ?? 0} Kills · {dossier?.battlesFought ?? e.battlesFought ?? 0} Battles · {dossier?.buildingsBuilt ?? e.buildingsBuilt ?? 0} Built · {dossier?.settlementName || 'Wilds'}
                 </div>
+                {dossier?.biography && (
+                  <div style={{ fontSize: '10px', color: '#f1f5f9', marginTop: '5px', fontStyle: 'italic', lineHeight: 1.45, borderTop: '1px solid rgba(248, 113, 113, 0.2)', paddingTop: '4px' }}>
+                    “{dossier.biography}”
+                  </div>
+                )}
               </div>
             )}
 
@@ -321,7 +333,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
-                    marginBottom: '8px',
+                    marginBottom: '6px',
                     fontVariantNumeric: 'tabular-nums',
                   }}
                 >
@@ -333,6 +345,23 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     {dossier?.jobTitle || e.job || 'Civilian'}
                   </span>
                 </div>
+
+                {isAlive && dossier?.biography && (
+                  <div
+                    style={{
+                      fontSize: '10px',
+                      color: '#cbd5e1',
+                      background: 'rgba(30, 41, 59, 0.5)',
+                      borderLeft: '2px solid rgba(56, 189, 248, 0.5)',
+                      padding: '5px 7px',
+                      borderRadius: '0 5px 5px 0',
+                      marginBottom: '8px',
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    {dossier.biography}
+                  </div>
+                )}
 
                 {isAlive && e.needs && (
                   <>
@@ -378,10 +407,113 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   )}
                   <div>
                     👶 Children: {dossier?.children?.length ?? e.children ?? 0}
+                    {(dossier?.buildingsBuilt ?? e.buildingsBuilt ?? 0) > 0
+                      ? ` · 🔨 Built: ${dossier?.buildingsBuilt ?? e.buildingsBuilt}`
+                      : ''}
                     {dossier?.faith ? ` · 🙏 Faith ${dossier.faith}%${dossier.beliefId ? ` (${dossier.beliefId})` : ''}` : ''}
                   </div>
+                  {(dossier?.heirloom || e.heirloom) && (() => {
+                    const hl = dossier?.heirloom || e.heirloom;
+                    return (
+                      <div style={{ marginTop: '4px' }}>
+                        <div style={{ color: '#fbbf24', fontWeight: 600 }}>
+                          💍 Heirloom: {hl.name}
+                          {hl.inheritedFrom ? ` · From ${hl.inheritedFrom}` : ''}
+                        </div>
+                        {(hl.originName || hl.originYear || (hl.generationsHeld && hl.generationsHeld > 1)) && (
+                          <div style={{ fontSize: '10px', color: '#94a3b8' }}>
+                            {hl.originName ? `Forged by ${hl.originName}` : 'Ancestral Relic'}
+                            {hl.originYear ? ` (Year ${hl.originYear})` : ''}
+                            {hl.generationsHeld ? ` · Held ${hl.generationsHeld} gen` : ''}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  {Array.isArray(dossier?.builtStructures) && dossier.builtStructures.length > 0 && (
+                    <div
+                      style={{
+                        marginTop: '6px',
+                        paddingTop: '6px',
+                        borderTop: '1px solid rgba(255,255,255,0.08)',
+                      }}
+                    >
+                      <div style={{ fontSize: '10px', fontWeight: 700, color: '#94a3b8', marginBottom: '4px', textTransform: 'uppercase' }}>
+                        Architectural Works ({dossier.builtStructures.length})
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        {dossier.builtStructures.slice(0, 6).map((b) => {
+                          const bMeta = BUILDING_META_MAP[b.buildingType];
+                          return (
+                            <div
+                              key={`built_${b.id}`}
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                gap: '6px',
+                                padding: '4px 6px',
+                                borderRadius: '5px',
+                                background: 'rgba(30, 41, 59, 0.55)',
+                                border: '1px solid rgba(255, 255, 255, 0.06)',
+                              }}
+                            >
+                              <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '10px' }}>
+                                <span style={{ color: '#f1f5f9', fontWeight: 600 }}>
+                                  {bMeta?.icon || '🏛️'} {b.name}
+                                </span>
+                                <span style={{ color: '#94a3b8' }}>
+                                  {' '}· Lv {b.level}/{b.maxLevel}
+                                  {b.builtYear ? ` · Y${b.builtYear}` : ''}
+                                  {b.isRuined ? ' · Ruined' : ''}
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                                {onSelectBuilding && (
+                                  <button
+                                    onClick={() => onSelectBuilding(b.id)}
+                                    style={{
+                                      background: 'rgba(56, 189, 248, 0.14)',
+                                      border: '1px solid rgba(56, 189, 248, 0.35)',
+                                      borderRadius: '4px',
+                                      color: '#38bdf8',
+                                      fontSize: '9px',
+                                      fontWeight: 600,
+                                      padding: '1px 6px',
+                                      cursor: 'pointer',
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    Inspect
+                                  </button>
+                                )}
+                                {!onSelectBuilding && onPanTo && (
+                                  <button
+                                    onClick={() => onPanTo(b.x, b.y)}
+                                    style={{
+                                      background: 'rgba(245, 158, 11, 0.14)',
+                                      border: '1px solid rgba(245, 158, 11, 0.35)',
+                                      borderRadius: '4px',
+                                      color: '#fbbf24',
+                                      fontSize: '9px',
+                                      fontWeight: 600,
+                                      padding: '1px 6px',
+                                      cursor: 'pointer',
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    Locate
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                   {isAlive && e.inventory && (
-                    <div>
+                    <div style={{ marginTop: '4px' }}>
                       🎒 Stock: 🌲 {e.inventory?.wood_log || 0} · ⛏️ {e.inventory?.ore_iron || 0} · 🌾 {e.inventory?.wheat || 0} · 🥩 {e.inventory?.meat || 0}
                     </div>
                   )}
@@ -413,9 +545,16 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                         border: `1px solid ${ev.milestone ? 'rgba(56, 189, 248, 0.25)' : 'rgba(255, 255, 255, 0.06)'}`,
                       }}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
                         <span>{ev.icon || '📜'} {ev.kind}</span>
-                        <span>Year {ev.year} · Tick {ev.tick}</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          {ev.eraName && (
+                            <span style={{ padding: '1px 4px', borderRadius: '3px', background: 'rgba(148, 163, 184, 0.14)', color: '#cbd5e1', fontSize: '9px' }}>
+                              {ev.eraIcon ? `${ev.eraIcon} ` : ''}{ev.eraName}
+                            </span>
+                          )}
+                          <span>Year {ev.year} · T{ev.tick}</span>
+                        </span>
                       </div>
                       <div style={{ fontSize: '11px', color: '#f1f5f9', marginTop: '2px' }}>{ev.text}</div>
                     </div>
@@ -482,6 +621,27 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
             {agentTab === 'bonds' && (
               <div>
+                {(dossier?.surname || e.surname) && (
+                  <div
+                    style={{
+                      marginBottom: '8px',
+                      padding: '5px 8px',
+                      borderRadius: '6px',
+                      background: 'rgba(30, 41, 59, 0.7)',
+                      border: '1px solid rgba(56, 189, 248, 0.22)',
+                      fontSize: '11px',
+                      color: '#bae6fd',
+                      fontWeight: 600,
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <span>🛡️ House {dossier?.surname || e.surname}</span>
+                    <span style={{ color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+                      Generation {dossier?.generation ?? e.generation ?? 1}
+                    </span>
+                  </div>
+                )}
                 {dossier?.spouse && renderRelChipList('Spouse', [dossier.spouse])}
                 {dossier?.parents && renderRelChipList('Parents', dossier.parents)}
                 {dossier?.children && renderRelChipList('Children', dossier.children)}
@@ -1029,19 +1189,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   <span style={{ fontSize: '10px', color: '#94a3b8' }}>Era {bMeta.minEra}+</span>
                 )}
                 {(e.isHeritage || bMeta?.isMonument || String(bType || '').startsWith('monument_')) && (
-                  <span
-                    style={{
-                      display: 'inline-block',
-                      padding: '2px 6px',
-                      borderRadius: '4px',
-                      fontSize: '10px',
-                      fontWeight: 700,
-                      background: 'rgba(234, 179, 8, 0.16)',
-                      color: '#fde047',
-                      border: '1px solid rgba(234, 179, 8, 0.4)',
-                    }}
-                  >
-                    🏛️ Heritage · Built Era {e.builtInEra || bMeta?.minEra || 1}
+                  <span style={{ fontSize: '10px', fontWeight: 700, color: '#fde047' }}>
+                    · 🏛️ Heritage ({e.builtEraName || `Era ${e.builtInEra || bMeta?.minEra || 1}`})
                   </span>
                 )}
               </div>
@@ -1055,6 +1204,22 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   {e.settlementName ? ` · ${e.settlementName}` : ''}
                   {e.capacity > 0 ? ` · 📦 Storage ${e.capacity}` : ''}
                 </div>
+                {e.dedication && (
+                  <div
+                    style={{
+                      marginTop: '6px',
+                      padding: '6px 8px',
+                      borderRadius: '6px',
+                      background: 'rgba(234, 179, 8, 0.08)',
+                      border: '1px solid rgba(234, 179, 8, 0.25)',
+                      color: '#fef08a',
+                      fontSize: '10px',
+                      fontStyle: 'italic',
+                    }}
+                  >
+                    🏛️ Plaque: “{e.dedication}”
+                  </div>
+                )}
                 {bMeta?.roleSummary && (
                   <div style={{ color: '#e2e8f0', marginTop: '4px' }}>
                     {bMeta.icon} <b>Society Role:</b> {bMeta.roleSummary}
@@ -1063,6 +1228,131 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 {currentBonus && (
                   <div style={{ color: '#86efac', marginTop: '3px', fontSize: '10px' }}>
                     ✦ Active Lv {lvl} Effect: {currentBonus}
+                  </div>
+                )}
+                {(e.builtByName || e.upgradedByName || (Array.isArray(e.contributors) && e.contributors.length > 0) || (Array.isArray(e.upgradeHistory) && e.upgradeHistory.length > 0)) && (
+                  <div
+                    style={{
+                      marginTop: '6px',
+                      padding: '6px 8px',
+                      borderRadius: '6px',
+                      background: 'rgba(30, 41, 59, 0.55)',
+                      border: '1px solid rgba(255, 255, 255, 0.08)',
+                      fontSize: '10px',
+                      color: '#cbd5e1',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '4px',
+                    }}
+                  >
+                    {e.builtByName && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                        <span>
+                          🔨 Built by <b style={{ color: '#f8fafc' }}>{e.builtByName}</b>
+                          {e.builtYear ? ` · Year ${e.builtYear}` : ''}
+                          {e.builtEraName ? ` · ${e.builtEraName}` : ''}
+                        </span>
+                        {e.builtByAgentId != null && onSelectAgent && (
+                          <button
+                            onClick={() => onSelectAgent(e.builtByAgentId)}
+                            style={{
+                              background: 'rgba(56, 189, 248, 0.14)',
+                              border: '1px solid rgba(56, 189, 248, 0.35)',
+                              borderRadius: '4px',
+                              color: '#38bdf8',
+                              fontSize: '9px',
+                              fontWeight: 600,
+                              padding: '1px 6px',
+                              cursor: 'pointer',
+                              whiteSpace: 'nowrap',
+                              flexShrink: 0,
+                            }}
+                          >
+                            Inspect Builder
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {Array.isArray(e.contributors) && e.contributors.length > 1 && (
+                      <div style={{ color: '#94a3b8', display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
+                        <span>👥 Builders:</span>
+                        {e.contributors.map((c: any, idx: number) =>
+                          c?.id != null && onSelectAgent ? (
+                            <button
+                              key={`contrib_${c.id}_${idx}`}
+                              onClick={() => onSelectAgent(c.id)}
+                              style={{
+                                background: 'transparent',
+                                border: '1px solid rgba(148, 163, 184, 0.28)',
+                                borderRadius: '4px',
+                                color: '#cbd5e1',
+                                fontSize: '9px',
+                                padding: '1px 5px',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {c.name}
+                            </button>
+                          ) : (
+                            <span key={`contrib_${idx}`}>{c?.name}</span>
+                          )
+                        )}
+                      </div>
+                    )}
+                    {e.upgradedByName && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', color: '#fbbf24' }}>
+                        <span>⬆ Renovated under {e.upgradedByName}</span>
+                        {e.upgradedByAgentId != null && onSelectAgent && (
+                          <button
+                            onClick={() => onSelectAgent(e.upgradedByAgentId)}
+                            style={{
+                              background: 'rgba(245, 158, 11, 0.14)',
+                              border: '1px solid rgba(245, 158, 11, 0.35)',
+                              borderRadius: '4px',
+                              color: '#fbbf24',
+                              fontSize: '9px',
+                              fontWeight: 600,
+                              padding: '1px 6px',
+                              cursor: 'pointer',
+                              whiteSpace: 'nowrap',
+                              flexShrink: 0,
+                            }}
+                          >
+                            Inspect
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {Array.isArray(e.upgradeHistory) && e.upgradeHistory.length > 0 && (
+                      <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '4px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                        <div style={{ fontSize: '9px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase' }}>
+                          Renovation Ledger
+                        </div>
+                        {e.upgradeHistory.map((u: any, idx: number) => (
+                          <div key={`up_${u.level}_${idx}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', color: '#cbd5e1' }}>
+                            <span>
+                              Lv {u.level} · Year {u.year} · {u.eraName} · {u.byName}
+                            </span>
+                            {u.byAgentId != null && onSelectAgent && (
+                              <button
+                                onClick={() => onSelectAgent(u.byAgentId)}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: '#38bdf8',
+                                  fontSize: '9px',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                Inspect
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

@@ -1,6 +1,6 @@
 # 🌍 Aetheria — 2.5D Emergent Civilization & History Simulator
 
-[![Build & Tests](https://img.shields.io/badge/tests-22%2F22%20passing-brightgreen)](#-automated-test-suites)
+[![Build & Tests](https://img.shields.io/badge/tests-25%2F25%20passing-brightgreen)](#-automated-test-suites)
 [![React 19](https://img.shields.io/badge/React-19.3-blue)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7.x-blue)](https://www.typescriptlang.org/)
 [![Vite](https://img.shields.io/badge/Vite-8.x-purple)](https://vitejs.dev/)
@@ -25,6 +25,7 @@
 - **Needs & Psychology Hierarchy**: Food, Water, Rest, and Social fulfillment driving real-time agent decisions.
 - **Directional Locomotion**: Velocity-aware glide interpolation with animated footstep bobbing, limping wounded gaits, and directional sprite facing.
 - **Gossip & Reputations**: Citizens converse at hearths and market squares, propagating gossip and rivalries across communities.
+- **Full Historical Lives, Houses & Heirlooms**: Every citizen carries a deterministic family surname across generations, records Era-stamped life milestones (births, marriages, civic constructions, royal treaties, era transitions, heirloom inheritances, and deaths), receives builder attribution on landmarks, and displays a synthesized biography/epitaph inside the Inspector and the **People & Legends** browser.
 - **Heroic Titles & Slayers**: Combatants earn cultural epithets (*"the Blooded"*, *"the Slayer"*, *"the Fierce"*, *"the Undefeated"*) upon triumphing in lethal combat.
 
 ### 🔨 Multi-Tier Economy & Supply Chains
@@ -70,8 +71,10 @@
 | **Inspect Entity** | `Left-Click` on citizen, building, or town | Opens detailed telemetry in the Inspector Panel |
 | **Jump to Front Line** | Click on `⚔️ Battle Banner` in HUD | Centers camera directly on active battlefield |
 | **Toggle Wars Panel** | `W` or click **Wars** in TopBar | View active wars, casualties, casus belli, and treaties |
+| **Toggle Chancellery** | `C` or click **Chancellery** in TopBar | Browse Dynasties, Diplomacy, **People & Legends**, Houses, Heirlooms, and Archives |
 | **Toggle Societies Panel** | Click **Societies** in TopBar | Inspect kingdoms, populations, leaders, and stockpile reserves |
 | **Toggle Chronicle** | Click **Chronicle** in TopBar | Browse world history, declarations, and great deeds |
+| **Close Modal / Overlay** | `Escape` | Close open Chancellery or Guide modals |
 | **Pause / Resume** | `Spacebar` | Toggle simulation time pause |
 | **Speed Controls** | `0.5x`, `1x`, `2x`, `4x` buttons | Speed up or slow down the simulation clock |
 | **Toggle 2.5D Mode** | Click `📐 2.5D View` button | Toggle between 2.5D Isometric and 2D Top-Down rendering |
@@ -114,10 +117,10 @@ Open your browser and navigate to `http://localhost:3000`.
 
 ## 🧪 Automated Test Suites
 
-Aetheria maintains 22 comprehensive automated test suites enforcing 100% save/load determinism, economic loops, living ecology, deeper structures, Era 1–6 upgradable buildings, Era 1–7 heritage landmarks, continuous city expansion, warfare rules, Nuclear Age deterrence, fortifications, maritime logistics, bridge engineering, espionage/wonders, carrying capacity, and high-population performance:
+Aetheria maintains 25 comprehensive automated test suites enforcing 100% save/load determinism, economic loops, living ecology, deeper structures, Era 1–6 upgradable buildings, Era 1–7 heritage landmarks, continuous city expansion, historical agent lives, heirlooms, warfare rules, Nuclear Age deterrence, fortifications, maritime logistics, bridge engineering, espionage/wonders, carrying capacity, and high-population performance:
 
 ```bash
-# Run all 22 automated test suites
+# Run all 25 automated test suites
 npm test
 
 # Run code style and lint check
@@ -151,6 +154,9 @@ npm run build
 | **Deep Structures, Ecology & Diplomacy** | `tests/deep_structures_ecology_diplomacy.mjs` | Tanks/aircraft air overflight, nuclear Factory+Plant+Silo gate, growing trees, finite mines, hunters, resource pacts, proliferation sanctions, mediation & vassalage |
 | **Era 1–6 Buildings & Upgradable Tiers** | `tests/era_buildings_upgrades.mjs` | Windmill, Inn, Library, Apothecary, Castle, Bank, Factory, Research Lab, Radar Station, Nuclear Plant, Lv 1–3 scaling, civic buffs, and save/load parity |
 | **Era 1–7 Landmarks & City Expansion** | `tests/city_expansion_era_landmarks.mjs` | Distinct Era 1–7 monuments, cross-era/disaster heritage survival, Modern & Nuclear ancient heritage seeding, outward urban sprawl, and determinism |
+| **Historical Lives & People Browser** | `tests/historical_lives_and_people.mjs` | Deterministic surnames, multi-generation inheritance, Era-stamped `lifeHistory`, builder/upgrade attribution, heirlooms, biographies, people roster, and save/load determinism |
+| **Combat Depth & Wounds** | `tests/combatdepth.mjs` | Wound/injury states, deterministic combat resolution, and save/load parity |
+| **Soldier Roles & Formations** | `tests/soldiers.mjs` | Dedicated soldier recruitment, unit roles, morale, and tactical engagement |
 
 ---
 
@@ -205,7 +211,7 @@ git push -u origin main
 │   │   ├── chronicleSystem.js  # Living historical chronicle and event logger
 │   │   └── religionSystem.js   # Beliefs, temples, missionaries, and inquisitions
 │   └── utils/             # Deterministic PRNG, math, and spatial hashing
-├── tests/                 # 22 automated regression & determinism test suites
+├── tests/                 # 25 automated regression & determinism test suites
 ├── index.html             # HTML5 entry point
 ├── package.json           # Scripts and dependencies
 └── vite.config.ts         # Vite bundler configuration (relative base for Pages)
