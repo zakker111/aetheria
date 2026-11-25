@@ -769,18 +769,24 @@ export class CivilizationAgeSystem {
             tick,
           });
         }
-        if (prog.warheads < prog.maxWarheads && infra.canEnrich && totalOre >= 10) {
+        if (prog.warheads < prog.maxWarheads && infra.canEnrich && (totalOre >= 10 || (settlement.stockpile?.uranium || 0) > 0)) {
           const labStep = labBonus.maxLevel > 0 ? (3 + labBonus.maxLevel * 3) : 0;
           const plantStep = plantBonus.maxLevel > 1 ? ((plantBonus.maxLevel - 1) * 4) : 0;
           const siloStep = siloBonus.maxLevel > 0 ? (1 + siloBonus.maxLevel * 2) : 0;
+          const hasUranium = (settlement.stockpile?.uranium || 0) > 0;
+          const uraniumStep = hasUranium ? 7 : 0;
           const baseStep = 8 +
             labStep +
             plantStep +
             siloStep +
+            uraniumStep +
             (totalOre >= 30 ? 4 : 0) +
             (current.ageId >= 7 ? 4 : 0);
           const step = Math.round(baseStep * (buffs.nuclearEnrichMultiplier || 1.0));
           prog.progress += step;
+          if (hasUranium && settlement.stockpile) {
+            settlement.stockpile.uranium = Math.max(0, (settlement.stockpile.uranium || 0) - 1);
+          }
           if (prog.progress >= 100) {
             prog.progress -= 100;
             if (settlement.stockpile) {

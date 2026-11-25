@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 
 interface NotificationToastProps {
   message: string | null;
@@ -6,7 +6,7 @@ interface NotificationToastProps {
   placement?: 'hud' | 'title';
 }
 
-function getAccentColor(message: string): { border: string; dot: string } {
+function getAccentClasses(message: string): { borderClass: string; dotClass: string } {
   const lower = message.toLowerCase();
   if (
     message.includes('☢️') ||
@@ -21,7 +21,10 @@ function getAccentColor(message: string): { border: string; dot: string } {
     lower.includes('rebellion') ||
     lower.includes('collapsed')
   ) {
-    return { border: 'rgba(239, 68, 68, 0.55)', dot: '#ef4444' };
+    return {
+      borderClass: 'border-red-500/55',
+      dotClass: 'bg-red-500 shadow-[0_0_8px_#ef4444]',
+    };
   }
   if (
     message.includes('⚠️') ||
@@ -30,9 +33,15 @@ function getAccentColor(message: string): { border: string; dot: string } {
     message.includes('🏛️') ||
     message.includes('🏆')
   ) {
-    return { border: 'rgba(245, 158, 11, 0.55)', dot: '#f59e0b' };
+    return {
+      borderClass: 'border-amber-500/55',
+      dotClass: 'bg-amber-500 shadow-[0_0_8px_#f59e0b]',
+    };
   }
-  return { border: 'rgba(56, 189, 248, 0.45)', dot: '#38bdf8' };
+  return {
+    borderClass: 'border-sky-400/45',
+    dotClass: 'bg-sky-400 shadow-[0_0_8px_#38bdf8]',
+  };
 }
 
 export const NotificationToast: React.FC<NotificationToastProps> = ({
@@ -40,87 +49,34 @@ export const NotificationToast: React.FC<NotificationToastProps> = ({
   onDismiss,
   placement = 'hud',
 }) => {
-  const [isNarrow, setIsNarrow] = useState<boolean>(() =>
-    typeof window !== 'undefined' ? window.innerWidth < 960 : false
-  );
-
-  useEffect(() => {
-    const onResize = () => setIsNarrow(window.innerWidth < 960);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
-
   if (!message) return null;
 
-  const accent = getAccentColor(message);
-  const useHudCorridor = placement === 'hud' && !isNarrow;
+  const accent = getAccentClasses(message);
+  const positionClasses =
+    placement === 'title'
+      ? 'bottom-[22px] left-4 right-4'
+      : 'bottom-[74px] left-4 right-4 md:left-[216px] md:right-[372px]';
 
   return (
     <div
       role="status"
       aria-live="polite"
-      style={{
-        position: 'fixed',
-        bottom: placement === 'title' ? '22px' : '74px',
-        left: useHudCorridor ? '216px' : '16px',
-        right: useHudCorridor ? '372px' : '16px',
-        display: 'flex',
-        justifyContent: 'center',
-        pointerEvents: 'none',
-        zIndex: 120,
-      }}
+      className={`fixed ${positionClasses} flex justify-center pointer-events-none z-[120]`}
     >
       <div
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '8px',
-          maxWidth: 'min(440px, 100%)',
-          background: 'rgba(15, 23, 42, 0.92)',
-          backdropFilter: 'blur(10px)',
-          border: `1px solid ${accent.border}`,
-          color: '#f8fafc',
-          padding: '6px 12px',
-          borderRadius: '10px',
-          fontSize: '12px',
-          fontWeight: 500,
-          lineHeight: 1.35,
-          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.45)',
-          pointerEvents: 'none',
-          transition: 'opacity 0.2s ease, transform 0.2s ease',
-        }}
+        className={`inline-flex items-center gap-2 max-w-[min(440px,100%)] bg-slate-900/92 backdrop-blur-md border ${accent.borderClass} text-slate-50 px-3 py-1.5 rounded-[10px] text-xs font-medium leading-snug shadow-2xl pointer-events-none transition-all duration-200`}
       >
         <span
           aria-hidden="true"
-          style={{
-            width: '7px',
-            height: '7px',
-            borderRadius: '50%',
-            background: accent.dot,
-            boxShadow: `0 0 8px ${accent.dot}`,
-            flexShrink: 0,
-          }}
+          className={`w-[7px] h-[7px] rounded-full shrink-0 ${accent.dotClass}`}
         />
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {message}
-        </span>
+        <span className="truncate">{message}</span>
         {onDismiss && (
           <button
             type="button"
             aria-label="Dismiss notification"
             onClick={onDismiss}
-            style={{
-              pointerEvents: 'auto',
-              background: 'transparent',
-              border: 'none',
-              color: '#94a3b8',
-              cursor: 'pointer',
-              fontSize: '13px',
-              lineHeight: 1,
-              padding: '0 2px',
-              marginLeft: '2px',
-              flexShrink: 0,
-            }}
+            className="pointer-events-auto bg-transparent border-0 text-slate-400 hover:text-slate-200 cursor-pointer text-[13px] leading-none px-0.5 ml-0.5 shrink-0"
           >
             ×
           </button>
@@ -129,4 +85,3 @@ export const NotificationToast: React.FC<NotificationToastProps> = ({
     </div>
   );
 };
-

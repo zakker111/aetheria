@@ -39,80 +39,21 @@ export const StartScreen: React.FC<StartScreenProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="aetheria-start-title"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 40,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '24px',
-        background:
-          'radial-gradient(circle at 50% 35%, rgba(15, 23, 42, 0.72) 0%, rgba(9, 14, 28, 0.90) 100%)',
-        backdropFilter: 'blur(6px)',
-        pointerEvents: 'auto',
-      }}
+      className="fixed inset-0 z-40 flex items-center justify-center p-4 sm:p-6 bg-[radial-gradient(circle_at_50%_35%,rgba(15,23,42,0.72)_0%,rgba(9,14,28,0.90)_100%)] backdrop-blur-sm pointer-events-auto"
     >
-      <div
-        style={{
-          width: '100%',
-          maxWidth: '1040px',
-          maxHeight: 'calc(100vh - 48px)',
-          overflowY: 'auto',
-          background: 'rgba(15, 23, 42, 0.95)',
-          border: '1px solid rgba(148, 163, 184, 0.2)',
-          borderRadius: '16px',
-          padding: '32px 36px',
-          boxShadow: '0 24px 64px rgba(0, 0, 0, 0.65)',
-          color: '#f1f5f9',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '24px',
-        }}
-      >
-        {/* Main Two-Column Desktop Split */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'minmax(0, 1.12fr) minmax(0, 0.96fr)',
-            gap: '32px',
-            alignItems: 'stretch',
-          }}
-        >
+      <div className="w-full max-w-[1040px] max-h-[calc(100vh-32px)] sm:max-h-[calc(100vh-48px)] overflow-y-auto bg-slate-900/95 border border-slate-400/20 rounded-2xl p-5 sm:px-9 sm:py-8 shadow-[0_24px_64px_rgba(0,0,0,0.65)] text-slate-100 flex flex-col gap-6">
+        {/* Main Two-Column Desktop Split (stacks cleanly on narrow screens) */}
+        <div className="grid grid-cols-1 lg:grid-cols-[1.12fr_0.96fr] gap-6 lg:gap-8 items-stretch">
           {/* Left Column: Title, Version, Brief Explanation & Primary Actions */}
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'space-between',
-              gap: '20px',
-            }}
-          >
+          <div className="flex flex-col justify-between gap-5">
             <div>
               {/* Quiet Unboxed Metadata Header */}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '10px',
-                  fontSize: '13px',
-                  color: '#94a3b8',
-                  marginBottom: '12px',
-                  fontVariantNumeric: 'tabular-nums',
-                }}
-              >
+              <div className="flex items-center gap-2.5 text-[13px] text-slate-400 mb-3 font-mono-tabular">
                 <img
                   src={pantheonEmblem}
                   alt="Aetheria crest"
                   referrerPolicy="no-referrer"
-                  style={{
-                    width: '26px',
-                    height: '26px',
-                    borderRadius: '6px',
-                    objectFit: 'cover',
-                    border: '1px solid rgba(251, 191, 36, 0.45)',
-                    flexShrink: 0,
-                  }}
+                  className="w-[26px] h-[26px] rounded-md object-cover border border-amber-400/45 shrink-0"
                 />
                 <span>Version {version}</span>
                 <span aria-hidden="true">·</span>
@@ -121,28 +62,12 @@ export const StartScreen: React.FC<StartScreenProps> = ({
 
               <h1
                 id="aetheria-start-title"
-                className="font-display"
-                style={{
-                  fontSize: 'clamp(2.25rem, 3.8vw, 3.25rem)',
-                  fontWeight: 700,
-                  lineHeight: 1.08,
-                  letterSpacing: '-0.01em',
-                  color: '#f8fafc',
-                  textWrap: 'balance',
-                  marginBottom: '14px',
-                }}
+                className="font-display text-[clamp(2.25rem,3.8vw,3.25rem)] font-bold leading-[1.08] tracking-tight text-slate-50 text-balance mb-3.5"
               >
                 Aetheria
               </h1>
 
-              <p
-                style={{
-                  fontSize: '15px',
-                  lineHeight: 1.65,
-                  color: '#cbd5e1',
-                  maxWidth: '58ch',
-                }}
-              >
+              <p className="text-[15px] leading-relaxed text-slate-300 max-w-[58ch]">
                 Observe and guide autonomous civilizations across a living 2.5D isometric
                 world. Watch citizens harvest growing forests and finite ore veins, build
                 fortified cities, conduct diplomacy, and advance from Tribal Kingdoms into
@@ -152,47 +77,27 @@ export const StartScreen: React.FC<StartScreenProps> = ({
 
             {/* Starting Era Preset */}
             <div>
-              <div
-                style={{
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  color: '#94a3b8',
-                  marginBottom: '8px',
-                }}
-              >
+              <div className="text-xs font-semibold text-slate-400 mb-2">
                 Starting World Preset
               </div>
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-                  gap: '10px',
-                }}
-              >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <button
                   type="button"
                   onClick={() => onSelectScenario('warring')}
-                  style={{
-                    textAlign: 'left',
-                    padding: '10px 14px',
-                    borderRadius: '10px',
-                    border:
-                      selectedScenario === 'warring'
-                        ? '1px solid #38bdf8'
-                        : '1px solid rgba(148, 163, 184, 0.18)',
-                    background:
-                      selectedScenario === 'warring'
-                        ? 'rgba(56, 189, 248, 0.14)'
-                        : 'rgba(30, 41, 59, 0.55)',
-                    color: '#f8fafc',
-                    cursor: 'pointer',
-                    transition: 'background 150ms cubic-bezier(0.16, 1, 0.3, 1), border-color 150ms cubic-bezier(0.16, 1, 0.3, 1)',
-                  }}
+                  className={`text-left px-3.5 py-2.5 rounded-[10px] border text-slate-50 cursor-pointer transition-colors ${
+                    selectedScenario === 'warring'
+                      ? 'border-sky-400 bg-sky-400/14'
+                      : 'border-slate-400/18 bg-slate-800/55 hover:border-slate-400/35'
+                  }`}
                 >
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: selectedScenario === 'warring' ? '#7dd3fc' : '#f1f5f9' }}>
+                  <div
+                    className={`text-[13px] font-bold ${
+                      selectedScenario === 'warring' ? 'text-sky-300' : 'text-slate-100'
+                    }`}
+                  >
                     ⚔️ Tribal Kingdoms
                   </div>
-                  <div style={{ fontSize: '11.5px', color: '#94a3b8', marginTop: '3px', lineHeight: 1.4 }}>
+                  <div className="text-[11.5px] text-slate-400 mt-0.5 leading-snug">
                     Default Era 1 start · Evolve naturally through all 7 ages
                   </div>
                 </button>
@@ -200,27 +105,20 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                 <button
                   type="button"
                   onClick={() => onSelectScenario('modern_nuclear')}
-                  style={{
-                    textAlign: 'left',
-                    padding: '10px 14px',
-                    borderRadius: '10px',
-                    border:
-                      selectedScenario === 'modern_nuclear'
-                        ? '1px solid #a3e635'
-                        : '1px solid rgba(148, 163, 184, 0.18)',
-                    background:
-                      selectedScenario === 'modern_nuclear'
-                        ? 'rgba(132, 204, 22, 0.12)'
-                        : 'rgba(30, 41, 59, 0.55)',
-                    color: '#f8fafc',
-                    cursor: 'pointer',
-                    transition: 'background 150ms cubic-bezier(0.16, 1, 0.3, 1), border-color 150ms cubic-bezier(0.16, 1, 0.3, 1)',
-                  }}
+                  className={`text-left px-3.5 py-2.5 rounded-[10px] border text-slate-50 cursor-pointer transition-colors ${
+                    selectedScenario === 'modern_nuclear'
+                      ? 'border-lime-400 bg-lime-500/12'
+                      : 'border-slate-400/18 bg-slate-800/55 hover:border-slate-400/35'
+                  }`}
                 >
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: selectedScenario === 'modern_nuclear' ? '#bef264' : '#f1f5f9' }}>
+                  <div
+                    className={`text-[13px] font-bold ${
+                      selectedScenario === 'modern_nuclear' ? 'text-lime-300' : 'text-slate-100'
+                    }`}
+                  >
                     ☢️ Modern &amp; Nuclear
                   </div>
-                  <div style={{ fontSize: '11.5px', color: '#94a3b8', marginTop: '3px', lineHeight: 1.4 }}>
+                  <div className="text-[11.5px] text-slate-400 mt-0.5 leading-snug">
                     Era 7 sandbox · Tanks, aircraft, atomic deterrence &amp; total war
                   </div>
                 </button>
@@ -228,32 +126,12 @@ export const StartScreen: React.FC<StartScreenProps> = ({
             </div>
 
             {/* Primary Actions */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+            <div className="flex flex-col gap-2.5">
+              <div className="flex gap-3 flex-wrap">
                 <button
                   type="button"
                   onClick={() => onPlayNewGame(selectedScenario)}
-                  style={{
-                    flex: '1 1 200px',
-                    minHeight: '44px',
-                    padding: '10px 20px',
-                    borderRadius: '10px',
-                    border: '1px solid rgba(251, 113, 133, 0.65)',
-                    background: '#e11d48',
-                    color: '#ffffff',
-                    fontSize: '14px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                    boxShadow: '0 8px 20px rgba(225, 29, 72, 0.3)',
-                    transition: 'transform 150ms cubic-bezier(0.16, 1, 0.3, 1), background 150ms ease',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = '#f43f5e';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = '#e11d48';
-                  }}
+                  className="flex-1 min-w-[200px] min-h-[44px] px-5 py-2.5 rounded-[10px] border border-rose-400/65 bg-rose-600 hover:bg-rose-500 text-white text-sm font-bold cursor-pointer whitespace-nowrap shadow-[0_8px_20px_rgba(225,29,72,0.3)] transition-colors"
                 >
                   Play New Game
                 </button>
@@ -267,42 +145,18 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                       ? 'Resume your most recent local save'
                       : 'Save a world in-game to enable Continue'
                   }
-                  style={{
-                    flex: '1 1 200px',
-                    minHeight: '44px',
-                    padding: '10px 20px',
-                    borderRadius: '10px',
-                    border: hasValidSave
-                      ? '1px solid rgba(56, 189, 248, 0.5)'
-                      : '1px solid rgba(148, 163, 184, 0.16)',
-                    background: hasValidSave
-                      ? 'rgba(14, 116, 144, 0.35)'
-                      : 'rgba(30, 41, 59, 0.45)',
-                    color: hasValidSave ? '#e0f2fe' : '#64748b',
-                    fontSize: '14px',
-                    fontWeight: 600,
-                    cursor: hasValidSave ? 'pointer' : 'not-allowed',
-                    whiteSpace: 'nowrap',
-                    transition: 'background 150ms ease, border-color 150ms ease',
-                  }}
+                  className={`flex-1 min-w-[200px] min-h-[44px] px-5 py-2.5 rounded-[10px] border text-sm font-semibold whitespace-nowrap transition-colors ${
+                    hasValidSave
+                      ? 'border-sky-400/50 bg-cyan-700/35 hover:bg-cyan-700/50 text-sky-100 cursor-pointer'
+                      : 'border-slate-400/16 bg-slate-800/45 text-slate-500 cursor-not-allowed'
+                  }`}
                 >
                   Continue Saved Game
                 </button>
               </div>
 
               {/* Save status + JSON import */}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: '12px',
-                  fontSize: '12px',
-                  color: '#94a3b8',
-                  fontVariantNumeric: 'tabular-nums',
-                  paddingTop: '2px',
-                }}
-              >
+              <div className="flex items-center justify-between gap-3 text-xs text-slate-400 font-mono-tabular pt-0.5 flex-wrap">
                 <span>
                   {hasValidSave && savedMeta ? (
                     <>
@@ -321,7 +175,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                   ref={fileInputRef}
                   type="file"
                   accept=".json,application/json"
-                  style={{ display: 'none' }}
+                  className="hidden"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (file) onImportWorldFile(file);
@@ -331,17 +185,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: '#38bdf8',
-                    fontSize: '12px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                    flexShrink: 0,
-                    padding: '4px 6px',
-                  }}
+                  className="bg-transparent border-0 text-sky-400 hover:text-sky-300 text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0 px-1.5 py-1"
                 >
                   Import Save (.json)
                 </button>
@@ -350,97 +194,51 @@ export const StartScreen: React.FC<StartScreenProps> = ({
           </div>
 
           {/* Right Column: World Artwork & Core Pillars */}
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'space-between',
-              gap: '16px',
-            }}
-          >
-            <div
-              style={{
-                borderRadius: '12px',
-                overflow: 'hidden',
-                border: '1px solid rgba(148, 163, 184, 0.2)',
-                background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
-                aspectRatio: '16 / 9',
-                position: 'relative',
-              }}
-            >
+          <div className="flex flex-col justify-between gap-4">
+            <div className="rounded-xl overflow-hidden border border-slate-400/20 bg-gradient-to-br from-slate-800 to-slate-900 aspect-video relative">
               {!bannerFailed ? (
                 <img
                   src={gameBanner}
                   alt="Aetheria 2.5D isometric kingdoms, rivers, bridges, and harbors"
                   referrerPolicy="no-referrer"
                   onError={() => setBannerFailed(true)}
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    objectFit: 'cover',
-                    display: 'block',
-                  }}
+                  className="w-full h-full object-cover block"
                 />
               ) : (
-                <div
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#94a3b8',
-                    fontSize: '13px',
-                  }}
-                >
+                <div className="w-full h-full flex items-center justify-center text-slate-400 text-[13px]">
                   2.5D Isometric World Preview
                 </div>
               )}
-              <div
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  background:
-                    'linear-gradient(to top, rgba(15, 23, 42, 0.72) 0%, rgba(15, 23, 42, 0.08) 45%, transparent 100%)',
-                  pointerEvents: 'none',
-                }}
-              />
+              <div className="absolute inset-0 bg-gradient-to-t from-slate-900/75 via-slate-900/10 to-transparent pointer-events-none" />
             </div>
 
-            {/* 3 Concise Pillars separated by hairline dividers (no nested cards) */}
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '12px',
-                paddingTop: '4px',
-              }}
-            >
-              <div style={{ borderBottom: '1px solid rgba(148, 163, 184, 0.12)', paddingBottom: '10px' }}>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: '#f8fafc', marginBottom: '2px' }}>
+            {/* 3 Concise Pillars separated by hairline dividers */}
+            <div className="flex flex-col gap-3 pt-1">
+              <div className="border-b border-slate-400/12 pb-2.5">
+                <div className="text-[13px] font-bold text-slate-50 mb-0.5">
                   Living Ecology &amp; Multi-Tier Economy
                 </div>
-                <div style={{ fontSize: '12px', color: '#94a3b8', lineHeight: 1.5 }}>
+                <div className="text-xs text-slate-400 leading-normal">
                   Trees grow from saplings to ancient groves, ore veins exhaust permanently,
                   and hunters track roaming wildlife to supply workshops and granaries.
                 </div>
               </div>
 
-              <div style={{ borderBottom: '1px solid rgba(148, 163, 184, 0.12)', paddingBottom: '10px' }}>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: '#f8fafc', marginBottom: '2px' }}>
+              <div className="border-b border-slate-400/12 pb-2.5">
+                <div className="text-[13px] font-bold text-slate-50 mb-0.5">
                   Dynasties, Diplomacy &amp; Combined-Arms War
                 </div>
-                <div style={{ fontSize: '12px', color: '#94a3b8', lineHeight: 1.5 }}>
+                <div className="text-xs text-slate-400 leading-normal">
                   Trade and non-aggression pacts, proliferation sanctions, vassalage, siege
                   breaches, tanks, strike aircraft, and last-resort nuclear deterrence.
                 </div>
               </div>
 
               <div>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: '#f8fafc', marginBottom: '2px' }}>
+                <div className="text-[13px] font-bold text-slate-50 mb-0.5">
                   Inspect, Follow &amp; Intervene
                 </div>
-                <div style={{ fontSize: '12px', color: '#94a3b8', lineHeight: 1.5 }}>
+                <div className="text-xs text-slate-400 leading-normal">
                   Click any citizen, mine, or city for live telemetry, follow individual
                   lives, shape the world with divine tools, or save &amp; export JSON snapshots.
                 </div>
@@ -450,19 +248,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
         </div>
 
         {/* Quiet Desktop Controls Footer */}
-        <div
-          style={{
-            borderTop: '1px solid rgba(148, 163, 184, 0.12)',
-            paddingTop: '14px',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: '12px',
-            fontSize: '12px',
-            color: '#94a3b8',
-          }}
-        >
+        <div className="border-t border-slate-400/12 pt-3.5 flex justify-between items-center flex-wrap gap-3 text-xs text-slate-400">
           <span>
             Desktop Controls: Drag map to pan · Mouse wheel to zoom · Keys 1–0 select tools ·
             Space pause/resume

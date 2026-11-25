@@ -8,6 +8,8 @@ interface MiniMapRadarProps {
   onPanTo: (x: number, y: number) => void;
 }
 
+const RADAR_SIZE = 140;
+
 const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
   simulation,
   renderer,
@@ -20,8 +22,6 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
   const [isMinimized, setIsMinimized] = useState(false);
   const isDraggingRef = useRef(false);
 
-  const RADAR_SIZE = 140;
-
   const handlePointerAction = useCallback(
     (clientX: number, clientY: number) => {
       const canvas = canvasRef.current;
@@ -31,16 +31,13 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
       const clickX = clientX - rect.left;
       const clickY = clientY - rect.top;
 
-      const normX = Math.max(0, Math.min(1, clickX / RADAR_SIZE));
-      const normY = Math.max(0, Math.min(1, clickY / RADAR_SIZE));
+      const normX = Math.max(0, Math.min(1, clickX / (rect.width || RADAR_SIZE)));
+      const normY = Math.max(0, Math.min(1, clickY / (rect.height || RADAR_SIZE)));
 
       const worldW = simulation.world.width || 128;
       const worldH = simulation.world.height || 128;
 
-      const targetX = normX * worldW;
-      const targetY = normY * worldH;
-
-      onPanTo(targetX, targetY);
+      onPanTo(normX * worldW, normY * worldH);
     },
     [simulation, onPanTo]
   );
@@ -55,7 +52,6 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Build or update offscreen terrain canvas once
     if (!terrainCanvasRef.current) {
       terrainCanvasRef.current = document.createElement('canvas');
       terrainCanvasRef.current.width = RADAR_SIZE;
@@ -105,7 +101,6 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
     const renderRadar = (timestamp: number) => {
       animId = requestAnimationFrame(renderRadar);
 
-      // Throttle radar updates to ~25 FPS to conserve GPU/CPU cycles
       if (timestamp - lastRenderTime < 40) return;
       lastRenderTime = timestamp;
 
@@ -119,12 +114,10 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
 
       ctx.clearRect(0, 0, RADAR_SIZE, RADAR_SIZE);
 
-      // 1. Draw pre-rendered Biome Base via single blit
       if (tCanvas) {
         ctx.drawImage(tCanvas, 0, 0);
       }
 
-      // 2a. Scorched Earth overlay
       if (world.scorchedTiles) {
         ctx.fillStyle = 'rgba(28, 25, 23, 0.75)';
         for (let y = 0; y < H; y += 2) {
@@ -137,7 +130,6 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
         }
       }
 
-      // 2b. Burning Fires overlay
       if (world.fireTiles) {
         ctx.fillStyle = '#f97316';
         for (let y = 0; y < H; y += 2) {
@@ -150,7 +142,6 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
         }
       }
 
-      // 2c. Radiation Fallout Zones overlay
       if (world.radiationTiles) {
         ctx.fillStyle = 'rgba(132, 204, 22, 0.65)';
         for (let y = 0; y < H; y += 2) {
@@ -163,7 +154,6 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
         }
       }
 
-      // 2d. Battlefield Scars & Nuclear Monuments
       if (Array.isArray(world.skullMonuments) && world.skullMonuments.length > 0) {
         for (const m of world.skullMonuments) {
           ctx.fillStyle = m.kind === 'nuke' ? '#bef264' : m.kind === 'city_ruin' ? '#f87171' : '#e2e8f0';
@@ -171,9 +161,7 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
         }
       }
 
-      // 3. Heatmap Overlays
       if (mode === 'density') {
-        // Density Heatmap: agents
         ctx.fillStyle = 'rgba(250, 204, 21, 0.4)';
         if (simulation.agents) {
           for (const a of simulation.agents) {
@@ -184,7 +172,6 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
           }
         }
       } else if (mode === 'wealth') {
-        // Wealth Heatmap: resource nodes & town granaries
         ctx.fillStyle = 'rgba(34, 197, 94, 0.5)';
         if (simulation.resources) {
           for (const r of simulation.resources) {
@@ -193,7 +180,6 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
           }
         }
       } else if (mode === 'conflict') {
-        // Conflict Heatmap: active warbands & frontlines
         const wf = simulation.warfareSystem;
         if (wf && wf.warbands) {
           ctx.fillStyle = 'rgba(239, 68, 68, 0.7)';
@@ -208,7 +194,6 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
         }
       }
 
-      // 4. Settlements and Territory Boundaries
       const settlements = simulation.settlementSystem?.settlements;
       if (settlements) {
         for (const s of settlements.values()) {
@@ -217,7 +202,6 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
           const scy = s.center.y * scaleY;
           const srad = (s.radius || 8) * scaleX;
 
-          // Territory circle
           ctx.strokeStyle = s.factionColor || '#f59e0b';
           ctx.lineWidth = 1;
           ctx.setLineDash([2, 2]);
@@ -226,13 +210,11 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
           ctx.stroke();
           ctx.setLineDash([]);
 
-          // Settlement hub icon
           ctx.fillStyle = '#fbbf24';
           ctx.fillRect(scx - 2, scy - 2, 4, 4);
         }
       }
 
-      // 5. Active Warbands blips
       const warfare = simulation.warfareSystem;
       if (warfare && warfare.warbands) {
         ctx.fillStyle = '#ef4444';
@@ -244,7 +226,6 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
         }
       }
 
-      // 6. Camera Viewport Bounding Box
       if (renderer?.camera) {
         const cam = renderer.camera;
         const zoom = cam.zoom || 12;
@@ -276,92 +257,42 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
   if (isMinimized) {
     return (
       <button
+        type="button"
         onClick={() => setIsMinimized(false)}
-        style={{
-          position: 'absolute',
-          bottom: '74px',
-          left: '12px',
-          background: 'rgba(15, 23, 42, 0.92)',
-          border: '1px solid rgba(255, 255, 255, 0.15)',
-          color: '#38bdf8',
-          borderRadius: '8px',
-          padding: '6px 10px',
-          fontSize: '11px',
-          fontWeight: 600,
-          cursor: 'pointer',
-          boxShadow: '0 4px 14px rgba(0,0,0,0.4)',
-          zIndex: 18,
-        }}
+        className="absolute bottom-[74px] left-3 z-[18] bg-slate-900/90 border border-white/15 text-sky-400 hover:bg-slate-800 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold cursor-pointer shadow-lg whitespace-nowrap"
       >
         🗺️ Radar
       </button>
     );
   }
 
-  const modeBtnStyle = (m: RadarMode): React.CSSProperties => ({
-    background: mode === m ? '#38bdf8' : 'transparent',
-    color: mode === m ? '#0f172a' : '#94a3b8',
-    border: 'none',
-    borderRadius: '4px',
-    padding: '2px 5px',
-    fontSize: '9px',
-    fontWeight: 600,
-    cursor: 'pointer',
-    transition: 'all 0.12s ease',
-  });
+  const modeBtnClass = (m: RadarMode) =>
+    `border-0 rounded px-1.5 py-0.5 text-[9px] font-semibold cursor-pointer transition-colors whitespace-nowrap ${
+      mode === m ? 'bg-sky-400 text-slate-900' : 'bg-transparent text-slate-400 hover:text-slate-200'
+    }`;
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        bottom: '74px',
-        left: '12px',
-        background: 'rgba(15, 23, 42, 0.92)',
-        backdropFilter: 'blur(8px)',
-        border: '1px solid rgba(255, 255, 255, 0.15)',
-        borderRadius: '10px',
-        padding: '6px',
-        boxShadow: '0 8px 24px rgba(0, 0, 0, 0.45)',
-        zIndex: 18,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '4px',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          fontSize: '10px',
-          color: '#cbd5e1',
-          padding: '0 2px',
-        }}
-      >
-        <span style={{ fontWeight: 600, color: '#38bdf8' }}>🗺️ Tactical Radar</span>
-        <div style={{ display: 'flex', gap: '2px', alignItems: 'center' }}>
-          <button style={modeBtnStyle('territory')} onClick={() => setMode('territory')}>
+    <div className="hidden sm:flex absolute bottom-[74px] left-3 z-[18] bg-slate-900/92 backdrop-blur-md border border-white/15 rounded-xl p-1.5 shadow-2xl flex-col gap-1">
+      <div className="flex justify-between items-center text-[10px] text-slate-300 px-0.5 gap-2">
+        <span className="font-semibold text-sky-400 whitespace-nowrap">🗺️ Radar</span>
+        <div className="flex gap-0.5 items-center">
+          <button type="button" className={modeBtnClass('territory')} onClick={() => setMode('territory')}>
             Borders
           </button>
-          <button style={modeBtnStyle('density')} onClick={() => setMode('density')}>
+          <button type="button" className={modeBtnClass('density')} onClick={() => setMode('density')}>
             People
           </button>
-          <button style={modeBtnStyle('wealth')} onClick={() => setMode('wealth')}>
+          <button type="button" className={modeBtnClass('wealth')} onClick={() => setMode('wealth')}>
             Wealth
           </button>
-          <button style={modeBtnStyle('conflict')} onClick={() => setMode('conflict')}>
+          <button type="button" className={modeBtnClass('conflict')} onClick={() => setMode('conflict')}>
             War
           </button>
           <button
+            type="button"
             onClick={() => setIsMinimized(true)}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: '#64748b',
-              cursor: 'pointer',
-              fontSize: '12px',
-              marginLeft: '4px',
-            }}
+            aria-label="Minimize tactical radar"
+            className="bg-transparent border-0 text-slate-400 hover:text-slate-200 cursor-pointer text-xs ml-1 px-1"
           >
             ✕
           </button>
@@ -372,11 +303,7 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
         ref={canvasRef}
         width={RADAR_SIZE}
         height={RADAR_SIZE}
-        style={{
-          borderRadius: '6px',
-          cursor: 'crosshair',
-          border: '1px solid rgba(255, 255, 255, 0.1)',
-        }}
+        className="w-[116px] h-[116px] md:w-[140px] md:h-[140px] rounded-md cursor-crosshair border border-white/10"
         onMouseDown={(e) => {
           isDraggingRef.current = true;
           handlePointerAction(e.clientX, e.clientY);

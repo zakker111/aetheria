@@ -1,6 +1,12 @@
 // God powers and player interaction (doc 01: god as influence, not RTS cursor)
 import { Building } from "../simulation/building.js";
 import { soundManager } from "../systems/audio";
+import {
+  emitGodEffect,
+  emitInspectEntity,
+  emitNotification,
+  subscribeWorldClick,
+} from "../state/worldUiStore";
 
 export class Interaction {
   constructor(simulation, renderer) {
@@ -13,26 +19,19 @@ export class Interaction {
   }
 
   notify(msg) {
-    if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") {
-      window.dispatchEvent(new CustomEvent("show_notification", { detail: msg }));
-    }
+    emitNotification(msg);
   }
   
   setupTools() {
-    if (typeof window === "undefined" || typeof document === "undefined") return;
-
-    this._onWorldClick = (e) => {
-      if (!e?.detail) return;
-      const { x, y } = e.detail;
+    this._unsubWorldClick = subscribeWorldClick(({ x, y }) => {
       this.useTool(x, y);
-    };
-    window.addEventListener("worldclick", this._onWorldClick);
+    });
   }
 
   destroy() {
-    if (typeof window !== "undefined" && this._onWorldClick) {
-      window.removeEventListener("worldclick", this._onWorldClick);
-      this._onWorldClick = null;
+    if (this._unsubWorldClick) {
+      this._unsubWorldClick();
+      this._unsubWorldClick = null;
     }
   }
   
@@ -116,9 +115,7 @@ export class Interaction {
         if (this.renderer) {
           this.renderer.selectedEntity = closest;
         }
-        if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") {
-          window.dispatchEvent(new CustomEvent("entity_inspected", { detail: closest }));
-        }
+        emitInspectEntity(closest);
         break;
       }
 
@@ -129,9 +126,7 @@ export class Interaction {
 
         if (agent) {
           soundManager.playBless();
-          if (typeof window !== "undefined") {
-            window.dispatchEvent(new CustomEvent("god_effect", { detail: { type: "bless", x: agent.x, y: agent.y, duration: 700 } }));
-          }
+          emitGodEffect({ type: "bless", x: agent.x, y: agent.y, duration: 700 });
           this.notify(`👤 Spawned ${agent.name} (${this.simulation.agents.length} citizens)!`);
         } else {
           this.notify("Cannot spawn on water, walls, or impassable terrain!");
@@ -183,15 +178,37 @@ export class Interaction {
         break;
       }
 
+      case "create_iron_mountain": {
+        if (this.simulation.world.isWalkable(tx, ty)) {
+          this.simulation.createMountainDeposit?.(x, y, "iron_mountain");
+          soundManager.playBuild();
+          emitGodEffect({ type: "bounty", x, y });
+          this.notify("⛰️ Massive Iron Mountain Lode raised! (Unlocked for Era 2+ miners, 420 reserve)");
+        } else {
+          this.notify("Mountain deposits must be raised on walkable terrain!");
+        }
+        break;
+      }
+
+      case "create_uranium_mountain": {
+        if (this.simulation.world.isWalkable(tx, ty)) {
+          this.simulation.createMountainDeposit?.(x, y, "uranium_mountain");
+          soundManager.playBuild();
+          emitGodEffect({ type: "bounty", x, y });
+          this.notify("☢️ Glowing Uranium Mountain Vein surfaced! (Unlocked for Era 6+ miners, 280 reserve)");
+        } else {
+          this.notify("Uranium veins must be surfaced on walkable terrain!");
+        }
+        break;
+      }
+
       case "create_bounty": {
         if (this.simulation.world.isWalkable(tx, ty)) {
           const list = this.simulation.spawnAbundantBounty ? 
             this.simulation.spawnAbundantBounty(x, y) : 
             [this.simulation.createResource(x, y, "wood", 50), this.simulation.createResource(x, y, "water", 100), this.simulation.createResource(x, y, "ore", 60)];
           soundManager.playBless();
-          if (typeof window !== "undefined") {
-            window.dispatchEvent(new CustomEvent("god_effect", { detail: { type: "bounty", x, y } }));
-          }
+          emitGodEffect({ type: "bounty", x, y });
           this.notify(`✨ Divine Bounty! Spawned ${list.length} nodes of wood, water, ore & food!`);
         }
         break;
@@ -294,15 +311,40 @@ export class Interaction {
             agent.needs.water = 100;
             agent.needs.rest = 100;
             agent.needs.social = 100;
-            if (agent.needs.health) agent.needs.health = 100;
+            agent.needs.health = 100;
+            agent.health = agent.maxHealth ?? 100;
+            agent.wounded = false;
+            agent.woundRecovery = 0;
+            if (agent.combat) agent.combat.health = agent.health;
+            if (agent.religion) {
+              agent.religion.faith = Math.min(100, (agent.religion.faith ?? 50) + 15);
+            }
             blessedCount++;
           }
         }
         soundManager.playBless();
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(new CustomEvent("god_effect", { detail: { type: "bless", x, y } }));
+        emitGodEffect({ type: "bless", x, y });
+        this.notify(`Divine blessing healed & restored ${blessedCount} citizens!`);
+        break;
+      }
+
+      case "inspire_faith": {
+        let nearestCreed = null;
+        let minDist = 26;
+        if (this.simulation.settlementSystem?.settlements) {
+          for (const s of this.simulation.settlementSystem.settlements.values()) {
+            if (!s || s.ruined || !s.center) continue;
+            const d = Math.hypot(s.center.x - x, s.center.y - y);
+            if (d < minDist) {
+              minDist = d;
+              nearestCreed = s.culture?.beliefId || null;
+            }
+          }
         }
-        this.notify(`Divine blessing restored ${blessedCount} citizens!`);
+        const res = this.simulation.religionSystem?.inspireArea?.(x, y, 9, nearestCreed) || { inspired: 0, converted: 0 };
+        soundManager.playBless();
+        emitGodEffect({ type: "bless", x, y, duration: 1000 });
+        this.notify(`🙏 Sacred revelation inspired ${res.inspired} citizens${res.converted > 0 ? ` (${res.converted} converted)` : ''}!`);
         break;
       }
 
@@ -398,9 +440,7 @@ export class Interaction {
           this.simulation.weatherSystem.strikeLightning(x, y, true);
         }
         soundManager.playThunder();
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(new CustomEvent("god_effect", { detail: { type: "smite", x, y } }));
-        }
+        emitGodEffect({ type: "smite", x, y });
         this.notify(`⚡ Lightning summoned at (${tx}, ${ty})!`);
         break;
       }
@@ -424,9 +464,7 @@ export class Interaction {
             })
           : null;
         soundManager.playThunder();
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(new CustomEvent("god_effect", { detail: { type: "nuke", x, y, duration: 2400 } }));
-        }
+        emitGodEffect({ type: "nuke", x, y, duration: 2400 });
         const dead = res?.deaths ?? 0;
         const ruins = res?.buildingsRuined ?? 0;
         this.notify(`☢️ Atomic blast at (${tx}, ${ty})! ${dead} casualties, ${ruins} structures shattered.`);
@@ -448,9 +486,7 @@ export class Interaction {
           smittenCount++;
         }
         soundManager.playThunder();
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(new CustomEvent("god_effect", { detail: { type: "smite", x, y } }));
-        }
+        emitGodEffect({ type: "smite", x, y });
         this.notify(`⚡ Divine lightning struck (${tx}, ${ty})! ${smittenCount} fallen.`);
         break;
       }

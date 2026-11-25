@@ -32,181 +32,96 @@ const TopBarComponent: React.FC<TopBarProps> = ({
   lodStats,
 }) => {
   return (
-    <div
-      style={{
-        background: 'rgba(15, 23, 42, 0.88)',
-        backdropFilter: 'blur(8px)',
-        border: '1px solid rgba(255, 255, 255, 0.12)',
-        padding: '10px 16px',
-        borderRadius: '12px',
-        fontSize: '13px',
-        pointerEvents: 'auto',
-        boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '6px',
-        minWidth: '280px',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
-          paddingBottom: '6px',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+    <div className="bg-slate-900/88 backdrop-blur-md border border-white/12 px-3 py-2 md:px-4 md:py-2.5 rounded-xl text-[13px] pointer-events-auto shadow-xl flex flex-col gap-1.5 w-full md:min-w-[272px] md:w-auto">
+      <div className="flex items-center justify-between border-b border-white/10 pb-1.5 gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <img
             src={pantheonEmblem}
             alt="Pantheon Emblem"
             referrerPolicy="no-referrer"
-            style={{
-              width: '24px',
-              height: '24px',
-              borderRadius: '50%',
-              border: '1px solid rgba(251,191,36,0.6)',
-              objectFit: 'cover',
-            }}
+            className="w-6 h-6 rounded-full border border-amber-400/60 object-cover shrink-0"
           />
-          <span
-            style={{
-              fontSize: '15px',
-              fontWeight: 700,
-              letterSpacing: '0.5px',
-              background: 'linear-gradient(135deg, #f43f5e, #fb7185, #fbbf24)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-            }}
-          >
+          <span className="text-[15px] font-bold tracking-wide bg-gradient-to-br from-rose-500 via-rose-400 to-amber-400 bg-clip-text text-transparent font-display">
             Aetheria
           </span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div className="flex items-center gap-2 shrink-0">
           {weather && (
             <span
               title={weather.description}
-              style={{
-                fontSize: '11px',
-                padding: '2px 6px',
-                borderRadius: '6px',
-                background: 'rgba(56, 189, 248, 0.15)',
-                border: '1px solid rgba(56, 189, 248, 0.3)',
-                color: '#38bdf8',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '3px',
-              }}
+              className="text-[11px] px-1.5 py-0.5 rounded-md bg-sky-400/15 border border-sky-400/30 text-sky-400 inline-flex items-center gap-1 whitespace-nowrap"
             >
               <span>{weather.icon}</span>
-              <span>{weather.name}</span>
+              <span className="hidden sm:inline">{weather.name}</span>
             </span>
           )}
-          <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-            {is25D ? '2.5D' : '2D'}
-          </span>
+          <span className="text-[11px] text-slate-400">{is25D ? '2.5D' : '2D'}</span>
         </div>
       </div>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(2, 1fr)',
-          gap: '6px 12px',
-          marginTop: '2px',
-          fontVariantNumeric: 'tabular-nums',
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
-          <span style={{ color: '#94a3b8' }}>Day / Hour:</span>{' '}
-          <span style={{ fontWeight: 600, color: '#f8fafc' }}>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1 mt-0.5 font-mono-tabular">
+        <div className="flex justify-between text-xs gap-1">
+          <span className="text-slate-400">Day / Hour:</span>
+          <span className="font-semibold text-slate-50">
             {time.days + 1} : {time.hours}
           </span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
-          <span style={{ color: '#94a3b8' }}>Agents:</span>{' '}
-          <span style={{ fontWeight: 600, color: '#f8fafc' }}>{agentCount}</span>
+        <div className="flex justify-between text-xs gap-1">
+          <span className="text-slate-400">Agents:</span>
+          <span className="font-semibold text-slate-50">{agentCount}</span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
-          <span style={{ color: '#94a3b8' }}>Births / Deaths:</span>{' '}
-          <span style={{ fontWeight: 600 }}>
-            <span style={{ color: '#22c55e' }}>{births}</span> /{' '}
-            <span style={{ color: '#f43f5e' }}>{deaths}</span>
+        <div className="flex justify-between text-xs gap-1">
+          <span className="text-slate-400">Births / Deaths:</span>
+          <span className="font-semibold">
+            <span className="text-green-500">{births}</span> /{' '}
+            <span className="text-rose-500">{deaths}</span>
             {avgDeathAge !== undefined && avgDeathAge > 0 ? (
-              <span style={{ color: '#94a3b8', fontSize: '11px', marginLeft: '4px' }} title="Average age at death">
+              <span className="text-slate-400 text-[11px] ml-1 hidden sm:inline" title="Average age at death">
                 (avg {avgDeathAge.toFixed(1)}y)
               </span>
             ) : null}
           </span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
-          <span style={{ color: '#94a3b8' }}>Era:</span>{' '}
+        <div className="flex justify-between text-xs gap-1">
+          <span className="text-slate-400">Era:</span>
           <span
-            style={{
-              fontWeight: 600,
-              color: dominantAge?.color || '#fbbf24',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '3px',
-            }}
+            className="font-semibold inline-flex items-center gap-1 truncate"
+            style={{ color: dominantAge?.color || '#fbbf24' }}
           >
             {dominantAge ? `${dominantAge.icon} ${dominantAge.name}` : 'Tribal'}
           </span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
-          <span style={{ color: '#94a3b8' }}>Societies:</span>{' '}
-          <span style={{ fontWeight: 600, color: '#fbbf24' }}>{societiesCount}</span>
+        <div className="flex justify-between text-xs gap-1">
+          <span className="text-slate-400">Societies:</span>
+          <span className="font-semibold text-amber-400">{societiesCount}</span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
-          <span style={{ color: '#94a3b8' }}>Speed:</span>{' '}
-          <span style={{ fontWeight: 600, color: '#f8fafc' }}>{speed}x</span>
+        <div className="flex justify-between text-xs gap-1">
+          <span className="text-slate-400">Speed:</span>
+          <span className="font-semibold text-slate-50">{speed}x</span>
         </div>
-        <div
-          style={{
-            gridColumn: 'span 2',
-            display: 'flex',
-            gap: '10px',
-            fontSize: '11px',
-            color: '#cbd5e1',
-            borderTop: '1px solid rgba(255,255,255,0.08)',
-            paddingTop: '5px',
-            marginTop: '2px',
-          }}
-        >
+        <div className="col-span-2 flex flex-wrap gap-x-2.5 gap-y-1 text-[11px] text-slate-300 border-t border-white/8 pt-1 mt-0.5">
           <span>
-            🌾 Food: <b style={{ color: '#f87171' }}>{resources.food}</b>
+            🌾 Food: <b className="text-red-400">{resources.food}</b>
           </span>
           <span>
-            🌲 Wood: <b style={{ color: '#4ade80' }}>{resources.wood}</b>
+            🌲 Wood: <b className="text-green-400">{resources.wood}</b>
           </span>
           <span>
-            ⛏️ Ore: <b style={{ color: '#cbd5e1' }}>{resources.ore}</b>
+            ⛏️ Ore: <b className="text-slate-300">{resources.ore}</b>
           </span>
           <span>
-            💧 Water: <b style={{ color: '#38bdf8' }}>{resources.water}</b>
+            💧 Water: <b className="text-sky-400">{resources.water}</b>
           </span>
         </div>
         {lodStats && (
-          <div
-            style={{
-              gridColumn: 'span 2',
-              display: 'flex',
-              justifyContent: 'space-between',
-              fontSize: '11px',
-              color: '#94a3b8',
-              borderTop: '1px solid rgba(255,255,255,0.06)',
-              paddingTop: '4px',
-              marginTop: '1px',
-            }}
-          >
+          <div className="col-span-2 flex justify-between text-[11px] text-slate-400 border-t border-white/6 pt-1 mt-0.5">
             <span>
-              ⚡ Sim: <b style={{ color: '#38bdf8' }}>{lodStats.avgTickMs.toFixed(1)}ms</b>
+              ⚡ Sim: <b className="text-sky-400">{lodStats.avgTickMs.toFixed(1)}ms</b>
             </span>
             <span title="LOD Distribution: T0 (In Viewport), T1 (Active Towns), T2 (Hinterland Macro)">
-              LOD: <span style={{ color: '#4ade80' }}>T0:{lodStats.tier0}</span> |{' '}
-              <span style={{ color: '#fbbf24' }}>T1:{lodStats.tier1}</span> |{' '}
-              <span style={{ color: '#a78bfa' }}>T2:{lodStats.tier2}</span>
+              LOD: <span className="text-green-400">T0:{lodStats.tier0}</span> |{' '}
+              <span className="text-amber-400">T1:{lodStats.tier1}</span> |{' '}
+              <span className="text-violet-400">T2:{lodStats.tier2}</span>
             </span>
           </div>
         )}

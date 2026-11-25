@@ -5,9 +5,15 @@ export class Resource {
     this.type = "resource";
     this.x = x;
     this.y = y;
-    this.resourceType = resourceType; // "food", "water", "wood", "ore", "gem"
+    this.resourceType = resourceType; // "food", "water", "wood", "ore", "gem", "uranium"
     this.amount = amount;
     this.maxAmount = Math.max(amount, 40);
+    this.depositTier = options.depositTier || (resourceType === "uranium" ? "uranium_mountain" : "standard");
+    this.requiredEraId = options.requiredEraId ?? (
+      this.depositTier === "uranium_mountain" || resourceType === "uranium" ? 6 :
+      this.depositTier === "iron_mountain" ? 2 :
+      1
+    );
     this.destroyed = false;
     // True while the node is empty and in its recovery period. The spatial
     // index skips depleted nodes, so we must clear it when refill begins.
@@ -27,8 +33,9 @@ export class Resource {
       this.growthStage === "ancient" ? 100 : 80
     );
 
-    // Finite geological reserve cycles for mineral seams (ores/gems deplete permanently)
+    // Finite geological reserve cycles for mineral seams (ores/gems/uranium deplete permanently)
     this.exhaustionsRemaining = options.exhaustionsRemaining ?? (
+      this.depositTier === "iron_mountain" || this.depositTier === "uranium_mountain" || resourceType === "uranium" ? 0 :
       resourceType === "ore" ? 1 :
       resourceType === "gem" ? 0 :
       999
@@ -50,11 +57,16 @@ export class Resource {
         : this.growthStage === "ancient" ? "Ancient Grove"
         : "Timber Grove";
       this.normalLabel = "Timber Grove";
+    } else if (resourceType === "uranium" || this.depositTier === "uranium_mountain") {
+      this.regrowRate = 0;
+      this.recoveryTime = 400;
+      this.depletedLabel = "Spent Uranium Seam";
+      this.label = "Uranium Mountain Vein";
     } else if (resourceType === "ore") {
-      this.regrowRate = 0.008; // Ore seams barely seep back once tapped; mining depletes them
+      this.regrowRate = this.depositTier === "iron_mountain" ? 0 : 0.008; // Ore seams barely seep back once tapped; mining depletes them
       this.recoveryTime = 240; // secondary seam exposure takes long
-      this.depletedLabel = "Exhausted Seam";
-      this.label = "Mineral Ore Deposit";
+      this.depletedLabel = this.depositTier === "iron_mountain" ? "Exhausted Iron Mountain" : "Exhausted Seam";
+      this.label = this.depositTier === "iron_mountain" ? "Iron Mountain Lode" : "Mineral Ore Deposit";
     } else if (resourceType === "gem") {
       this.regrowRate = 0.004;
       this.recoveryTime = 360;
@@ -72,15 +84,19 @@ export class Resource {
     if (this.destroyed || this.exhausted) return;
 
     const mod = environmentalModifier || 1.0;
-    const rate = Math.max(0.004, this.regrowRate * mod);
+    const rate = this.regrowRate > 0 ? Math.max(0.004, this.regrowRate * mod) : 0;
 
     if (this.amount <= 0 || this.depleted) {
-      // Permanently exhausted ore/gem mines do not recover
-      if (this.resourceType === "ore" || this.resourceType === "gem") {
+      // Permanently exhausted ore/gem/uranium mines do not recover
+      if (this.resourceType === "ore" || this.resourceType === "gem" || this.resourceType === "uranium") {
         if (this.exhaustionsRemaining <= 0) {
           this.exhausted = true;
           this.recoveryTicks = 0;
-          this.label = this.resourceType === "gem" ? "Mined-Out Vein" : "Exhausted Mine";
+          this.label = this.resourceType === "gem"
+            ? "Mined-Out Vein"
+            : this.resourceType === "uranium"
+              ? "Spent Uranium Seam"
+              : (this.depositTier === "iron_mountain" ? "Exhausted Iron Mountain" : "Exhausted Mine");
           return;
         }
       }
@@ -153,10 +169,14 @@ export class Resource {
   markDepleted(world = null) {
     this.amount = 0;
     this.depleted = true;
-    if ((this.resourceType === "ore" || this.resourceType === "gem") && (this.exhaustionsRemaining ?? 0) <= 0) {
+    if ((this.resourceType === "ore" || this.resourceType === "gem" || this.resourceType === "uranium") && (this.exhaustionsRemaining ?? 0) <= 0) {
       this.exhausted = true;
       this.recoveryTicks = 0;
-      this.label = this.resourceType === "gem" ? "Mined-Out Vein" : "Exhausted Mine";
+      this.label = this.resourceType === "gem"
+        ? "Mined-Out Vein"
+        : this.resourceType === "uranium"
+          ? "Spent Uranium Seam"
+          : (this.depositTier === "iron_mountain" ? "Exhausted Iron Mountain" : "Exhausted Mine");
       if (world && typeof world.removeFromSpatialIndex === 'function') {
         world.removeFromSpatialIndex(Math.floor(this.x), Math.floor(this.y), this);
       }
@@ -192,6 +212,8 @@ export class Resource {
       resourceType: this.resourceType,
       amount: this.amount,
       maxAmount: this.maxAmount,
+      depositTier: this.depositTier || "standard",
+      requiredEraId: this.requiredEraId ?? 1,
       destroyed: this.destroyed,
       label: this.label,
       normalLabel: this.normalLabel || null,
@@ -210,10 +232,18 @@ export class Resource {
       growthStage: data.growthStage,
       growthProgress: data.growthProgress,
       exhaustionsRemaining: data.exhaustionsRemaining,
-      exhausted: data.exhausted
+      exhausted: data.exhausted,
+      depositTier: data.depositTier,
+      requiredEraId: data.requiredEraId
     });
     resource.id = data.id;
     resource.maxAmount = data.maxAmount;
+    resource.depositTier = data.depositTier || (resource.resourceType === "uranium" ? "uranium_mountain" : "standard");
+    resource.requiredEraId = data.requiredEraId ?? (
+      resource.depositTier === "uranium_mountain" || resource.resourceType === "uranium" ? 6 :
+      resource.depositTier === "iron_mountain" ? 2 :
+      1
+    );
     resource.destroyed = data.destroyed || false;
     // Depletion & lifecycle state must round-trip or a resumed run silently
     // revives spent nodes / changes growth thresholds on load.

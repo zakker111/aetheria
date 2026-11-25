@@ -354,11 +354,36 @@ export class ReligionSystem {
         });
         
         // Track active ritual visuals
+        const ritualTick = this.simulation?.clock?.tick ?? this.worldState?.simulation?.clock?.tick ?? 0;
         this.activeRituals.set(temple.id, {
-            startTime: this.world?.simulation?.clock?.tick ?? 0, // deterministic sim ticks
+            startTime: ritualTick,
             duration: 300,
             priestId: priest.id
         });
+    }
+
+    /**
+     * Inspire faith and optionally spread a settlement creed in an area (Divine Miracle).
+     */
+    inspireArea(x, y, radius = 9, targetBeliefId = null) {
+        const agents = this.worldState?.agents || this.simulation?.agents || [];
+        let inspired = 0;
+        let converted = 0;
+        for (const a of agents) {
+            if (!a || !a.alive) continue;
+            if (Math.hypot(a.x - x, a.y - y) > radius) continue;
+            if (!a.religion) this.initReligionEntity(a);
+            a.religion.faith = Math.min(100, (a.religion.faith ?? 50) + 25);
+            if (targetBeliefId && BELIEF_CREEDS[targetBeliefId] && a.religion.beliefId !== targetBeliefId) {
+                a.religion.beliefId = targetBeliefId;
+                converted++;
+            }
+            if (a.needs) {
+                a.needs.social = Math.min(100, (a.needs.social ?? 50) + 15);
+            }
+            inspired++;
+        }
+        return { inspired, converted };
     }
 
     /**

@@ -1,7 +1,7 @@
 import React from 'react';
 import gameBanner from '../assets/images/aetheria_game_banner_1790511715234.jpg';
 
-interface GuideModalProps {
+export interface GuideModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
@@ -11,86 +11,59 @@ export const GuideModal: React.FC<GuideModalProps> = ({ isOpen, onClose }) => {
 
   return (
     <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0, 0, 0, 0.65)',
-        backdropFilter: 'blur(4px)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 50,
-        pointerEvents: 'auto',
-      }}
+      className="fixed inset-0 bg-black/65 backdrop-blur-sm flex items-center justify-center z-50 pointer-events-auto p-4"
       onClick={onClose}
     >
       <div
-        style={{
-          background: 'rgba(15, 23, 42, 0.96)',
-          border: '1px solid rgba(255, 255, 255, 0.16)',
-          padding: '16px 20px',
-          borderRadius: '16px',
-          fontSize: '12px',
-          maxWidth: '380px',
-          width: '90vw',
-          color: '#cbd5e1',
-          boxShadow: '0 20px 50px rgba(0, 0, 0, 0.6)',
-        }}
+        className="bg-slate-900/95 border border-white/15 px-5 py-4 rounded-2xl text-xs max-w-[390px] w-full text-slate-300 shadow-2xl max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-      <img
-        src={gameBanner}
-        alt="Aetheria 2.5D Realm"
-        referrerPolicy="no-referrer"
-        style={{
-          width: '100%',
-          borderRadius: '8px',
-          marginBottom: '10px',
-          border: '1px solid rgba(255, 255, 255, 0.15)',
-        }}
-      />
-      <h3
-        style={{
-          marginBottom: '6px',
-          color: '#f43f5e',
-          fontSize: '12px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <span>Divine Instructions</span>
-        <button
-          onClick={onClose}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            color: '#64748b',
-            cursor: 'pointer',
-            fontSize: '14px',
-            lineHeight: 1,
-          }}
-        >
-          ✕
-        </button>
-      </h3>
-      <div style={{ margin: '3px 0' }}>
-        • <b>2.5D Isometric World &amp; Ecology:</b> Elevated terrain with growing forests (Sapling → Ancient), finite depleting ore mines, and wild herds stalked by settlement Hunters.
-      </div>
-      <div style={{ margin: '3px 0' }}>
-        • <b>Era Buildings &amp; Upgrades (Lv 1–3):</b> Unlock Windmills, Inns, Libraries, Apothecaries, Citadels, Banks, Factories, Research Labs, Air Defense Radars, Nuclear Plants &amp; Silos—each boosting farms, XP, healing, trade, stability, or defense!
-      </div>
-      <div style={{ margin: '3px 0' }}>
-        • <b>Atomic Deterrence &amp; Infrastructure:</b> Warhead enrichment requires a <b>Factory + Nuclear Plant + Ore</b> (boosted by Labs &amp; Silos); autonomous nukes fire only as a last resort.
-      </div>
-      <div style={{ margin: '3px 0' }}>
-        • <b>Deep Diplomacy (W):</b> Scarcity Trade &amp; Non-Aggression Pacts, nuclear proliferation sanctions, ultimatums, Tributary Vassalage, and third-party Peace Mediation.
-      </div>
-      <div style={{ margin: '3px 0' }}>
-        • <b>Spectator Controls:</b> Use <b>⚔️ Next Battle</b> to jump to active fronts, or inspect citizens, buildings, and mines for live stats &amp; Follow camera.
-      </div>
-      <div style={{ margin: '3px 0' }}>• <b>Drag</b> map to pan · <b>Scroll wheel</b> to zoom · <b>Keys 1-0</b> for tools · <b>Spacebar</b> pause/resume</div>
+        <img
+          src={gameBanner}
+          alt="Aetheria 2.5D Realm"
+          referrerPolicy="no-referrer"
+          className="w-full rounded-lg mb-2.5 border border-white/15 block aspect-[16/9] object-cover"
+        />
+        <h3 className="mb-1.5 text-rose-500 text-xs font-bold flex justify-between items-center">
+          <span>Divine Instructions</span>
+          <button
+            onClick={onClose}
+            aria-label="Close guide"
+            className="bg-transparent border-0 text-slate-400 hover:text-slate-200 cursor-pointer text-sm leading-none"
+          >
+            ✕
+          </button>
+        </h3>
+        <div className="my-1">
+          • <b>2.5D Isometric World &amp; Ecology:</b> Elevated terrain with growing forests (Sapling
+          → Ancient), finite depleting ore mines, and wild herds stalked by settlement Hunters.
+        </div>
+        <div className="my-1">
+          • <b>Era Buildings &amp; Upgrades (Lv 1–3):</b> Unlock Windmills, Inns, Libraries,
+          Apothecaries, Citadels, Banks, Factories, Research Labs, Air Defense Radars, Nuclear
+          Plants &amp; Silos—each boosting farms, XP, healing, trade, stability, or defense!
+        </div>
+        <div className="my-1">
+          • <b>Atomic Deterrence &amp; Infrastructure:</b> Warhead enrichment requires a{' '}
+          <b>Factory + Nuclear Plant + Ore</b> (boosted by Labs &amp; Silos); autonomous nukes
+          fire only as a last resort.
+        </div>
+        <div className="my-1">
+          • <b>Deep Diplomacy (W):</b> Scarcity Trade &amp; Non-Aggression Pacts, nuclear
+          proliferation sanctions, ultimatums, Tributary Vassalage, and third-party Peace
+          Mediation.
+        </div>
+        <div className="my-1">
+          • <b>Spectator Controls:</b> Use <b>⚔️ Next Battle</b> to jump to active fronts, or
+          inspect citizens, buildings, and mines for live stats &amp; Follow camera.
+        </div>
+        <div className="my-1">
+          • <b>Drag</b> map to pan · <b>Scroll wheel</b> to zoom · <b>Keys 1-0</b> for tools ·{' '}
+          <b>Spacebar</b> pause/resume
+        </div>
       </div>
     </div>
   );
 };
+
+export default GuideModal;

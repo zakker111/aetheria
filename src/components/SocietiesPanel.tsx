@@ -13,54 +13,22 @@ const SocietiesPanelComponent: React.FC<SocietiesPanelProps> = ({
   onClose,
 }) => {
   return (
-    <div
-      style={{
-        background: 'rgba(15, 23, 42, 0.88)',
-        backdropFilter: 'blur(8px)',
-        border: '1px solid rgba(255, 255, 255, 0.12)',
-        borderRadius: '12px',
-        padding: '12px 14px',
-        pointerEvents: 'auto',
-        boxShadow: '0 6px 20px rgba(0, 0, 0, 0.35)',
-        fontSize: '12px',
-        maxHeight: '260px',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          fontWeight: 600,
-          color: '#38bdf8',
-          marginBottom: '8px',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-          paddingBottom: '4px',
-          fontSize: '13px',
-        }}
-      >
-        <span>🏛️ Societies & Settlements</span>
+    <div className="bg-slate-900/90 backdrop-blur-md border border-white/12 rounded-xl px-3.5 py-3 pointer-events-auto shadow-xl text-xs max-h-[260px] flex flex-col overflow-hidden">
+      <div className="flex items-center justify-between font-semibold text-sky-400 mb-2 border-b border-white/8 pb-1 text-[13px]">
+        <span>🏛️ Societies &amp; Settlements</span>
         <button
+          type="button"
           onClick={onClose}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            color: '#64748b',
-            cursor: 'pointer',
-            fontSize: '14px',
-            lineHeight: 1,
-          }}
+          aria-label="Close societies panel"
+          className="bg-transparent border-0 text-slate-400 hover:text-slate-200 cursor-pointer text-sm leading-none px-1"
         >
           ✕
         </button>
       </div>
 
-      <div style={{ overflowY: 'auto', flex: 1, paddingRight: '4px' }}>
+      <div className="overflow-y-auto flex-1 pr-1">
         {settlements.length === 0 ? (
-          <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>
+          <div className="text-slate-400 italic">
             Detecting active tribes and settlements...
           </div>
         ) : (
@@ -73,60 +41,47 @@ const SocietiesPanelComponent: React.FC<SocietiesPanelProps> = ({
               : '';
 
             return (
-              <div
+              <button
+                type="button"
                 key={s.id}
                 onClick={() => onSelectSettlement(s)}
-                style={{
-                  background: 'rgba(30, 41, 59, 0.6)',
-                  border: '1px solid rgba(255, 255, 255, 0.06)',
-                  padding: '8px 10px',
-                  borderRadius: '8px',
-                  marginBottom: '6px',
-                  cursor: 'pointer',
-                  transition: 'all 0.15s ease',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'rgba(51, 65, 85, 0.8)';
-                  e.currentTarget.style.borderColor = '#38bdf8';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'rgba(30, 41, 59, 0.6)';
-                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.06)';
-                }}
+                className="w-full text-left bg-slate-800/60 hover:bg-slate-700/80 border border-white/6 hover:border-sky-400 px-2.5 py-2 rounded-lg mb-1.5 cursor-pointer transition-colors block"
               >
-                <div
-                  style={{
-                    fontWeight: 600,
-                    color: '#fbbf24',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                  }}
-                >
-                  <span>
+                <div className="font-semibold text-amber-400 flex justify-between items-center gap-2">
+                  <span className="truncate">
                     {s.tierIcon || '🏡'} {s.name}{' '}
-                    <small style={{ fontSize: '10px', opacity: 0.8 }}>({s.tier || 'Village'})</small>
+                    <small className="text-[10px] opacity-80">({s.tier || 'Village'})</small>
                   </span>
-                  <span style={{ color: '#22c55e' }}>{s.population} citizens</span>
+                  <span className="text-emerald-400 font-mono-tabular whitespace-nowrap shrink-0">
+                    {s.population} citizens
+                  </span>
                 </div>
-                <div style={{ color: '#94a3b8', fontSize: '11px', marginTop: '3px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>{leader} • {s.buildingsCount} structures{cultureTag}</span>
+                <div className="text-slate-400 text-[11px] mt-0.5 flex justify-between items-center gap-2">
+                  <span className="truncate">
+                    {leader} • {s.buildingsCount} structures{cultureTag}
+                  </span>
                   {s.age && (
-                    <span style={{ fontSize: '10px', color: s.age.color || '#38bdf8', fontWeight: 600 }}>
+                    <span
+                      className="text-[10px] font-semibold whitespace-nowrap shrink-0"
+                      style={{ color: s.age.color || '#38bdf8' }}
+                    >
                       {s.age.icon} {s.age.name}
                     </span>
                   )}
                 </div>
                 {s.age?.monumentName && (
-                  <div style={{ color: '#38bdf8', fontSize: '10px', marginTop: '2px', display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Wonder: {s.age.monumentName}</span>
-                    <span style={{ fontWeight: 600 }}>{s.age.hasMonument ? '✅ Complete' : `${s.age.monumentProgress || 0}%`}</span>
+                  <div className="text-sky-400 text-[10px] mt-0.5 flex justify-between items-center font-mono-tabular">
+                    <span className="truncate">Wonder: {s.age.monumentName}</span>
+                    <span className="font-semibold shrink-0">
+                      {s.age.hasMonument ? '✅ Complete' : `${s.age.monumentProgress || 0}%`}
+                    </span>
                   </div>
                 )}
-                <div style={{ color: '#cbd5e1', fontSize: '10px', marginTop: '2px' }}>
+                <div className="text-slate-300 text-[10px] mt-0.5 font-mono-tabular">
                   Stockpile: 🌾 {s.stockpile?.food || 0} | 🌲 {s.stockpile?.wood || 0} | ⛏️{' '}
                   {s.stockpile?.ore || 0}
                 </div>
-              </div>
+              </button>
             );
           })
         )}

@@ -34,28 +34,50 @@ Aetheria is an emergent 2.5D isometric civilization and history simulation game 
 - **Lethal Combat & Casualties**: Health drops to zero cause permanent death, battle gear drops, and named battles (*"Battle of Oakhaven Ridge"*).
 - **Peace Conferences**: Treaties with vassalage, tribute, demilitarization, and prisoner ransoming.
 
-### 5. High-Agent Spatial LOD Architecture
+### 5. Coastal, Naval, Fortifications & Era 1–7 Progression
+- **Great Lakes, Harbors & Bridges (`navalSystem.js`, `infrastructureSystem.js`)**: Organic watersheds, shoreline docks, fishing boats, river cargo barges, amphibious raid longboats, and multi-tile timber bridges.
+- **City Walls, Watchtowers & Siege Breaches (`fortificationSystem.js`)**: Era-scaled 4-connected walls, friendly/hostile gates, active watchtowers, and physical siege breaches into rubble gaps.
+- **Era 1–7 Structures, Wonders & Espionage**: Lv 1–3 civic upgrades, enduring Era 1–7 heritage landmarks, outward urban expansion & Metropolis mergers, 3-stage Cultural Wonders, guild espionage, and Modern/Nuclear Total War deterrence.
+- **Historical Lives & People Browser**: Deterministic multi-generation surnames, Era-stamped `lifeHistory`, builder/upgrade attributions, heirloom inheritance, biographies/epitaphs, and Chancellery (`C`) exploration.
+
+### 6. High-Agent Spatial LOD Architecture
 - **Tier 0 (Focus)**: Full 60Hz cognitive steering and animation.
 - **Tier 1 (Periphery)**: Time-sliced updates every 3 ticks.
 - **Tier 2 (Macro)**: Background demographic simulation every 12 ticks.
-- **O(1) Spatial Partitioning**: Cell-based spatial hashing maintaining <25ms tick durations at 1,800+ living agents.
+- **O(1) Spatial Partitioning**: Cell-based spatial hashing maintaining <26ms average tick durations at 1,500+ living agents.
 
 ---
 
-## 🧪 Automated Test Suites (10/10)
+## 🧪 Automated Test Suites (25/25)
 
-1. `tests/determinism.mjs` — Bit-exact RNG and state progression across identical seeds and save/load resumes.
-2. `tests/gossip.mjs` — Interpersonal gossip networks and emotional memory persistence.
-3. `tests/supplychain.mjs` — 9-phase supply chain validation (harvest, forge, stockpile, trade routes, caravans).
-4. `tests/warvisible.mjs` — Grudge accumulation and autonomous war declarations.
-5. `tests/scenario_warring.mjs` — Default Warring Kingdoms seed and feud resolution.
-6. `tests/soak.mjs` — 1,000+ tick longevity benchmark ensuring 0 crashes and demographic balance.
-7. `tests/stress_population.mjs` — High-agent stress test verifying <25ms/tick at 1,800+ agents.
+1. `tests/soak.mjs` — 1,000+ tick longevity benchmark ensuring 0 crashes and demographic balance.
+2. `tests/determinism.mjs` — Bit-exact RNG and state progression across identical seeds and save/load resumes.
+3. `tests/gossip.mjs` — Interpersonal gossip networks and emotional memory persistence.
+4. `tests/supplychain.mjs` — 9-phase supply chain validation (harvest, forge, stockpile, trade routes, caravans).
+5. `tests/warvisible.mjs` — Grudge accumulation and autonomous war declarations.
+6. `tests/scenario_warring.mjs` — Default Warring Kingdoms seed and feud resolution.
+7. `tests/stress_population.mjs` — 1,500+ agent stress test verifying <32ms/tick with Spatial LOD (~25.6 ms/tick).
 8. `tests/war_phase3b.mjs` — Equipment crafting, tactical roles, plundering, and conquest.
 9. `tests/dynasty_warfare.mjs` — Dynastic lineages, royal marriages, sieges, and peace conferences.
 10. `tests/combat_lethality_lore.mjs` — Mortal combat lethality, slayer titles, named battles, and lore serialization.
+11. `tests/phase6_succession_heroes.mjs` — Succession laws, pretenders, civil wars, relics, and Hall of Heroes.
+12. `tests/phase6_coastal_river.mjs` — Shoreline docks, fishing boats, river barges, and amphibious raids.
+13. `tests/phase7_lakes_bridges.mjs` — Major lakes, wide navigable rivers, and autonomous/divine bridging.
+14. `tests/phase8_tactical_mergers.mjs` — Carrying capacity `maxAgents`, tactical ranged combat, and Metropolis mergers.
+15. `tests/chaos_diplomacy_nukes_history.mjs` — Multi-front wars, rebellions, causal diplomacy, nuclear strikes, and memorials.
+16. `tests/wonders_espionage_archive.mjs` — 3-stage Cultural Wonders, guild sabotage, and Era chronicle filters.
+17. `tests/fortifications_siege_breach.mjs` — Perimeter walls, gates, active watchtowers, and physical siege breaches.
+18. `tests/modern_nuclear_total_war.mjs` — Era 7 Nuclear Age progression, dual rocket artillery, Total Wars, and MAD retaliation.
+19. `tests/spawning_and_diplomacy.mjs` — Wall-safe citizen spawning, pioneer colonization, alliances, and diplomatic logs.
+20. `tests/deep_structures_ecology_diplomacy.mjs` — Tanks/aircraft overflight, nuclear infrastructure gating, ecology, and vassalage.
+21. `tests/era_buildings_upgrades.mjs` — Era 1–6 civic structures, Lv 1–3 upgrades, buffs, and save/load parity.
+22. `tests/city_expansion_era_landmarks.mjs` — Distinct Era 1–7 monuments, disaster survival, and outward urban sprawl.
+23. `tests/historical_lives_and_people.mjs` — Deterministic surnames, inheritance, `lifeHistory`, heirlooms, and people roster.
+24. `tests/combatdepth.mjs` — Battlefield wounds, veteran campaign counters, and deterministic combat recovery.
+25. `tests/soldiers.mjs` — Professional soldier recruitment, population caps, economy tracking, and save/load parity.
 
 ---
 
 ## 📜 Open Source & Licensing
 Aetheria is open source under the [MIT License](../LICENSE).
+

@@ -320,6 +320,9 @@ export class SettlementSystem {
         }
       } else {
         settlement.abandonedTicks = (settlement.abandonedTicks || 0) + 1;
+        if (settlement.abandonedTicks === 15) {
+          this.sim?.diplomacySystem?.endWarsForAbandonedSettlement?.(id, 'Settlement abandoned', this.sim?.clock?.tick ?? 0);
+        }
         // Gradual decay once no citizens remain.
         if (!settlement.ruined && settlement.abandonedTicks > 60) {
           settlement.ruined = true;
@@ -328,6 +331,7 @@ export class SettlementSystem {
           settlement.tierIcon = '🏚️';
           const s = this.settlements.get(id);
           if (s) s.leadership = null;
+          this.sim?.diplomacySystem?.endWarsForAbandonedSettlement?.(id, 'Settlement abandoned into ruins', this.sim?.clock?.tick ?? 0);
           this.sim?.eventBus?.emit('SETTLEMENT_ABANDONED', { id, name: settlement.name });
         }
         if (settlement.ruined) settlement.ruinsTicks = (settlement.ruinsTicks || 0) + 1;

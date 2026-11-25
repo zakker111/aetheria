@@ -38,116 +38,45 @@ const DiplomacyPanelComponent: React.FC<DiplomacyPanelProps> = ({
 }) => {
   const [tab, setTab] = useState<DiploTab>('wars');
 
-  const tabStyle = (t: DiploTab): React.CSSProperties => ({
-    flex: 1,
-    padding: '4px 6px',
-    borderRadius: '5px',
-    border: 'none',
-    background: tab === t ? '#38bdf8' : 'transparent',
-    color: tab === t ? '#0f172a' : '#94a3b8',
-    fontSize: '10px',
-    fontWeight: 700,
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-    flexShrink: 0,
-  });
+  const tabClass = (t: DiploTab): string =>
+    `flex-1 py-1 px-1.5 rounded border-0 text-[10px] font-bold cursor-pointer whitespace-nowrap shrink-0 transition-colors ${
+      tab === t ? 'bg-sky-400 text-slate-900' : 'bg-transparent text-slate-400 hover:text-slate-200'
+    }`;
 
   return (
-    <div
-      style={{
-        background: 'rgba(15, 23, 42, 0.9)',
-        backdropFilter: 'blur(8px)',
-        border: '1px solid rgba(255, 255, 255, 0.12)',
-        borderRadius: '12px',
-        padding: '12px 14px',
-        pointerEvents: 'auto',
-        boxShadow: '0 6px 20px rgba(0, 0, 0, 0.35)',
-        fontSize: '12px',
-        maxHeight: '340px',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          fontWeight: 600,
-          color: '#38bdf8',
-          marginBottom: '6px',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-          paddingBottom: '4px',
-          fontSize: '13px',
-        }}
-      >
-        <span>⚔️ Diplomacy & Geopolitics</span>
+    <div className="bg-slate-900/90 backdrop-blur-md border border-white/12 rounded-xl px-3.5 py-3 pointer-events-auto shadow-lg text-xs max-h-[340px] flex flex-col overflow-hidden">
+      <div className="flex items-center justify-between font-semibold text-sky-400 mb-1.5 border-b border-white/8 pb-1 text-[13px]">
+        <span>⚔️ Diplomacy &amp; Geopolitics</span>
         <button
           onClick={onClose}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            color: '#64748b',
-            cursor: 'pointer',
-            fontSize: '14px',
-            lineHeight: 1,
-          }}
+          aria-label="Close diplomacy panel"
+          className="bg-transparent border-0 text-slate-500 hover:text-slate-300 cursor-pointer text-sm leading-none"
         >
           ✕
         </button>
       </div>
 
-      <div
-        style={{
-          display: 'flex',
-          gap: '4px',
-          background: 'rgba(30, 41, 59, 0.7)',
-          padding: '3px',
-          borderRadius: '7px',
-          marginBottom: '8px',
-          flexShrink: 0,
-        }}
-      >
-        <button style={tabStyle('wars')} onClick={() => setTab('wars')}>
+      <div className="flex gap-1 bg-slate-800/70 p-0.5 rounded-md mb-2 shrink-0">
+        <button className={tabClass('wars')} onClick={() => setTab('wars')}>
           Wars ({wars.length})
         </button>
-        <button style={tabStyle('why')} onClick={() => setTab('why')}>
-          Events & Why ({diplomaticHistory.length})
+        <button className={tabClass('why')} onClick={() => setTab('why')}>
+          Events &amp; Why ({diplomaticHistory.length})
         </button>
-        <button style={tabStyle('relations')} onClick={() => setTab('relations')}>
+        <button className={tabClass('relations')} onClick={() => setTab('relations')}>
           Realms ({relations.length})
         </button>
       </div>
 
-      <div style={{ overflowY: 'auto', flex: 1, paddingRight: '4px' }}>
+      <div className="overflow-y-auto flex-1 pr-1">
         {tab === 'wars' && (
           <>
-            <div
-              style={{
-                fontSize: '11px',
-                fontWeight: 700,
-                color: '#ef4444',
-                marginBottom: '6px',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-              }}
-            >
+            <div className="text-[11px] font-bold text-red-500 mb-1.5 flex justify-between items-center">
               <span>⚔️ ACTIVE CONFLICTS ({wars.length})</span>
               {wars.length > 0 && (
                 <button
                   onClick={onEnforceAllPeace}
-                  style={{
-                    background: '#1e293b',
-                    border: '1px solid #475569',
-                    color: '#f8fafc',
-                    borderRadius: '4px',
-                    fontSize: '9px',
-                    padding: '2px 6px',
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                  }}
+                  className="bg-slate-800 border border-slate-600 text-slate-50 rounded text-[9px] py-0.5 px-1.5 cursor-pointer whitespace-nowrap hover:bg-slate-700"
                 >
                   Enforce Peace
                 </button>
@@ -155,23 +84,14 @@ const DiplomacyPanelComponent: React.FC<DiplomacyPanelProps> = ({
             </div>
 
             {wars.length === 0 ? (
-              <div style={{ marginBottom: '10px' }}>
-                <div style={{ color: '#94a3b8', fontSize: '11px', marginBottom: '6px', fontStyle: 'italic' }}>
+              <div className="mb-2.5">
+                <div className="text-slate-400 text-[11px] mb-1.5 italic">
                   🕊️ No active wars right now.
                 </div>
                 {relations.length > 0 && (
                   <button
                     onClick={() => onProvokeWar(relations[0].s1Id, relations[0].s2Id)}
-                    style={{
-                      background: '#7f1d1d',
-                      border: '1px solid #ef4444',
-                      color: '#fecaca',
-                      borderRadius: '4px',
-                      fontSize: '10px',
-                      padding: '4px 8px',
-                      cursor: 'pointer',
-                      fontWeight: 600,
-                    }}
+                    className="bg-red-900 border border-red-500 text-red-200 rounded text-[10px] py-1 px-2 cursor-pointer font-semibold hover:bg-red-800"
                   >
                     ⚔️ Provoke War ({relations[0].s1Name} vs {relations[0].s2Name})
                   </button>
@@ -184,64 +104,37 @@ const DiplomacyPanelComponent: React.FC<DiplomacyPanelProps> = ({
                 return (
                   <div
                     key={idx}
-                    style={{
-                      background: 'rgba(239, 68, 68, 0.12)',
-                      border: '1px solid rgba(239, 68, 68, 0.35)',
-                      borderRadius: '8px',
-                      padding: '8px',
-                      marginBottom: '8px',
-                    }}
+                    className="bg-red-500/12 border border-red-500/35 rounded-lg p-2 mb-2"
                   >
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        fontWeight: 600,
-                        fontSize: '11px',
-                        color: '#fca5a5',
-                        fontVariantNumeric: 'tabular-nums',
-                      }}
-                    >
+                    <div className="flex justify-between font-semibold text-[11px] text-red-300 font-mono-tabular gap-1">
                       <span>
                         {w.totalWar ? '🔥 ' : '⚔️ '}
                         {w.attackerName} vs {w.defenderName}
                       </span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexShrink: 0 }}>
+                      <div className="flex items-center gap-1.5 shrink-0">
                         {w.totalWar && (
-                          <span style={{ fontSize: '9px', color: '#fecaca', background: 'rgba(185, 28, 28, 0.65)', padding: '1px 5px', borderRadius: '3px', fontWeight: 700 }}>
+                          <span className="text-[9px] text-red-200 bg-red-700/65 px-1 py-0.5 rounded font-bold">
                             TOTAL WAR
                           </span>
                         )}
                         {w.warScore != null && (
-                          <span style={{ fontSize: '10px', color: '#fde68a' }}>
+                          <span className="text-[10px] text-amber-200">
                             Score {w.warScore > 0 ? `+${w.warScore}` : w.warScore}
                           </span>
                         )}
                       </div>
                     </div>
-                    <div style={{ fontSize: '10px', color: '#cbd5e1', marginTop: '3px' }}>
-                      {w.casusBelli}
-                    </div>
+                    <div className="text-[10px] text-slate-300 mt-1">{w.casusBelli}</div>
                     {w.whySummary && (
-                      <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px' }}>
-                        Why: {w.whySummary}
-                      </div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">Why: {w.whySummary}</div>
                     )}
-                    <div style={{ fontSize: '10px', color: '#f87171', marginTop: '3px', fontVariantNumeric: 'tabular-nums' }}>
+                    <div className="text-[10px] text-red-400 mt-1 font-mono-tabular">
                       Fallen: {w.attackerName} {casualtiesA} · {w.defenderName} {casualtiesD}
                     </div>
-                    <div style={{ marginTop: '6px', display: 'flex', gap: '6px' }}>
+                    <div className="mt-1.5 flex gap-1.5">
                       <button
                         onClick={() => onSignPeace(w.attackerId, w.defenderId)}
-                        style={{
-                          background: '#0f172a',
-                          border: '1px solid #64748b',
-                          color: '#cbd5e1',
-                          borderRadius: '4px',
-                          fontSize: '10px',
-                          padding: '2px 8px',
-                          cursor: 'pointer',
-                        }}
+                        className="bg-slate-900 border border-slate-500 text-slate-300 rounded text-[10px] py-0.5 px-2 cursor-pointer hover:bg-slate-800"
                       >
                         🕊️ Sign Peace
                       </button>
@@ -251,24 +144,16 @@ const DiplomacyPanelComponent: React.FC<DiplomacyPanelProps> = ({
               })
             )}
 
-            <div style={{ fontSize: '11px', fontWeight: 700, color: '#22c55e', margin: '8px 0 4px' }}>
+            <div className="text-[11px] font-bold text-green-500 mt-2 mb-1">
               🤝 ALLIANCES ({treaties.length})
             </div>
             {treaties.length === 0 ? (
-              <div style={{ color: '#94a3b8', fontSize: '11px' }}>No active defensive pacts.</div>
+              <div className="text-slate-400 text-[11px]">No active defensive pacts.</div>
             ) : (
               treaties.map((t, idx) => (
                 <div
                   key={idx}
-                  style={{
-                    background: 'rgba(34, 197, 94, 0.1)',
-                    border: '1px solid rgba(34, 197, 94, 0.25)',
-                    borderRadius: '6px',
-                    padding: '5px 8px',
-                    marginBottom: '4px',
-                    fontSize: '11px',
-                    color: '#86efac',
-                  }}
+                  className="bg-green-500/10 border border-green-500/25 rounded-md py-1 px-2 mb-1 text-[11px] text-green-300"
                 >
                   🤝 {t.title}
                 </div>
@@ -278,58 +163,43 @@ const DiplomacyPanelComponent: React.FC<DiplomacyPanelProps> = ({
         )}
 
         {tab === 'why' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <div className="flex flex-col gap-1.5">
             {diplomaticHistory.length === 0 ? (
-              <div style={{ color: '#94a3b8', fontSize: '11px' }}>
+              <div className="text-slate-400 text-[11px]">
                 No diplomatic crises, ultimatums, or strikes logged yet.
               </div>
             ) : (
               diplomaticHistory.map((ev) => (
                 <div
                   key={ev.id}
-                  style={{
-                    background: ev.type === 'nuclear_strike' || ev.type === 'nuke' || ev.type === 'proliferation'
-                      ? 'rgba(132, 204, 22, 0.12)'
+                  className={`border border-white/8 rounded-md p-2 ${
+                    ev.type === 'nuclear_strike' || ev.type === 'nuke' || ev.type === 'proliferation'
+                      ? 'bg-lime-500/12'
                       : ev.type === 'war' || ev.type === 'betrayal'
-                        ? 'rgba(239, 68, 68, 0.1)'
-                        : 'rgba(30, 41, 59, 0.65)',
-                    border: '1px solid rgba(255, 255, 255, 0.08)',
-                    borderRadius: '7px',
-                    padding: '7px 8px',
-                  }}
+                        ? 'bg-red-500/10'
+                        : 'bg-slate-800/65'
+                  }`}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ fontWeight: 700, fontSize: '11px', color: '#f8fafc' }}>{ev.title}</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexShrink: 0 }}>
-                      <span style={{ fontSize: '9px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+                  <div className="flex justify-between items-center gap-1.5">
+                    <span className="font-bold text-[11px] text-slate-50">{ev.title}</span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className="text-[9px] text-slate-400 font-mono-tabular">
                         T{ev.tick}
                       </span>
                       {onPanTo && typeof ev.x === 'number' && typeof ev.y === 'number' && (
                         <button
                           onClick={() => onPanTo(ev.x as number, ev.y as number)}
-                          style={{
-                            background: 'rgba(56, 189, 248, 0.15)',
-                            border: 'none',
-                            color: '#38bdf8',
-                            borderRadius: '3px',
-                            fontSize: '9px',
-                            padding: '1px 5px',
-                            cursor: 'pointer',
-                          }}
+                          className="bg-sky-400/15 border-0 text-sky-400 rounded text-[9px] py-0.5 px-1.5 cursor-pointer hover:bg-sky-400/25"
                         >
                           Locate
                         </button>
                       )}
                     </div>
                   </div>
-                  <div style={{ fontSize: '10px', color: '#e2e8f0', marginTop: '2px' }}>{ev.what}</div>
-                  <div style={{ fontSize: '10px', color: '#fbbf24', marginTop: '2px' }}>
-                    Why: {ev.why}
-                  </div>
+                  <div className="text-[10px] text-slate-200 mt-0.5">{ev.what}</div>
+                  <div className="text-[10px] text-amber-400 mt-0.5">Why: {ev.why}</div>
                   {ev.drivers && ev.drivers.length > 0 && (
-                    <div style={{ fontSize: '9px', color: '#94a3b8', marginTop: '2px' }}>
-                      {ev.drivers.join(' · ')}
-                    </div>
+                    <div className="text-[9px] text-slate-400 mt-0.5">{ev.drivers.join(' · ')}</div>
                   )}
                 </div>
               ))
@@ -340,51 +210,49 @@ const DiplomacyPanelComponent: React.FC<DiplomacyPanelProps> = ({
         {tab === 'relations' && (
           <>
             {relations.length === 0 ? (
-              <div style={{ color: '#94a3b8', fontSize: '11px' }}>
+              <div className="text-slate-400 text-[11px]">
                 At least 2 settlements needed for diplomacy.
               </div>
             ) : (
               relations.map((rel, idx) => {
-                let statusLabel = <span style={{ color: '#22c55e', fontWeight: 600 }}>Alliance 🤝</span>;
-                if (rel.status === 'war') statusLabel = <span style={{ color: '#ef4444', fontWeight: 600 }}>At War ⚔️</span>;
-                else if (rel.status === 'tension') statusLabel = <span style={{ color: '#f59e0b', fontWeight: 600 }}>Tension ⚠️</span>;
-                else if (rel.status === 'peace') statusLabel = <span style={{ color: '#94a3b8' }}>Peace 🕊️</span>;
+                let statusLabel = <span className="text-green-500 font-semibold">Alliance 🤝</span>;
+                if (rel.status === 'war')
+                  statusLabel = <span className="text-red-500 font-semibold">At War ⚔️</span>;
+                else if (rel.status === 'tension')
+                  statusLabel = <span className="text-amber-500 font-semibold">Tension ⚠️</span>;
+                else if (rel.status === 'peace')
+                  statusLabel = <span className="text-slate-400">Peace 🕊️</span>;
 
                 return (
                   <div
                     key={idx}
-                    style={{
-                      background: 'rgba(30, 41, 59, 0.65)',
-                      border: '1px solid rgba(255, 255, 255, 0.06)',
-                      borderRadius: '6px',
-                      padding: '6px 8px',
-                      marginBottom: '6px',
-                      fontSize: '11px',
-                    }}
+                    className="bg-slate-800/65 border border-white/6 rounded-md p-2 mb-1.5 text-[11px]"
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span>{rel.s1Name} ↔ {rel.s2Name}</span>
+                    <div className="flex justify-between gap-1">
+                      <span>
+                        {rel.s1Name} ↔ {rel.s2Name}
+                      </span>
                       <span>{statusLabel}</span>
                     </div>
-                    <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
+                    <div className="text-[10px] text-slate-400 mt-0.5 font-mono-tabular">
                       Affinity: {Math.round(rel.score)}/100
                       {rel.sanctioned ? ' · 🚫 Embargoed' : ''}
                       {((rel.s1Warheads || 0) > 0 || (rel.s2Warheads || 0) > 0) &&
                         ` · ☢️ ${rel.s1Warheads || 0}:${rel.s2Warheads || 0}`}
                     </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '5px' }}>
+                    <div className="flex flex-wrap gap-1 mt-1.5">
                       {rel.status !== 'war' && (
                         <>
                           <button
                             onClick={() => onProvokeWar(rel.s1Id, rel.s2Id)}
-                            style={{ background: '#7f1d1d', border: 'none', color: '#fecaca', fontSize: '9px', padding: '2px 6px', borderRadius: '3px', cursor: 'pointer' }}
+                            className="bg-red-900 border-0 text-red-200 text-[9px] py-0.5 px-1.5 rounded cursor-pointer hover:bg-red-800"
                           >
                             Provoke War
                           </button>
                           {onImposeSanctions && !rel.sanctioned && (
                             <button
                               onClick={() => onImposeSanctions(rel.s1Id, rel.s2Id)}
-                              style={{ background: '#78350f', border: 'none', color: '#fde68a', fontSize: '9px', padding: '2px 6px', borderRadius: '3px', cursor: 'pointer' }}
+                              className="bg-amber-900 border-0 text-amber-200 text-[9px] py-0.5 px-1.5 rounded cursor-pointer hover:bg-amber-800"
                             >
                               Sanction
                             </button>
@@ -392,7 +260,7 @@ const DiplomacyPanelComponent: React.FC<DiplomacyPanelProps> = ({
                           {onIssueUltimatum && (
                             <button
                               onClick={() => onIssueUltimatum(rel.s1Id, rel.s2Id, 'tribute')}
-                              style={{ background: '#334155', border: 'none', color: '#e2e8f0', fontSize: '9px', padding: '2px 6px', borderRadius: '3px', cursor: 'pointer' }}
+                              className="bg-slate-700 border-0 text-slate-200 text-[9px] py-0.5 px-1.5 rounded cursor-pointer hover:bg-slate-600"
                             >
                               Ultimatum
                             </button>
@@ -402,7 +270,7 @@ const DiplomacyPanelComponent: React.FC<DiplomacyPanelProps> = ({
                       {rel.status !== 'alliance' && rel.status !== 'war' && (
                         <button
                           onClick={() => onFormAlliance(rel.s1Id, rel.s2Id)}
-                          style={{ background: '#14532d', border: 'none', color: '#bbf7d0', fontSize: '9px', padding: '2px 6px', borderRadius: '3px', cursor: 'pointer' }}
+                          className="bg-green-900 border-0 text-green-200 text-[9px] py-0.5 px-1.5 rounded cursor-pointer hover:bg-green-800"
                         >
                           Ally
                         </button>
@@ -410,7 +278,7 @@ const DiplomacyPanelComponent: React.FC<DiplomacyPanelProps> = ({
                       {onLaunchSpyOp && (
                         <button
                           onClick={() => onLaunchSpyOp(rel.s1Id, rel.s2Id, 'sabotage_granary')}
-                          style={{ background: '#312e81', border: '1px solid rgba(165, 180, 252, 0.35)', color: '#e0e7ff', fontSize: '9px', padding: '2px 6px', borderRadius: '3px', cursor: 'pointer' }}
+                          className="bg-indigo-950 border border-indigo-300/35 text-indigo-100 text-[9px] py-0.5 px-1.5 rounded cursor-pointer hover:bg-indigo-900"
                         >
                           Spy Sabotage
                         </button>
@@ -418,7 +286,7 @@ const DiplomacyPanelComponent: React.FC<DiplomacyPanelProps> = ({
                       {onLaunchNuke && (rel.s1Warheads || 0) > 0 && (
                         <button
                           onClick={() => onLaunchNuke(rel.s1Id, rel.s2Id)}
-                          style={{ background: '#3f6212', border: '1px solid #84cc16', color: '#ecfccb', fontSize: '9px', padding: '2px 6px', borderRadius: '3px', cursor: 'pointer' }}
+                          className="bg-lime-900 border border-lime-500 text-lime-100 text-[9px] py-0.5 px-1.5 rounded cursor-pointer hover:bg-lime-800"
                         >
                           ☢️ Strike {rel.s2Name}
                         </button>
@@ -426,7 +294,7 @@ const DiplomacyPanelComponent: React.FC<DiplomacyPanelProps> = ({
                       {onLaunchNuke && (rel.s2Warheads || 0) > 0 && (
                         <button
                           onClick={() => onLaunchNuke(rel.s2Id, rel.s1Id)}
-                          style={{ background: '#3f6212', border: '1px solid #84cc16', color: '#ecfccb', fontSize: '9px', padding: '2px 6px', borderRadius: '3px', cursor: 'pointer' }}
+                          className="bg-lime-900 border border-lime-500 text-lime-100 text-[9px] py-0.5 px-1.5 rounded cursor-pointer hover:bg-lime-800"
                         >
                           ☢️ Strike {rel.s1Name}
                         </button>

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { Suspense, lazy, useEffect, useRef, useState, useCallback } from 'react';
 import { Simulation } from './simulation/simulation.js';
 import { CanvasRenderer } from './presentation/renderer.js';
 import { Interaction } from './interaction/godPowers.js';
@@ -9,47 +9,40 @@ import { SocietiesPanel } from './components/SocietiesPanel';
 import { DiplomacyPanel } from './components/DiplomacyPanel';
 import { InspectorPanel } from './components/InspectorPanel';
 import { ChroniclePanel } from './components/ChroniclePanel';
-import { GuideModal } from './components/GuideModal';
-import { CivilizationModal } from './components/CivilizationModal';
 import { NotificationToast } from './components/NotificationToast';
 import { MiniMapRadar } from './components/MiniMapRadar';
 import { StartScreen, SavedWorldMeta } from './components/StartScreen';
 import { soundManager } from './systems/audio';
+import {
+  buildAgentInspectPayload,
+  buildBuildingInspectPayload,
+  buildInspectedEntityPayload,
+  buildSettlementInspectPayload,
+  buildWorldHudSnapshot,
+} from './simulation/worldSnapshot';
+import {
+  emitGodEffect,
+  publishWorldHudSnapshot,
+  resetWorldHudSnapshot,
+  subscribeEntityInspect,
+  subscribeNotifications,
+  useWorldHudSelector,
+} from './state/worldUiStore';
+import {
+  loadWorldFromStorage,
+  readLegacySavedWorldMetaSync,
+  readSavedWorldMetaFromStorage,
+  saveWorldToStorage,
+} from './utils/saveStorage';
 import packageJson from '../package.json';
 import {
   ToolType,
-  TimeState,
-  ResourceSummary,
   SettlementSummary,
-  WarSummary,
-  TreatySummary,
-  RelationSummary,
-  DiplomaticLogEntry,
-  ChronicleEntrySummary,
   InspectedEntityData,
 } from './types';
 
-function readSavedWorldMeta(): SavedWorldMeta | null {
-  try {
-    const raw = localStorage.getItem('aetheria_save');
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || (!parsed.world && !parsed.agents)) return null;
-    const tick = Number(parsed.clock?.tick || 0);
-    const settlementsArr = parsed.settlements?.settlements;
-    const settlementsCount = Array.isArray(settlementsArr) ? settlementsArr.length : 0;
-    const agentsCount = Array.isArray(parsed.agents) ? parsed.agents.length : 0;
-    return {
-      exists: true,
-      days: Math.floor(tick / 24),
-      settlementsCount,
-      agentsCount,
-      scenario: parsed.scenario === 'modern_nuclear' ? 'modern_nuclear' : 'warring',
-    };
-  } catch {
-    return null;
-  }
-}
+const GuideModal = lazy(() => import('./components/GuideModal'));
+const CivilizationModal = lazy(() => import('./components/CivilizationModal'));
 
 export const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -69,71 +62,94 @@ export const App: React.FC = () => {
     return 'title';
   });
   const gameScreenRef = useRef(gameScreen);
-  gameScreenRef.current = gameScreen;
-  const [savedMeta, setSavedMeta] = useState<SavedWorldMeta | null>(() => readSavedWorldMeta());
+  const [savedMeta, setSavedMeta] = useState<SavedWorldMeta | null>(() => readLegacySavedWorldMetaSync());
 
   // Scenario - default to Tribal Warring Kingdoms (switchable via StartScreen or ControlsHeader)
   const [scenario, setScenario] = useState<'modern_nuclear' | 'warring'>('warring');
   const pendingScenarioRef = useRef<'modern_nuclear' | 'warring'>(scenario);
   const [worldNonce, setWorldNonce] = useState(0);
 
-  // UI state
+  // UI & control state
   const [currentTool, setCurrentTool] = useState<ToolType>('inspect');
-  const [isPaused, setIsPaused] = useState(false);
-  const [speed, setSpeed] = useState(1);
   const [is25D, setIs25D] = useState(true);
   const [heightScaleLabel, setHeightScaleLabel] = useState('Heights: Normal');
-
-  const [timeState, setTimeState] = useState<TimeState>({ days: 0, hours: 0, tick: 0 });
-  const [agentCount, setAgentCount] = useState(0);
-  const [births, setBirths] = useState(0);
-  const [deaths, setDeaths] = useState(0);
-  const [avgDeathAge, setAvgDeathAge] = useState(0);
-  const [lodStats, setLodStats] = useState<{ tier0: number; tier1: number; tier2: number; avgTickMs: number } | null>(null);
-  const [resources, setResources] = useState<ResourceSummary>({
-    food: 0,
-    wood: 0,
-    ore: 0,
-    water: 0,
-    total: 0,
-  });
-
-  const [societies, setSocieties] = useState<SettlementSummary[]>([]);
-  const [societiesCount, setSocietiesCount] = useState(0);
-  const [wars, setWars] = useState<WarSummary[]>([]);
-  const [treaties, setTreaties] = useState<TreatySummary[]>([]);
-  const [relations, setRelations] = useState<RelationSummary[]>([]);
-  const [diplomaticHistory, setDiplomaticHistory] = useState<DiplomaticLogEntry[]>([]);
   const [followAgentId, setFollowAgentId] = useState<number | null>(null);
 
   const [societiesOpen, setSocietiesOpen] = useState(true);
   const [diplomacyOpen, setDiplomacyOpen] = useState(true);
+  const [mobilePanelsOpen, setMobilePanelsOpen] = useState(false);
   const societiesOpenRef = useRef(societiesOpen);
-  societiesOpenRef.current = societiesOpen;
   const [civilizationOpen, setCivilizationOpen] = useState(false);
   const civilizationOpenRef = useRef(civilizationOpen);
-  civilizationOpenRef.current = civilizationOpen;
   const [helpOpen, setHelpOpen] = useState(false);
   const helpOpenRef = useRef(helpOpen);
-  helpOpenRef.current = helpOpen;
-  const [currentWeather, setCurrentWeather] = useState<{
-    name: string;
-    icon: string;
-    description: string;
-  } | null>(null);
-  const [dominantAge, setDominantAge] = useState<{
-    name: string;
-    icon: string;
-    color: string;
-  } | null>(null);
+
+  useEffect(() => {
+    gameScreenRef.current = gameScreen;
+    societiesOpenRef.current = societiesOpen;
+    civilizationOpenRef.current = civilizationOpen;
+    helpOpenRef.current = helpOpen;
+  }, [gameScreen, societiesOpen, civilizationOpen, helpOpen]);
+
   const [notification, setNotification] = useState<string | null>(null);
   const [chronicleEvents, setChronicleEvents] = useState<string[]>([
     'World awakened with 128×128 terrain and biomes.',
   ]);
-  const [chronicleEntries, setChronicleEntries] = useState<ChronicleEntrySummary[]>([]);
   const [inspectedEntity, setInspectedEntity] = useState<InspectedEntityData | null>(null);
 
-  const notificationTimeoutRef = useRef<any>(null);
+  // Subscribed typed world telemetry slices (published via worldUiStore)
+  const timeState = useWorldHudSelector(
+    (s) => s.time,
+    (a, b) => a.days === b.days && a.hours === b.hours && a.tick === b.tick
+  );
+  const agentCount = useWorldHudSelector((s) => s.agentCount);
+  const births = useWorldHudSelector((s) => s.births);
+  const deaths = useWorldHudSelector((s) => s.deaths);
+  const avgDeathAge = useWorldHudSelector((s) => s.avgDeathAge);
+  const speed = useWorldHudSelector((s) => s.speed);
+  const isPaused = useWorldHudSelector((s) => s.isPaused);
+  const lodStats = useWorldHudSelector(
+    (s) => s.lodStats,
+    (a, b) =>
+      a === b ||
+      (Boolean(a && b) &&
+        a!.tier0 === b!.tier0 &&
+        a!.tier1 === b!.tier1 &&
+        a!.tier2 === b!.tier2 &&
+        Math.abs(a!.avgTickMs - b!.avgTickMs) < 0.2)
+  );
+  const currentWeather = useWorldHudSelector(
+    (s) => s.weather,
+    (a, b) => a === b || (Boolean(a && b) && a!.name === b!.name)
+  );
+  const dominantAge = useWorldHudSelector(
+    (s) => s.dominantAge,
+    (a, b) => a === b || (Boolean(a && b) && a!.name === b!.name)
+  );
+  const resources = useWorldHudSelector(
+    (s) => s.resources,
+    (a, b) =>
+      a.food === b.food &&
+      a.wood === b.wood &&
+      a.ore === b.ore &&
+      a.water === b.water &&
+      a.total === b.total
+  );
+  const societiesCount = useWorldHudSelector((s) => s.societiesCount);
+  const societies = useWorldHudSelector((s) => s.societies);
+  const wars = useWorldHudSelector((s) => s.wars);
+  const treaties = useWorldHudSelector((s) => s.treaties);
+  const relations = useWorldHudSelector((s) => s.relations);
+  const diplomaticHistory = useWorldHudSelector((s) => s.diplomaticHistory);
+  const chronicleEntries = useWorldHudSelector(
+    (s) => s.chronicleEntries,
+    (a, b) =>
+      a.length === b.length &&
+      a[0]?.id === b[0]?.id &&
+      a[0]?.tick === b[0]?.tick
+  );
+
+  const notificationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showNotification = useCallback((msg: string) => {
     setNotification(msg);
@@ -152,6 +168,16 @@ export const App: React.FC = () => {
   useEffect(() => {
     document.body.dataset.screen = gameScreen;
   }, [gameScreen]);
+
+  useEffect(() => {
+    let active = true;
+    void readSavedWorldMetaFromStorage().then((meta) => {
+      if (active && meta) setSavedMeta(meta);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Initialize simulation and renderer
   useEffect(() => {
@@ -176,6 +202,7 @@ export const App: React.FC = () => {
     }
 
     const renderer = new CanvasRenderer(canvas, sim.world, sim);
+    renderer.hudTopOffset = window.innerWidth < 960 ? 96 : 12;
     rendererRef.current = renderer;
 
     const interaction = new Interaction(sim, renderer);
@@ -188,19 +215,16 @@ export const App: React.FC = () => {
       renderer.centerOn(sim.agents[0].x, sim.agents[0].y, 14, true);
     }
 
-    // Reset React HUD state cleanly for fresh world initialization
+    // Reset React HUD state and store cleanly for fresh world initialization
     setCurrentTool('inspect');
     setChronicleEvents(['World awakened with 128×128 terrain and biomes.']);
-    setChronicleEntries([]);
-    setDiplomaticHistory([]);
-    setWars([]);
-    setTreaties([]);
-    setRelations([]);
+    resetWorldHudSnapshot();
+    publishWorldHudSnapshot(buildWorldHudSnapshot(sim, societiesOpenRef.current));
 
     // Set initial tool
     interaction.setTool('inspect');
 
-    // Attach event bus listeners
+    // Attach simulation event bus listeners
     const handleAgentCreated = (e: any) => {
       const name = e.name || `Citizen #${e.agentId}`;
       if (e.reason === 'divine') {
@@ -390,34 +414,26 @@ export const App: React.FC = () => {
     sim.eventBus.on('WALL_BREACHED', handleWallBreached);
     sim.eventBus.on('BUILDING_UPGRADED', handleBuildingUpgraded);
 
-    // Custom window events
-    const handleEntityInspected = (e: CustomEvent) => {
-      const detail = e.detail;
-      if (detail?.kind === 'agent' && detail.entity?.id != null && typeof sim.getAgentDossier === 'function') {
-        setInspectedEntity({ kind: 'agent', entity: detail.entity, dossier: sim.getAgentDossier(detail.entity.id) });
+    // Typed UI store subscriptions (replacing window.dispatchEvent channels)
+    const unsubInspect = subscribeEntityInspect((detail) => {
+      if (detail?.kind === 'agent' && detail.entity?.id != null) {
+        setInspectedEntity(buildAgentInspectPayload(sim, detail.entity.id, detail.entity) || detail);
       } else if (detail?.kind === 'settlement' && detail.entity?.id != null) {
         const s = sim.settlementSystem?.settlements.get(detail.entity.id) || detail.entity;
-        const ageSummary = sim.civilizationAgeSystem?.getSettlementAgeSummary(s.id);
-        const nuclearProgram = sim.civilizationAgeSystem?.getNuclearProgram?.(s.id);
-        const guilds = sim.espionageSystem?.getSettlementGuilds?.(s.id);
-        const fortifications = sim.fortificationSystem?.getSettlementFortificationSummary?.(s.id);
-        setInspectedEntity({ kind: 'settlement', entity: { ...s, age: ageSummary, nuclearProgram, guilds, fortifications } });
+        setInspectedEntity(buildSettlementInspectPayload(sim, s));
       } else if (detail?.kind === 'building' && detail.entity) {
-        const b = detail.entity;
-        const sName = b.settlementId != null ? sim.settlementSystem?.settlements?.get(b.settlementId)?.name : null;
-        const upgradeReq = typeof sim.getUpgradeRequirements === 'function' ? sim.getUpgradeRequirements(b) : null;
-        setInspectedEntity({ kind: 'building', entity: { ...b, settlementName: sName }, upgradeReq });
+        setInspectedEntity(buildBuildingInspectPayload(sim, detail.entity));
       } else {
         setInspectedEntity(detail);
       }
-    };
+      if (detail) {
+        setMobilePanelsOpen(true);
+      }
+    });
 
-    const handleShowNotification = (e: CustomEvent) => {
-      if (e.detail) showNotification(e.detail);
-    };
-
-    window.addEventListener('entity_inspected', handleEntityInspected as EventListener);
-    window.addEventListener('show_notification', handleShowNotification as EventListener);
+    const unsubNotifications = subscribeNotifications((msg) => {
+      if (msg) showNotification(msg);
+    });
 
     // Game animation loop with fixed-timestep accumulator for 60/120Hz smooth interpolation
     let lastTime = 0;
@@ -455,237 +471,20 @@ export const App: React.FC = () => {
       renderer.setFrameTiming(tickAlpha, isPlaying ? frameDt : 0, currentSpeed);
       renderer.render();
 
-      // UI state refresh throttle (4 times/sec)
+      // Publish typed HUD snapshot ~4x/sec; selectors granularly notify subscribed slices
       if (currentTime - lastUiUpdate > 250) {
-        const t = sim.clock.getTime();
-        setTimeState((prev) => (prev.days === t.days && prev.hours === t.hours && prev.tick === t.tick ? prev : t));
-        setAgentCount(sim.agents.length);
-        setBirths(sim.birthsThisSession || 0);
-        setDeaths(sim.deathsThisSession || 0);
-        setAvgDeathAge(sim.mortalityStats?.averageAgeAtDeath || 0);
-        setSpeed(sim.clock.speed);
-        setIsPaused(sim.clock.speed === 0);
+        const activeSim = simRef.current || sim;
+        const snap = buildWorldHudSnapshot(activeSim, societiesOpenRef.current);
+        publishWorldHudSnapshot(snap);
 
-        if (sim.lodStats) {
-          setLodStats((prev) => {
-            const ls = sim.lodStats;
-            if (
-              prev &&
-              prev.tier0 === ls.tier0 &&
-              prev.tier1 === ls.tier1 &&
-              prev.tier2 === ls.tier2 &&
-              Math.abs(prev.avgTickMs - (ls.avgTickMs || 0)) < 0.2
-            ) {
-              return prev;
-            }
-            return {
-              tier0: ls.tier0,
-              tier1: ls.tier1,
-              tier2: ls.tier2,
-              avgTickMs: ls.avgTickMs || 0,
-            };
-          });
-        }
-
-        if (sim.weatherSystem) {
-          const wInfo = sim.weatherSystem.getWeatherInfo();
-          setCurrentWeather((prev) => (prev && prev.name === wInfo.name ? prev : wInfo));
-        }
-        if (sim.civilizationAgeSystem) {
-          const aInfo = sim.civilizationAgeSystem.getDominantAge();
-          setDominantAge((prev) => (prev && prev.name === aInfo?.name ? prev : aInfo));
-        }
-
-        // Count resources
-        let food = 0,
-          wood = 0,
-          ore = 0,
-          water = 0;
-        const resList = sim.resources;
-        if (resList) {
-          for (let i = 0; i < resList.length; i++) {
-            const r = resList[i];
-            if (r.destroyed) continue;
-            if (r.resourceType === 'food') food++;
-            else if (r.resourceType === 'wood') wood++;
-            else if (r.resourceType === 'ore') ore++;
-            else if (r.resourceType === 'water') water++;
-          }
-        }
-        const totalRes = resList ? resList.length : 0;
-        setResources((prev) => (prev.food === food && prev.wood === wood && prev.ore === ore && prev.water === water && prev.total === totalRes ? prev : { food, wood, ore, water, total: totalRes }));
-
-        // Settlements
-        const settlementMap = sim.settlementSystem?.settlements;
-        if (settlementMap) {
-          const sCount = settlementMap.size;
-          setSocietiesCount((prev) => (prev === sCount ? prev : sCount));
-
-          if (societiesOpenRef.current) {
-            const sArr: SettlementSummary[] = [];
-            for (const s of settlementMap.values()) {
-              sArr.push({
-                id: s.id,
-                name: s.name,
-                tier: s.tier || 'Village',
-                tierIcon: s.tierIcon || '🏡',
-                population: s.population || (s.agentIds ? s.agentIds.size : 0),
-                center: { x: s.center?.x || 0, y: s.center?.y || 0 },
-                stockpile: {
-                  food: s.stockpile?.food || 0,
-                  wood: s.stockpile?.wood || 0,
-                  ore: s.stockpile?.ore || 0,
-                  stone: s.stockpile?.stone || 0,
-                },
-                leadership: s.leadership,
-                leadershipTitle: s.leadershipTitle,
-                buildingsCount: s.buildings ? s.buildings.length : 0,
-                age: sim.civilizationAgeSystem?.getSettlementAgeSummary(s.id),
-                nuclearProgram: sim.civilizationAgeSystem?.getNuclearProgram?.(s.id),
-                guilds: sim.espionageSystem?.getSettlementGuilds?.(s.id),
-                fortifications: sim.fortificationSystem?.getSettlementFortificationSummary?.(s.id),
-                culture: s.culture,
-                growthTrend: s.growthTrend,
-              });
-            }
-            setSocieties(sArr);
-          }
-
-          // Diplomacy data — keep live for panel, header badges, and Chancellery
-          const diplomacy = sim.diplomacySystem;
-          if (diplomacy) {
-            const tickNow = sim.clock?.tick ?? 0;
-            setWars(
-              (diplomacy.activeWars || []).map((w: any) => ({
-                attackerId: w.attackerId,
-                attackerName: w.attackerName,
-                defenderId: w.defenderId,
-                defenderName: w.defenderName,
-                casusBelli: w.casusBelli,
-                whySummary: w.whySummary,
-                drivers: w.drivers,
-                warScore: diplomacy.calculateWarScore ? diplomacy.calculateWarScore(w) : 0,
-                totalWar: Boolean(w.totalWar),
-                casualties: w.casualties || {},
-                plundered: w.plundered || { food: 0, wood: 0, ore: 0 },
-              }))
-            );
-
-            setTreaties(
-              (diplomacy.treaties || []).map((tr: any) => ({
-                title: tr.title || 'Defensive Alliance',
-                settlements: tr.settlements,
-              }))
-            );
-
-            const allSettlements = Array.from(settlementMap.values());
-            const relArr: RelationSummary[] = [];
-            for (let i = 0; i < allSettlements.length; i++) {
-              for (let j = i + 1; j < allSettlements.length; j++) {
-                const s1: any = allSettlements[i];
-                const s2: any = allSettlements[j];
-                const rel = diplomacy.getRelation(s1.id, s2.id);
-                if (rel) {
-                  relArr.push({
-                    s1Id: s1.id,
-                    s1Name: s1.name,
-                    s2Id: s2.id,
-                    s2Name: s2.name,
-                    status: rel.status,
-                    score: rel.score,
-                    sanctioned: (rel.sanctionedUntil || 0) > tickNow,
-                    s1Warheads: sim.civilizationAgeSystem?.getNuclearProgram?.(s1.id)?.warheads || 0,
-                    s2Warheads: sim.civilizationAgeSystem?.getNuclearProgram?.(s2.id)?.warheads || 0,
-                  });
-                }
-              }
-            }
-            setRelations(relArr);
-            // DiplomacySystem.recordDiplomaticEvent uses unshift(), so index 0 is newest
-            setDiplomaticHistory(Array.isArray(diplomacy.diplomaticHistory) ? diplomacy.diplomaticHistory.slice(0, 40) : []);
-          }
-        }
-
-        // Sync follow state if renderer cleared it on manual drag or agent death
         if (rendererRef.current) {
           const rFollow = rendererRef.current.followAgentId ?? null;
           setFollowAgentId((prev) => (prev === rFollow ? prev : rFollow));
         }
 
-        // Live inspector refresh (retains Fallen Memorial dossier if inspected agent died)
-        setInspectedEntity((currentInspect) => {
-          if (!currentInspect || !currentInspect.entity) return null;
-          if (currentInspect.kind === 'agent') {
-            const aid = currentInspect.entity.id;
-            const stillAlive =
-              typeof sim._agentById === 'function'
-                ? sim._agentById(aid)
-                : sim.agents.find((a: any) => a.id === aid);
-            const dossier = typeof sim.getAgentDossier === 'function' ? sim.getAgentDossier(aid) : null;
-            if (stillAlive && stillAlive.alive) {
-              return { kind: 'agent', entity: stillAlive, dossier };
-            }
-            if (dossier) {
-              return {
-                kind: 'agent',
-                entity: { ...currentInspect.entity, ...dossier, alive: false },
-                dossier,
-              };
-            }
-            return {
-              kind: 'agent',
-              entity: { ...currentInspect.entity, alive: false },
-              dossier: currentInspect.dossier || null,
-            };
-          } else if (currentInspect.kind === 'settlement') {
-            const updated = sim.settlementSystem?.settlements.get(currentInspect.entity.id);
-            if (updated) {
-              const ageSummary = sim.civilizationAgeSystem?.getSettlementAgeSummary(updated.id);
-              const nuclearProgram = sim.civilizationAgeSystem?.getNuclearProgram?.(updated.id);
-              const guilds = sim.espionageSystem?.getSettlementGuilds?.(updated.id);
-              const fortifications = sim.fortificationSystem?.getSettlementFortificationSummary?.(updated.id);
-              const docksCount = (sim.buildings || []).filter((b: any) => b.settlementId === updated.id && b.buildingType === 'dock' && !b.isRuined).length;
-              const vesselsCount = (sim.navalSystem?.vessels || []).filter((v: any) => v.settlementId === updated.id).length;
-              return { kind: 'settlement', entity: { ...updated, age: ageSummary, nuclearProgram, guilds, fortifications, docksCount, vesselsCount } };
-            }
-            return null;
-          } else if (currentInspect.kind === 'building') {
-            const bId = currentInspect.entity.id;
-            const stillBuilding = sim.buildings.find((b: any) => b.id === bId);
-            if (stillBuilding) {
-              const sName = stillBuilding.settlementId != null
-                ? sim.settlementSystem?.settlements?.get(stillBuilding.settlementId)?.name
-                : null;
-              const upgradeReq = typeof sim.getUpgradeRequirements === 'function'
-                ? sim.getUpgradeRequirements(stillBuilding)
-                : null;
-              return { kind: 'building', entity: { ...stillBuilding, settlementName: sName }, upgradeReq };
-            }
-            return null;
-          } else if (currentInspect.kind === 'resource') {
-            const rId = currentInspect.entity.id;
-            const stillRes = sim.resources.find((r: any) => r.id === rId && !r.destroyed);
-            if (stillRes) {
-              return { kind: 'resource', entity: stillRes };
-            }
-            return null;
-          }
-          return currentInspect;
-        });
-
-        if (sim.chronicleSystem?.getHighlights) {
-          const latestEntries = sim.chronicleSystem.getHighlights(80);
-          setChronicleEntries((prev) => {
-            if (
-              prev.length === latestEntries.length &&
-              prev[0]?.id === latestEntries[0]?.id &&
-              prev[0]?.tick === latestEntries[0]?.tick
-            ) {
-              return prev;
-            }
-            return latestEntries;
-          });
-        }
+        setInspectedEntity((currentInspect) =>
+          buildInspectedEntityPayload(activeSim, currentInspect)
+        );
 
         lastUiUpdate = currentTime;
       }
@@ -700,74 +499,22 @@ export const App: React.FC = () => {
         canvasRef.current.width = window.innerWidth;
         canvasRef.current.height = window.innerHeight;
       }
+      if (rendererRef.current) {
+        rendererRef.current.hudTopOffset = window.innerWidth < 960 ? 96 : 12;
+      }
     };
     window.addEventListener('resize', handleResize);
 
     return () => {
       cancelAnimationFrame(animationFrameId);
       window.removeEventListener('resize', handleResize);
-      window.removeEventListener('entity_inspected', handleEntityInspected as EventListener);
-      window.removeEventListener('show_notification', handleShowNotification as EventListener);
+      unsubInspect();
+      unsubNotifications();
       if (notificationTimeoutRef.current) clearTimeout(notificationTimeoutRef.current);
       interaction.destroy?.();
       renderer.destroy?.();
     };
   }, [addChronicleEntry, showNotification, worldNonce]);
-
-  // Keyboard shortcut listener (stable single subscription)
-  const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
-  keyHandlerRef.current = (e: KeyboardEvent) => {
-    if (gameScreenRef.current !== 'playing') {
-      return;
-    }
-    if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')) {
-      return;
-    }
-
-    if (e.key === 'Escape') {
-      setCivilizationOpen(false);
-      setHelpOpen(false);
-      return;
-    }
-    if (e.key === 'c' || e.key === 'C') {
-      if (!helpOpenRef.current) {
-        setCivilizationOpen((prev) => !prev);
-      }
-      return;
-    }
-    if (civilizationOpenRef.current || helpOpenRef.current) {
-      return;
-    }
-
-    if (e.code === 'Space') {
-      e.preventDefault();
-      handleTogglePause();
-    } else if (e.key === 'w' || e.key === 'W') {
-      setDiplomacyOpen((prev) => !prev);
-    } else {
-      const keyMap: { [k: string]: ToolType } = {
-        '1': 'inspect',
-        '2': 'spawn_agent',
-        '3': 'create_food',
-        '4': 'create_water',
-        '5': 'create_wood',
-        '6': 'create_ore',
-        '7': 'build_house',
-        '8': 'build_workshop',
-        '9': 'build_farm',
-        '0': 'bless',
-      };
-      if (keyMap[e.key]) {
-        handleSelectTool(keyMap[e.key]);
-      }
-    }
-  };
-
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => keyHandlerRef.current(e);
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
 
   // Action handlers
   const handleToggleView = () => {
@@ -797,13 +544,10 @@ export const App: React.FC = () => {
     if (!simRef.current) return;
     if (simRef.current.clock.speed > 0) {
       simRef.current.clock.pause();
-      setIsPaused(true);
-      setSpeed(0);
     } else {
       simRef.current.clock.setSpeed(1);
-      setIsPaused(false);
-      setSpeed(1);
     }
+    publishWorldHudSnapshot(buildWorldHudSnapshot(simRef.current, societiesOpenRef.current));
   };
 
   const handleCycleSpeed = () => {
@@ -813,8 +557,7 @@ export const App: React.FC = () => {
     const nextIdx = (currIdx + 1) % speeds.length;
     const newSpeed = speeds[nextIdx];
     simRef.current.clock.setSpeed(newSpeed);
-    setSpeed(newSpeed);
-    setIsPaused(false);
+    publishWorldHudSnapshot(buildWorldHudSnapshot(simRef.current, societiesOpenRef.current));
     showNotification(
       `Time speed set to ${newSpeed}x${
         newSpeed === 0.5 ? ' (Relaxed pace)' : newSpeed === 1 ? ' (Normal pace)' : ' (Fast forward)'
@@ -862,6 +605,63 @@ export const App: React.FC = () => {
     }
   };
 
+  // Keyboard shortcut listener (stable single subscription)
+  const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  useEffect(() => {
+    keyHandlerRef.current = (e: KeyboardEvent) => {
+      if (gameScreenRef.current !== 'playing') {
+        return;
+      }
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')) {
+        return;
+      }
+
+      if (e.key === 'Escape') {
+        setCivilizationOpen(false);
+        setHelpOpen(false);
+        return;
+      }
+      if (e.key === 'c' || e.key === 'C') {
+        if (!helpOpenRef.current) {
+          setCivilizationOpen((prev) => !prev);
+        }
+        return;
+      }
+      if (civilizationOpenRef.current || helpOpenRef.current) {
+        return;
+      }
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        handleTogglePause();
+      } else if (e.key === 'w' || e.key === 'W') {
+        setDiplomacyOpen((prev) => !prev);
+      } else {
+        const keyMap: { [k: string]: ToolType } = {
+          '1': 'inspect',
+          '2': 'spawn_agent',
+          '3': 'create_food',
+          '4': 'create_water',
+          '5': 'create_wood',
+          '6': 'create_ore',
+          '7': 'build_house',
+          '8': 'build_workshop',
+          '9': 'build_farm',
+          '0': 'bless',
+        };
+        if (keyMap[e.key]) {
+          handleSelectTool(keyMap[e.key]);
+        }
+      }
+    };
+  });
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => keyHandlerRef.current(e);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   const handlePanTo = useCallback((x: number, y: number) => {
     if (rendererRef.current) {
       rendererRef.current.centerOn(x, y);
@@ -874,16 +674,10 @@ export const App: React.FC = () => {
 
     const fullSettlement = simRef.current.settlementSystem?.settlements.get(s.id);
     if (fullSettlement) {
-      const ageSummary = simRef.current.civilizationAgeSystem?.getSettlementAgeSummary(s.id);
-      const nuclearProgram = simRef.current.civilizationAgeSystem?.getNuclearProgram?.(s.id);
-      const guilds = simRef.current.espionageSystem?.getSettlementGuilds?.(s.id);
-      const fortifications = simRef.current.fortificationSystem?.getSettlementFortificationSummary?.(s.id);
-      const target: InspectedEntityData = {
-        entity: { ...fullSettlement, age: ageSummary, nuclearProgram, guilds, fortifications },
-        kind: 'settlement',
-      };
+      const target = buildSettlementInspectPayload(simRef.current, fullSettlement);
       rendererRef.current.selectedEntity = target;
       setInspectedEntity(target);
+      setMobilePanelsOpen(true);
     }
     showNotification(`View centered on ${s.name}`);
   };
@@ -905,18 +699,15 @@ export const App: React.FC = () => {
   const handleSelectAgentById = useCallback((agentId: number) => {
     const sim = simRef.current;
     if (!sim) return;
-    const live = typeof sim._agentById === 'function' ? sim._agentById(agentId) : sim.agents?.find((a: any) => a.id === agentId);
-    const dossier = typeof sim.getAgentDossier === 'function' ? sim.getAgentDossier(agentId) : null;
-    if (!live && !dossier) return;
-    const target: InspectedEntityData = {
-      kind: 'agent',
-      entity: live || { ...dossier, alive: false },
-      dossier,
-    };
+    const target = buildAgentInspectPayload(sim, agentId);
+    if (!target) return;
     setInspectedEntity(target);
+    setMobilePanelsOpen(true);
     if (rendererRef.current) {
-      rendererRef.current.selectedEntity = live ? target : null;
-      if (live && live.alive) {
+      const live = target.entity;
+      const isLive = Boolean(live && live.alive && typeof live.x === 'number' && typeof live.y === 'number');
+      rendererRef.current.selectedEntity = isLive ? target : null;
+      if (isLive) {
         rendererRef.current.centerOn(live.x, live.y, Math.max(rendererRef.current.camera.zoom, 15));
       }
     }
@@ -927,14 +718,9 @@ export const App: React.FC = () => {
     if (!sim || !Array.isArray(sim.buildings)) return;
     const b = sim.buildings.find((item: any) => item && item.id === buildingId);
     if (!b) return;
-    const sName = b.settlementId != null ? sim.settlementSystem?.settlements?.get(b.settlementId)?.name : null;
-    const upgradeReq = typeof sim.getUpgradeRequirements === 'function' ? sim.getUpgradeRequirements(b) : null;
-    const target: InspectedEntityData = {
-      kind: 'building',
-      entity: { ...b, settlementName: sName },
-      upgradeReq,
-    };
+    const target = buildBuildingInspectPayload(sim, b);
     setInspectedEntity(target);
+    setMobilePanelsOpen(true);
     if (rendererRef.current) {
       rendererRef.current.selectedEntity = target;
       rendererRef.current.centerOn(b.x, b.y, Math.max(rendererRef.current.camera.zoom, 16));
@@ -1017,9 +803,7 @@ export const App: React.FC = () => {
       reason: `${attacker?.name || 'Nuclear Power'} launched a strategic atomic strike against ${target.name}`,
       isGodPower: false,
     });
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('god_effect', { detail: { type: 'nuke', x: target.center.x, y: target.center.y, duration: 2400 } }));
-    }
+    emitGodEffect({ type: 'nuke', x: target.center.x, y: target.center.y, duration: 2400 });
   };
 
   const handleRallyWarband = (settlementId: number) => {
@@ -1039,11 +823,7 @@ export const App: React.FC = () => {
       const sim = simRef.current;
       const updated = sim.settlementSystem?.settlements.get(settlementId);
       if (updated) {
-        const ageSummary = sim.civilizationAgeSystem?.getSettlementAgeSummary?.(updated.id);
-        const nuclearProgram = sim.civilizationAgeSystem?.getNuclearProgram?.(updated.id);
-        const guilds = sim.espionageSystem?.getSettlementGuilds?.(updated.id);
-        const fortifications = sim.fortificationSystem?.getSettlementFortificationSummary?.(updated.id);
-        setInspectedEntity({ kind: 'settlement', entity: { ...updated, age: ageSummary, nuclearProgram, guilds, fortifications } });
+        setInspectedEntity(buildSettlementInspectPayload(sim, updated));
       }
     } else {
       showNotification(`Not enough healthy adult citizens in ${sName}.`);
@@ -1101,11 +881,7 @@ export const App: React.FC = () => {
     if (spawned > 0) {
       soundManager.playBless();
       showNotification(`👤 Added ${spawned} citizen${spawned > 1 ? 's' : ''} to ${s.name} (Pop ${s.population})!`);
-      const ageSummary = sim.civilizationAgeSystem?.getSettlementAgeSummary?.(s.id);
-      const nuclearProgram = sim.civilizationAgeSystem?.getNuclearProgram?.(s.id);
-      const guilds = sim.espionageSystem?.getSettlementGuilds?.(s.id);
-      const fortifications = sim.fortificationSystem?.getSettlementFortificationSummary?.(s.id);
-      setInspectedEntity({ kind: 'settlement', entity: { ...s, age: ageSummary, nuclearProgram, guilds, fortifications } });
+      setInspectedEntity(buildSettlementInspectPayload(sim, s));
     }
   };
 
@@ -1134,10 +910,7 @@ export const App: React.FC = () => {
       showNotification(`${w.icon} Commissioned ${w.name}!`);
       const s = sim.settlementSystem?.settlements.get(settlementId);
       if (s && inspectedEntity?.kind === 'settlement' && inspectedEntity.entity?.id === settlementId) {
-        const ageSummary = sim.civilizationAgeSystem.getSettlementAgeSummary(settlementId);
-        const nuclearProgram = sim.civilizationAgeSystem.getNuclearProgram?.(settlementId);
-        const guilds = sim.espionageSystem?.getSettlementGuilds?.(settlementId);
-        setInspectedEntity({ kind: 'settlement', entity: { ...s, age: ageSummary, nuclearProgram, guilds } });
+        setInspectedEntity(buildSettlementInspectPayload(sim, s));
       }
     }
   };
@@ -1150,11 +923,7 @@ export const App: React.FC = () => {
       showNotification(`${w.icon} ${w.name}: ${w.complete ? 'Completed!' : `Stage ${w.stage}/${w.maxStage} (${w.progress}%)`}`);
       const s = sim.settlementSystem?.settlements.get(settlementId);
       if (s && inspectedEntity?.kind === 'settlement' && inspectedEntity.entity?.id === settlementId) {
-        const ageSummary = sim.civilizationAgeSystem.getSettlementAgeSummary(settlementId);
-        const nuclearProgram = sim.civilizationAgeSystem.getNuclearProgram?.(settlementId);
-        const guilds = sim.espionageSystem?.getSettlementGuilds?.(settlementId);
-        const fortifications = sim.fortificationSystem?.getSettlementFortificationSummary?.(settlementId);
-        setInspectedEntity({ kind: 'settlement', entity: { ...s, age: ageSummary, nuclearProgram, guilds, fortifications } });
+        setInspectedEntity(buildSettlementInspectPayload(sim, s));
       }
     }
   };
@@ -1174,13 +943,7 @@ export const App: React.FC = () => {
         `🧱 ${sName}: ${res.summary.intactWalls} walls, ${res.summary.intactGates} gates, ${res.summary.towers} watchtowers!`
       );
       if (s && inspectedEntity?.kind === 'settlement' && inspectedEntity.entity?.id === settlementId) {
-        const ageSummary = sim.civilizationAgeSystem.getSettlementAgeSummary(settlementId);
-        const nuclearProgram = sim.civilizationAgeSystem.getNuclearProgram?.(settlementId);
-        const guilds = sim.espionageSystem?.getSettlementGuilds?.(settlementId);
-        setInspectedEntity({
-          kind: 'settlement',
-          entity: { ...s, age: ageSummary, nuclearProgram, guilds, fortifications: res.summary },
-        });
+        setInspectedEntity(buildSettlementInspectPayload(sim, s, res.summary));
       }
     }
   };
@@ -1191,13 +954,7 @@ export const App: React.FC = () => {
     const res = sim.upgradeBuilding(buildingId, { byPlayer: true, tick: sim.clock?.tick ?? 0 });
     if (res?.ok && res.building) {
       soundManager.playBuild();
-      const sName = res.building.settlementId != null
-        ? sim.settlementSystem?.settlements?.get(res.building.settlementId)?.name
-        : null;
-      const upgradeReq = typeof sim.getUpgradeRequirements === 'function'
-        ? sim.getUpgradeRequirements(res.building)
-        : null;
-      setInspectedEntity({ kind: 'building', entity: { ...res.building, settlementName: sName }, upgradeReq });
+      setInspectedEntity(buildBuildingInspectPayload(sim, res.building));
     } else if (res?.reason) {
       showNotification(`⚠️ ${res.reason}`);
     }
@@ -1212,11 +969,7 @@ export const App: React.FC = () => {
       showNotification(`📐 Commissioned ${res.meta?.icon || '🏗️'} ${res.meta?.name || buildingType}!`);
       const s = sim.settlementSystem?.settlements.get(settlementId);
       if (s && inspectedEntity?.kind === 'settlement' && inspectedEntity.entity?.id === settlementId) {
-        const ageSummary = sim.civilizationAgeSystem?.getSettlementAgeSummary?.(settlementId);
-        const nuclearProgram = sim.civilizationAgeSystem?.getNuclearProgram?.(settlementId);
-        const guilds = sim.espionageSystem?.getSettlementGuilds?.(settlementId);
-        const fortifications = sim.fortificationSystem?.getSettlementFortificationSummary?.(settlementId);
-        setInspectedEntity({ kind: 'settlement', entity: { ...s, age: ageSummary, nuclearProgram, guilds, fortifications } });
+        setInspectedEntity(buildSettlementInspectPayload(sim, s));
       }
     } else if (res?.reason) {
       showNotification(`⚠️ ${res.reason}`);
@@ -1235,16 +988,26 @@ export const App: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!simRef.current) return;
     try {
       const data = simRef.current.serialize();
-      localStorage.setItem('aetheria_save', JSON.stringify(data));
-      setSavedMeta(readSavedWorldMeta());
-      soundManager.playClick();
-      showNotification('Game progress saved to local storage!');
+      const res = await saveWorldToStorage(data);
+      if (res.ok) {
+        setSavedMeta(res.meta);
+        soundManager.playClick();
+        const kb = Math.max(1, Math.round(res.bytes / 1024));
+        showNotification(
+          res.storage === 'indexeddb'
+            ? `Game progress saved (${res.compressed ? 'gzip ' : ''}${kb} KB in IndexedDB)!`
+            : 'Game progress saved to local storage!'
+        );
+      } else {
+        console.error('Failed to save game:', res.error);
+        showNotification('⚠️ Save failed: browser storage quota exceeded or unavailable. Use Export JSON instead.');
+      }
     } catch (err) {
-      console.error('Failed to save game to localStorage:', err);
+      console.error('Failed to save game:', err);
       showNotification('⚠️ Save failed: browser storage quota exceeded or unavailable. Use Export JSON instead.');
     }
   };
@@ -1280,11 +1043,8 @@ export const App: React.FC = () => {
     setSimInstance(loaded);
     setInspectedEntity(null);
     setFollowAgentId(null);
-    setSpeed(loaded.clock?.speed ?? 1);
-    setIsPaused((loaded.clock?.speed ?? 1) === 0);
     setChronicleEvents([]);
-    setChronicleEntries(loaded.chronicleSystem?.getHighlights?.(80) || []);
-    setDiplomaticHistory(Array.isArray(loaded.diplomacySystem?.diplomaticHistory) ? loaded.diplomacySystem.diplomaticHistory.slice(0, 40) : []);
+    publishWorldHudSnapshot(buildWorldHudSnapshot(loaded, societiesOpenRef.current));
     if (typeof document !== 'undefined') {
       document.body.dataset.screen = 'playing';
     }
@@ -1294,20 +1054,20 @@ export const App: React.FC = () => {
     showNotification(toastMsg);
   };
 
-  const handleLoad = (): boolean => {
-    const data = localStorage.getItem('aetheria_save');
-    if (data && simRef.current && rendererRef.current) {
-      try {
-        const loaded = Simulation.deserialize(JSON.parse(data));
+  const handleLoad = async (): Promise<boolean> => {
+    if (!simRef.current || !rendererRef.current) return false;
+    try {
+      const res = await loadWorldFromStorage();
+      if (res.data) {
+        const loaded = Simulation.deserialize(res.data);
         applyLoadedSimulation(loaded, 'Saved world loaded successfully!');
         return true;
-      } catch (err) {
-        console.error('Failed to load save file:', err);
-        showNotification('Error loading save file.');
-        return false;
       }
-    } else {
       showNotification('No previous save file found!');
+      return false;
+    } catch (err) {
+      console.error('Failed to load save file:', err);
+      showNotification('Error loading save file.');
       return false;
     }
   };
@@ -1329,11 +1089,13 @@ export const App: React.FC = () => {
   };
 
   const handleContinueSavedGame = () => {
-    handleLoad();
+    void handleLoad();
   };
 
   const handleReturnToMenu = () => {
-    setSavedMeta(readSavedWorldMeta());
+    void readSavedWorldMetaFromStorage().then((meta) => {
+      if (meta) setSavedMeta(meta);
+    });
     setCivilizationOpen(false);
     setHelpOpen(false);
     setGameScreen('title');
@@ -1387,17 +1149,9 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden' }}>
+    <div className="relative w-screen h-screen overflow-hidden">
       {/* 2.5D / 2D Canvas */}
-      <canvas
-        ref={canvasRef}
-        style={{
-          display: 'block',
-          width: '100vw',
-          height: '100vh',
-          cursor: 'crosshair',
-        }}
-      />
+      <canvas ref={canvasRef} className="block w-screen h-screen cursor-crosshair" />
 
       {gameScreen === 'title' && (
         <StartScreen
@@ -1413,32 +1167,11 @@ export const App: React.FC = () => {
 
       {gameScreen === 'playing' && (
         <>
-          {/* Two-Row Desktop HUD Shell (TopBar + ControlsHeader in Row 1; Side Panels in Row 2) */}
-          <div
-            style={{
-              position: 'absolute',
-              top: '12px',
-              left: '12px',
-              right: '12px',
-              bottom: '74px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '10px',
-              pointerEvents: 'none',
-              zIndex: 20,
-            }}
-          >
+          {/* Two-Row Responsive HUD Shell */}
+          <div className="absolute top-3 left-3 right-3 bottom-[74px] flex flex-col gap-2.5 pointer-events-none z-20">
             {/* Row 1: Top-Left Telemetry & Top-Right Controls */}
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'flex-start',
-                gap: '12px',
-                flexShrink: 0,
-              }}
-            >
-              <div style={{ flexShrink: 0 }}>
+            <div className="flex flex-col md:flex-row justify-between items-stretch md:items-start gap-2 md:gap-3 shrink-0">
+              <div className="shrink-0">
                 <TopBar
                   time={timeState}
                   agentCount={agentCount}
@@ -1446,7 +1179,7 @@ export const App: React.FC = () => {
                   deaths={deaths}
                   avgDeathAge={avgDeathAge}
                   resources={resources}
-                  societiesCount={societiesCount || societies.length}
+                  societiesCount={societiesCount || (societies ? societies.length : 0)}
                   speed={speed}
                   is25D={is25D}
                   weather={currentWeather || undefined}
@@ -1455,7 +1188,7 @@ export const App: React.FC = () => {
                 />
               </div>
 
-              <div style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', justifyContent: 'flex-end' }}>
+              <div className="flex-initial min-w-0 flex justify-start md:justify-end">
                 <ControlsHeader
                   is25D={is25D}
                   heightScaleLabel={heightScaleLabel}
@@ -1471,8 +1204,8 @@ export const App: React.FC = () => {
                   onToggleSocieties={() => setSocietiesOpen((prev) => !prev)}
                   onToggleDiplomacy={() => setDiplomacyOpen((prev) => !prev)}
                   onToggleCivilization={() => setCivilizationOpen((prev) => !prev)}
-                  onSave={handleSave}
-                  onLoad={handleLoad}
+                  onSave={() => { void handleSave(); }}
+                  onLoad={() => { void handleLoad(); }}
                   onExportWorld={handleExportWorld}
                   onImportWorld={handleImportWorld}
                   onToggleHelp={() => setHelpOpen((prev) => !prev)}
@@ -1496,32 +1229,26 @@ export const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Row 2: Right Side Panels (dynamically below Row 1, above Dock) */}
-            <div
-              style={{
-                flex: 1,
-                minHeight: 0,
-                display: 'flex',
-                justifyContent: 'flex-end',
-                alignItems: 'stretch',
-                pointerEvents: 'none',
-              }}
-            >
-              <div
-                style={{
-                  width: '348px',
-                  maxWidth: '100%',
-                  height: '100%',
-                  overflowY: 'auto',
-                  paddingRight: '2px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '10px',
-                  pointerEvents: 'none',
-                }}
+            {/* Compact mobile drawer toggle (< 768px) */}
+            <div className="flex md:hidden justify-end pointer-events-none">
+              <button
+                type="button"
+                onClick={() => setMobilePanelsOpen((prev) => !prev)}
+                className="pointer-events-auto bg-slate-900/90 border border-white/15 text-sky-400 rounded-lg px-2.5 py-1 text-[11px] font-semibold cursor-pointer shadow-lg"
               >
+                {mobilePanelsOpen ? '✕ Hide Panels' : '📋 World Panels & Inspector'}
+              </button>
+            </div>
+
+            {/* Row 2: Right Side Panels (always visible >= md, drawer toggle < md) */}
+            <div
+              className={`flex-1 min-h-0 justify-end items-stretch pointer-events-none ${
+                mobilePanelsOpen ? 'flex' : 'hidden md:flex'
+              }`}
+            >
+              <div className="w-[348px] max-w-full h-full overflow-y-auto pr-0.5 flex flex-col gap-2.5 pointer-events-none">
                 {inspectedEntity && (
-                  <div style={{ flexShrink: 0 }}>
+                  <div className="shrink-0">
                     <InspectorPanel
                       data={inspectedEntity}
                       isFollowing={
@@ -1552,9 +1279,9 @@ export const App: React.FC = () => {
                 )}
 
                 {societiesOpen && (
-                  <div style={{ flexShrink: 0 }}>
+                  <div className="shrink-0">
                     <SocietiesPanel
-                      settlements={societies}
+                      settlements={societies || []}
                       onSelectSettlement={handleSelectSettlement}
                       onClose={() => setSocietiesOpen(false)}
                     />
@@ -1562,7 +1289,7 @@ export const App: React.FC = () => {
                 )}
 
                 {diplomacyOpen && (
-                  <div style={{ flexShrink: 0 }}>
+                  <div className="shrink-0">
                     <DiplomacyPanel
                       wars={wars}
                       treaties={treaties}
@@ -1582,7 +1309,7 @@ export const App: React.FC = () => {
                   </div>
                 )}
 
-                <div style={{ flexShrink: 0 }}>
+                <div className="shrink-0">
                   <ChroniclePanel
                     events={chronicleEvents}
                     structuredEntries={chronicleEntries}
@@ -1602,33 +1329,38 @@ export const App: React.FC = () => {
 
           {/* Mini-Map Radar with Tactical Heatmaps */}
           <MiniMapRadar
-            simulation={simInstance || simRef.current}
-            renderer={rendererInstance || rendererRef.current}
+            simulation={simInstance}
+            renderer={rendererInstance}
             onPanTo={handlePanTo}
           />
 
-          {/* Divine Guide Modal */}
-          <GuideModal isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
+          {/* Lazy-Loaded Heavy Modals */}
+          <Suspense fallback={null}>
+            {helpOpen && (
+              <GuideModal isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
+            )}
 
-          {/* Full-Screen Civilization, Dynasties & War Room Modal */}
-          <CivilizationModal
-            isOpen={civilizationOpen}
-            onClose={() => setCivilizationOpen(false)}
-            simulation={simInstance || simRef.current}
-            onSelectAgent={handleSelectAgentById}
-            onSelectBuilding={handleSelectBuildingById}
-            onFollowAgent={handleFollowAgent}
-            onImposeSanctions={handleImposeSanctions}
-            onIssueUltimatum={handleIssueUltimatum}
-            onLaunchNuke={handleLaunchNuke}
-            onLaunchSpyOp={handleLaunchSpyOp}
-            onAdvanceWonder={handleAdvanceWonder}
-            onCommissionWonder={handleCommissionWonder}
-            onExportWorld={handleExportWorld}
-            onExportChronicle={handleExportChronicle}
-            onImportWorld={handleImportWorld}
-            onPanTo={handlePanTo}
-          />
+            {civilizationOpen && (
+              <CivilizationModal
+                isOpen={civilizationOpen}
+                onClose={() => setCivilizationOpen(false)}
+                simulation={simInstance}
+                onSelectAgent={handleSelectAgentById}
+                onSelectBuilding={handleSelectBuildingById}
+                onFollowAgent={handleFollowAgent}
+                onImposeSanctions={handleImposeSanctions}
+                onIssueUltimatum={handleIssueUltimatum}
+                onLaunchNuke={handleLaunchNuke}
+                onLaunchSpyOp={handleLaunchSpyOp}
+                onAdvanceWonder={handleAdvanceWonder}
+                onCommissionWonder={handleCommissionWonder}
+                onExportWorld={handleExportWorld}
+                onExportChronicle={handleExportChronicle}
+                onImportWorld={handleImportWorld}
+                onPanTo={handlePanTo}
+              />
+            )}
+          </Suspense>
         </>
       )}
 

@@ -131,6 +131,79 @@ export class DiplomacySystem {
   }
 
   /**
+   * Immediately terminates all active wars and WAR relations for a settlement
+   * that has become abandoned or ruined, returning relations to PEACE and
+   * demobilizing warbands cleanly.
+   */
+  endWarsForAbandonedSettlement(settlementId, reason = "Settlement abandoned", tickOverride = null) {
+    const tick = tickOverride ?? (this.sim?.clock?.tick ?? 0);
+    const settlements = this.sim?.settlementSystem?.settlements;
+    const settlement = settlements?.get(settlementId);
+    let closedCount = 0;
+
+    for (let i = this.activeWars.length - 1; i >= 0; i--) {
+      const w = this.activeWars[i];
+      if (!w) continue;
+      if (w.attackerId === settlementId || w.defenderId === settlementId) {
+        this.activeWars.splice(i, 1);
+        const otherId = w.attackerId === settlementId ? w.defenderId : w.attackerId;
+        const otherSet = settlements?.get(otherId);
+        w.active = false;
+        w.endTick = tick;
+        w.winnerId = (otherSet && !otherSet.ruined) ? otherId : null;
+        w.terms = reason;
+        this.warHistory.unshift(w);
+        if (this.warHistory.length > 20) this.warHistory.pop();
+
+        const rel = this.getRelation(w.attackerId, w.defenderId);
+        if (rel) {
+          rel.status = DIPLOMATIC_STATUS.PEACE;
+          rel.score = Math.max(rel.score || 50, 50);
+          rel.truceUntilTick = Math.max(rel.truceUntilTick || 0, tick + 120);
+          if (Array.isArray(rel.grievances)) rel.grievances.length = 0;
+        }
+        this.grievances.get(otherId)?.delete(settlementId);
+        this.grievances.get(settlementId)?.delete(otherId);
+
+        if (this.sim?.warfareSystem) {
+          this.sim.warfareSystem.demobilizeSettlement(w.attackerId, w.defenderId);
+          this.sim.warfareSystem.demobilizeSettlement(w.defenderId, w.attackerId);
+        }
+        closedCount++;
+      }
+    }
+
+    // Clear any stray WAR relations pointing to this abandoned/ruined settlement
+    for (const rel of this.relations.values()) {
+      if (rel.status === DIPLOMATIC_STATUS.WAR &&
+          (rel.settlementA === settlementId || rel.settlementB === settlementId)) {
+        rel.status = DIPLOMATIC_STATUS.PEACE;
+        rel.score = Math.max(rel.score || 50, 50);
+        rel.truceUntilTick = Math.max(rel.truceUntilTick || 0, tick + 120);
+        if (Array.isArray(rel.grievances)) rel.grievances.length = 0;
+        closedCount++;
+      }
+    }
+
+    if (closedCount > 0 && settlement) {
+      this.recordDiplomaticEvent({
+        tick,
+        type: "peace",
+        outcome: "abandoned",
+        title: `Conflict Ended: ${settlement.name} Abandoned`,
+        what: `Active hostilities with ${settlement.name} ceased automatically after the settlement was abandoned.`,
+        why: reason,
+        drivers: [reason, "All forces demobilized"],
+        actors: [settlementId],
+        actorNames: [settlement.name],
+        x: settlement?.center?.x ?? null,
+        y: settlement?.center?.y ?? null
+      });
+    }
+    return closedCount;
+  }
+
+  /**
    * Step H: register a pre-seeded rivalry for scenario starts. Names may be
    * settlement ids (numbers/numeric strings) or exact settlement names; id
    * feuds resolve the moment both towns exist, name feuds also match later-
@@ -472,8 +545,21 @@ export class DiplomacySystem {
   }
 
   evaluateDiplomacy(tick) {
-    const settlements = Array.from(this.sim.settlementSystem.settlements.values())
-      .filter(s => s && !s.ruined)
+    const allSettlements = this.sim.settlementSystem.settlements;
+    // Sweep any dangling wars involving missing, ruined, or abandoned towns first
+    for (let i = this.activeWars.length - 1; i >= 0; i--) {
+      const w = this.activeWars[i];
+      if (!w) continue;
+      const sa = allSettlements.get(w.attackerId);
+      const sd = allSettlements.get(w.defenderId);
+      const aDead = !sa || sa.ruined || ((sa.abandonedTicks || 0) > 15 && (sa.population || sa.agentIds?.size || 0) === 0);
+      const dDead = !sd || sd.ruined || ((sd.abandonedTicks || 0) > 15 && (sd.population || sd.agentIds?.size || 0) === 0);
+      if (aDead) this.endWarsForAbandonedSettlement(w.attackerId, "Settlement abandoned", tick);
+      else if (dDead) this.endWarsForAbandonedSettlement(w.defenderId, "Settlement abandoned", tick);
+    }
+
+    const settlements = Array.from(allSettlements.values())
+      .filter(s => s && !s.ruined && (s.population || s.agentIds?.size || 0) > 0)
       .sort((a, b) => a.id - b.id);
     if (settlements.length < 2) return;
 
@@ -1120,6 +1206,7 @@ export class DiplomacySystem {
       battles: [],
       casualties: { [attackerId]: 0, [defenderId]: 0 },
       plundered: { food: 0, wood: 0, ore: 0 },
+      plunderedBy: { [attackerId]: 0, [defenderId]: 0 },
       active: true
     };
 
@@ -1232,9 +1319,9 @@ export class DiplomacySystem {
     score += (defCas - attCas) * 8; // casualties inflicted advantage
 
     // Plunder impact
-    if (war.plundered) {
-      const attPlunder = war.plundered[war.attackerId] || 0;
-      const defPlunder = war.plundered[war.defenderId] || 0;
+    if (war.plunderedBy || war.plundered) {
+      const attPlunder = war.plunderedBy?.[war.attackerId] ?? (typeof war.plundered?.[war.attackerId] === "number" ? war.plundered[war.attackerId] : 0);
+      const defPlunder = war.plunderedBy?.[war.defenderId] ?? (typeof war.plundered?.[war.defenderId] === "number" ? war.plundered[war.defenderId] : 0);
       score += Math.min(30, (attPlunder - defPlunder) * 2);
     }
 
@@ -1274,13 +1361,17 @@ export class DiplomacySystem {
     }
 
     if (!terms) {
-      if (war?.isHolyWar && determinedVictorId) {
+      const loserId = determinedVictorId === id1 ? id2 : id1;
+      const loser = loserId ? this.sim.settlementSystem?.settlements?.get(loserId) : null;
+      const loserPop = loser ? (loser.population || loser.agentIds?.size || 0) : 99;
+      const decisiveEdge = Math.abs(score) >= 24 || loserPop <= 4;
+      if (war?.isHolyWar && determinedVictorId && decisiveEdge) {
         terms = "Religious Conversion Concordat";
-      } else if (determinedVictorId && (Math.abs(score) >= 60 || war?.casusBelli?.includes("Conquest"))) {
+      } else if (determinedVictorId && decisiveEdge && (Math.abs(score) >= 58 || (war?.casusBelli?.includes("Conquest") && Math.abs(score) >= 30))) {
         terms = "Conquest & Annexation";
-      } else if (determinedVictorId && (Math.abs(score) >= 30 || war?.casusBelli?.includes("Resource"))) {
+      } else if (determinedVictorId && decisiveEdge && (Math.abs(score) >= 32 || war?.casusBelli?.includes("Resource"))) {
         terms = "Tributary Vassalage";
-      } else if (determinedVictorId) {
+      } else if (determinedVictorId && Math.abs(score) >= 18) {
         terms = "Forced Demilitarization";
       } else {
         terms = "White Peace Concordat";
@@ -1330,15 +1421,21 @@ export class DiplomacySystem {
       war.endTick = tick || this.sim.clock.tick;
       war.winnerId = victorId;
 
-      // Determine treaty terms dynamically if not specified
+      // Determine plausible treaty terms dynamically based on real battlefield score when not specified
       if (!terms) {
-        if (war.isHolyWar && victorId) {
+        const warScore = this.calculateWarScore(war);
+        const absScore = Math.abs(warScore);
+        const loserId = victorId ? (victorId === id1 ? id2 : id1) : null;
+        const loser = loserId ? this.sim.settlementSystem?.settlements?.get(loserId) : null;
+        const loserPop = loser ? (loser.population || loser.agentIds?.size || 0) : 99;
+        const decisive = absScore >= 24 || loserPop <= 4;
+        if (war.isHolyWar && victorId && decisive) {
           terms = "Religious Conversion Concordat";
-        } else if (war.casusBelli.includes("Conquest") && victorId) {
+        } else if (victorId && decisive && (absScore >= 58 || (war.casusBelli.includes("Conquest") && absScore >= 30))) {
           terms = "Conquest & Annexation";
-        } else if (war.casusBelli.includes("Resource") && victorId) {
+        } else if (victorId && decisive && (absScore >= 30 || war.casusBelli.includes("Resource"))) {
           terms = "Tributary Vassalage";
-        } else if (victorId) {
+        } else if (victorId && absScore >= 18) {
           terms = "Forced Demilitarization";
         } else {
           terms = "White Peace Concordat";
@@ -1484,6 +1581,15 @@ export class DiplomacySystem {
     );
     if (!war) return;
 
+    if (s1.ruined || (s1.population === 0 && (s1.abandonedTicks || 0) > 15)) {
+      this.endWarsForAbandonedSettlement(s1.id, "Settlement abandoned", tick);
+      return;
+    }
+    if (s2.ruined || (s2.population === 0 && (s2.abandonedTicks || 0) > 15)) {
+      this.endWarsForAbandonedSettlement(s2.id, "Settlement abandoned", tick);
+      return;
+    }
+
     const warAge = tick - war.startTick;
     const s1Weariness = war.weariness?.[s1.id] || 0;
     const s2Weariness = war.weariness?.[s2.id] || 0;
@@ -1499,11 +1605,26 @@ export class DiplomacySystem {
     const maxWarAge = isDevastating ? 960 : 650;
     const wearinessCap = isDevastating ? 125 : 100;
 
-    // Weariness threshold, prolonged duration, or scaled blood toll
-    if (s1Weariness >= wearinessCap || s2Weariness >= wearinessCap || warAge > maxWarAge || totalCasualties >= casualtyThreshold) {
+    const warScore = this.calculateWarScore(war);
+    const s1Food = (s1.stockpile?.food || 0) + (s1.stockpile?.bread || 0);
+    const s2Food = (s2.stockpile?.food || 0) + (s2.stockpile?.bread || 0);
+    const s1Score = war.attackerId === s1.id ? warScore : -warScore;
+    const s2Score = -s1Score;
+    const s1Bankrupt = warAge >= (isDevastating ? 260 : 180) && s1Food <= 0 && s1Weariness >= 70 && s1Score <= -28;
+    const s2Bankrupt = warAge >= (isDevastating ? 260 : 180) && s2Food <= 0 && s2Weariness >= 70 && s2Score <= -28;
+    const decisiveVictory = warAge >= (isDevastating ? 260 : 180) && totalCasualties >= (isDevastating ? 12 : 8) && Math.abs(warScore) >= 65;
+
+    // Weariness threshold, prolonged duration, economic exhaustion, decisive score, or scaled blood toll
+    if (s1Weariness >= wearinessCap || s2Weariness >= wearinessCap || warAge > maxWarAge || totalCasualties >= casualtyThreshold || s1Bankrupt || s2Bankrupt || decisiveVictory) {
       let victorId = null;
 
-      if (s1Weariness > s2Weariness + 15) {
+      if (s1Bankrupt && !s2Bankrupt) {
+        victorId = s2.id;
+      } else if (s2Bankrupt && !s1Bankrupt) {
+        victorId = s1.id;
+      } else if (Math.abs(warScore) >= 18) {
+        victorId = warScore >= 0 ? war.attackerId : war.defenderId;
+      } else if (s1Weariness > s2Weariness + 15) {
         victorId = s2.id;
       } else if (s2Weariness > s1Weariness + 15) {
         victorId = s1.id;
@@ -1514,11 +1635,15 @@ export class DiplomacySystem {
         else if (s2Losses < s1Losses) victorId = s2.id;
       }
 
-      const peaceReason = (s1Weariness >= wearinessCap || s2Weariness >= wearinessCap)
-        ? `War weariness broke domestic morale (${Math.round(Math.max(s1Weariness, s2Weariness))}%).`
-        : totalCasualties >= casualtyThreshold
-          ? `Severe casualties (${totalCasualties} fallen across both sides) forced a truce.`
-          : `Stalemate after ${warAge} ticks of continuous warfare.`;
+      const peaceReason = decisiveVictory
+        ? `Decisive battlefield superiority (War Score ${warScore > 0 ? `+${warScore}` : warScore}) compelled capitulation.`
+        : (s1Bankrupt || s2Bankrupt)
+          ? `Granary exhaustion and mounting war fatigue forced a negotiated peace.`
+          : (s1Weariness >= wearinessCap || s2Weariness >= wearinessCap)
+            ? `War weariness broke domestic morale (${Math.round(Math.max(s1Weariness, s2Weariness))}%).`
+            : totalCasualties >= casualtyThreshold
+              ? `Severe casualties (${totalCasualties} fallen across both sides) forced a truce.`
+              : `Stalemate after ${warAge} ticks of continuous warfare.`;
 
       this.signPeace(s1.id, s2.id, victorId, tick, null, peaceReason);
     }
@@ -1536,11 +1661,20 @@ export class DiplomacySystem {
   }
 
   getEnemies(settlementId) {
+    const settlements = this.sim?.settlementSystem?.settlements;
+    const self = settlements?.get(settlementId);
+    if (self?.ruined) return [];
     const enemies = [];
     for (const rel of this.relations.values()) {
       if (rel.status === DIPLOMATIC_STATUS.WAR) {
-        if (rel.settlementA === settlementId) enemies.push(rel.settlementB);
-        else if (rel.settlementB === settlementId) enemies.push(rel.settlementA);
+        const otherId = rel.settlementA === settlementId ? rel.settlementB
+          : (rel.settlementB === settlementId ? rel.settlementA : null);
+        if (otherId == null) continue;
+        const other = settlements?.get(otherId);
+        if (other && (other.ruined || ((other.abandonedTicks || 0) > 15 && (other.population || other.agentIds?.size || 0) === 0))) {
+          continue;
+        }
+        enemies.push(otherId);
       }
     }
     return enemies;

@@ -4,12 +4,15 @@
  * real-time battlefield engagements, sieges, and plunder.
  */
 
+import { Agent } from "../simulation/agent.js";
+
 export class WarfareSystem {
   constructor(simulation) {
     this.sim = simulation;
     // Map of warbandId -> Warband
     this.warbands = new Map();
     this.nextWarbandId = 1;
+    this.lastExternalRaidTick = 0;
     // Clashing battle visual effects for renderer: [{ x, y, duration, type }]
     this.combatEffects = [];
   }
@@ -325,11 +328,23 @@ export class WarfareSystem {
       }
 
       if (typeof soldier.addLifeEvent === "function") {
-        const oppName = targetSettlementId ? (this.sim.settlementSystem?.settlements?.get(targetSettlementId)?.name || "rivals") : "home defense";
+        let oppName = "home defense";
+        if (targetSettlementId != null) {
+          if (targetSettlementId < 0) {
+            for (const wb of this.warbands.values()) {
+              if (wb.settlementId === targetSettlementId) {
+                oppName = wb.raiderClan || wb.settlementName || "border raiders";
+                break;
+              }
+            }
+          } else {
+            oppName = this.sim.settlementSystem?.settlements?.get(targetSettlementId)?.name || "rivals";
+          }
+        }
         soldier.addLifeEvent(
           "WAR",
           role === "defense"
-            ? `Mustered as ${soldier.combatRole} to defend ${settlement.name}`
+            ? `Mustered as ${soldier.combatRole} to defend ${settlement.name} vs ${oppName}`
             : `Marched as ${soldier.combatRole} against ${oppName}`,
           this.sim.clock?.tick ?? 0,
           weaponType === "plane" ? "✈️" : weaponType === "tank" ? "🛡️" : "⚔️",
@@ -887,6 +902,195 @@ export class WarfareSystem {
     return rebelWarband;
   }
 
+  // Periodic map-edge external raids targeting established settlements
+  evaluateExternalRaids(tick) {
+    if (!this.sim.world || !this.sim.settlementSystem?.settlements) return;
+    if (tick < 280 || (tick - (this.lastExternalRaidTick || 0)) < 280) return;
+
+    const cap = this.sim.maxAgents ?? 360;
+    if ((this.sim.agents?.length || 0) >= cap - 8) return;
+
+    let activeRaids = 0;
+    for (const wb of this.warbands.values()) {
+      if (wb.active && wb.isExternalRaid) activeRaids++;
+    }
+    if (activeRaids >= 2) return;
+
+    const eligible = Array.from(this.sim.settlementSystem.settlements.values())
+      .filter(s => s && !s.ruined && s.center && (s.population || s.agentIds?.size || 0) >= 6)
+      .sort((a, b) => a.id - b.id);
+    if (eligible.length === 0) return;
+
+    const target = eligible[Math.floor(tick / 280) % eligible.length];
+    this.spawnExternalRaid(target.id, tick);
+  }
+
+  spawnExternalRaid(targetSettlementId, tick = null) {
+    const target = this.sim.settlementSystem?.settlements?.get(targetSettlementId);
+    const world = this.sim.world;
+    if (!target || !target.center || target.ruined || !world) return null;
+
+    const now = tick ?? (this.sim.clock?.tick ?? 0);
+    const cap = this.sim.maxAgents ?? 360;
+    if ((this.sim.agents?.length || 0) >= cap + 10) return null;
+
+    const W = world.width || 128;
+    const H = world.height || 128;
+
+    // Pick closest walkable map border coordinate near the target settlement
+    let bestEdge = null;
+    let bestDistSq = Infinity;
+    const checkCandidate = (tx, ty) => {
+      if (tx < 2 || ty < 2 || tx >= W - 2 || ty >= H - 2) return;
+      if (!world.isWalkable(tx, ty)) return;
+      const dx = tx - target.center.x;
+      const dy = ty - target.center.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestDistSq) {
+        bestDistSq = d2;
+        bestEdge = { x: tx, y: ty };
+      }
+    };
+    for (let x = 2; x <= W - 3; x += 2) {
+      checkCandidate(x, 2);
+      checkCandidate(x, H - 3);
+    }
+    for (let y = 2; y <= H - 3; y += 2) {
+      checkCandidate(2, y);
+      checkCandidate(W - 3, y);
+    }
+    if (!bestEdge) return null;
+
+    const clans = [
+      "Ironjaw Marauders",
+      "Ashland Reavers",
+      "Frostfang Corsairs",
+      "Crimson Outriders",
+      "Thornwood Brigands",
+      "Blackcrest Raiders"
+    ];
+    const clanIndex = Math.abs(Math.floor(now / 280) + target.id) % clans.length;
+    const clanName = clans[clanIndex];
+
+    const rawEra = this.sim.civilizationAgeSystem?.getSettlementAge?.(target.id)?.ageId || 1;
+    const eraId = Math.min(6, Math.max(1, rawEra));
+    const raidSize = 3 + ((Math.floor(now / 280) + target.id) % 3);
+
+    const warbandId = this.nextWarbandId++;
+    const raidSid = -(1000 + warbandId);
+
+    const raiders = [];
+    for (let i = 0; i < raidSize; i++) {
+      let sx = bestEdge.x;
+      let sy = bestEdge.y;
+      const offsets = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1]];
+      const [ox, oy] = offsets[i % offsets.length];
+      if (sx + ox >= 2 && sx + ox < W - 2 && sy + oy >= 2 && sy + oy < H - 2 && world.isWalkable(sx + ox, sy + oy)) {
+        sx += ox;
+        sy += oy;
+      }
+
+      const age = 22 + (i % 6);
+      const raider = new Agent(sx + 0.5, sy + 0.5, this.sim.idGen, age, world.rng);
+      raider.settlementId = null;
+      raider.isExternalRaider = true;
+      raider.raiderClan = clanName;
+      raider.militaryDuty = true;
+      raider.warbandId = warbandId;
+      raider.job = "soldier";
+      raider.jobTitle = "Border Raider";
+      raider.age = age;
+      raider.lifeStage = "adult";
+      raider.health = 110;
+      raider.maxHealth = 110;
+      raider.needs.health = 110;
+      raider.skills.combat = Math.max(raider.skills.combat || 1, 1.4 + eraId * 0.15);
+
+      const weaponType = eraId >= 6 ? "rifle" : eraId === 5 ? "musket" : "sword";
+      const dmg = eraId >= 6 ? 38 : eraId === 5 ? 30 : 20 + eraId * 2;
+      const range = eraId >= 6 ? 10.0 : eraId === 5 ? 8.0 : 2.0;
+      const attackSpeed = eraId >= 6 ? 22 : 30;
+      const hasShield = eraId < 5;
+
+      raider.hasWeapon = true;
+      raider.hasShield = hasShield;
+      raider.combatRole = i === 0 ? "commander" : (eraId >= 6 ? "rifleman" : eraId === 5 ? "musketeer" : "vanguard");
+      raider.combat = {
+        health: 110,
+        maxHealth: 110,
+        damage: dmg,
+        defense: 0.14 + Math.min(0.18, eraId * 0.03),
+        range,
+        attackCooldown: 0,
+        attackSpeed,
+        weaponType,
+        splashRadius: 0,
+        hasShield,
+        blockChance: hasShield ? 0.2 : 0,
+        zealotFervor: false
+      };
+      raider.inventory = {
+        ...raider.inventory,
+        wheat: 2,
+        ore_iron: 2,
+        ...(hasShield ? { armor_shield: 1 } : {}),
+        ...(weaponType === "sword" ? { weapon_sword: 1 } : {})
+      };
+
+      this.sim.addAgent(raider);
+      world.addToSpatialIndex(Math.floor(raider.x), Math.floor(raider.y), raider);
+      raiders.push(raider);
+    }
+
+    if (raiders.length === 0) return null;
+
+    const warband = {
+      id: warbandId,
+      settlementId: raidSid,
+      settlementName: clanName,
+      bannerColor: "#991b1b",
+      commanderId: raiders[0].id,
+      soldiers: raiders.map(a => a.id),
+      role: "assault",
+      formation: "wedge",
+      eraId,
+      doctrine: "raid",
+      state: "marching",
+      targetSettlementId: target.id,
+      marchTarget: { ...target.center },
+      isExternalRaid: true,
+      raiderClan: clanName,
+      raidOrigin: { x: bestEdge.x + 0.5, y: bestEdge.y + 0.5 },
+      startedAtTick: now,
+      morale: 100,
+      initialSize: raiders.length,
+      active: true,
+      plunderCargo: { food: 0, wood: 0, ore: 0 }
+    };
+
+    this.warbands.set(warbandId, warband);
+    this.applyFormationPositions(warband);
+    this.lastExternalRaidTick = now;
+
+    if (this.sim.chronicleSystem?.addEntry) {
+      this.sim.chronicleSystem.addEntry(
+        "EXTERNAL_RAID",
+        `🏴 ${clanName} (${raiders.length} raiders) emerged from the border marching on ${target.name}!`
+      );
+    }
+    this.sim.eventBus?.emit("EXTERNAL_RAID_SPAWNED", {
+      warbandId,
+      clanName,
+      targetSettlementId: target.id,
+      targetSettlementName: target.name,
+      size: raiders.length,
+      x: bestEdge.x,
+      y: bestEdge.y,
+      tick: now
+    });
+    return warband;
+  }
+
   // Update warfare engine each tick
   update() {
     // 1. Update visual combat effects
@@ -897,8 +1101,10 @@ export class WarfareSystem {
       }
     }
 
-    // Periodic urban rebellion check inside stressed settlements
-    this.evaluateRebellions(this.sim.clock?.tick ?? 0);
+    // Periodic urban rebellion & external border raid checks
+    const tickNow = this.sim.clock?.tick ?? 0;
+    this.evaluateRebellions(tickNow);
+    this.evaluateExternalRaids(tickNow);
 
     // Perf: invalidate the per-tick enemy snapshot cache so the first
     // getAllNearbyEnemies() call of this tick rebuilds it.
@@ -1029,6 +1235,22 @@ export class WarfareSystem {
           }
         }
       }
+      if (warband.isExternalRaid) {
+        const tgt = this.sim.settlementSystem?.settlements?.get(warband.targetSettlementId);
+        if (warband.targetSettlementId != null) {
+          this.demobilizeSettlement(warband.targetSettlementId, warband.settlementId);
+        }
+        this.sim.chronicleSystem?.addEntry?.(
+          "EXTERNAL_RAID_REPELLED",
+          `🛡️ Defenders near ${tgt?.name || "the frontier"} wiped out the ${warband.raiderClan || warband.settlementName} raiding party!`
+        );
+        this.sim.eventBus?.emit("EXTERNAL_RAID_REPELLED", {
+          warbandId: warband.id,
+          clanName: warband.raiderClan || warband.settlementName,
+          targetSettlementId: warband.targetSettlementId,
+          targetSettlementName: tgt?.name || null
+        });
+      }
       return;
     }
 
@@ -1087,10 +1309,16 @@ export class WarfareSystem {
       }
     }
 
+    // External raiders automatically retreat if stalled past 420 ticks on campaign
+    if (warband.isExternalRaid && warband.state !== "retreating" &&
+        ((this.sim.clock?.tick ?? 0) - (warband.startedAtTick || 0)) > 420) {
+      warband.state = "retreating";
+    }
+
     // Phase 3b Step 3: wounded soldiers recover at home. Once the band is
     // back inside its settlement, every wounded man begins a convalescence
     // countdown; when it expires he is healed and returns to full duty.
-    if (warband.state === "defending" || warband.state === "retreating") {
+    if (!warband.isExternalRaid && (warband.state === "defending" || warband.state === "retreating")) {
       const homeW2 = this.sim.settlementSystem.settlements.get(warband.settlementId);
       if (homeW2) {
         for (const sId of warband.soldiers) {
@@ -1162,7 +1390,7 @@ export class WarfareSystem {
 
   handleMarching(warband, commander) {
     const targetSettlement = this.sim.settlementSystem.settlements.get(warband.targetSettlementId);
-    if (!targetSettlement) {
+    if (!targetSettlement || targetSettlement.ruined || ((targetSettlement.abandonedTicks || 0) > 15 && (targetSettlement.population || targetSettlement.agentIds?.size || 0) === 0)) {
       warband.state = "retreating";
       return;
     }
@@ -1206,6 +1434,10 @@ export class WarfareSystem {
 
     // Check if reached enemy settlement center for siege
     const distToCenter = Math.hypot(commander.x - targetSettlement.center.x, commander.y - targetSettlement.center.y);
+    if (warband.isExternalRaid && distToCenter <= 22 && !warband.embarked) {
+      // Muster a local defense militia against approaching border raiders
+      this.mobilizeWarband(targetSettlement.id, warband.settlementId, "defense");
+    }
     if (distToCenter < 5.0 && !warband.embarked) {
       warband.state = "sieging";
       return;
@@ -1235,7 +1467,7 @@ export class WarfareSystem {
 
   handleBreaching(warband, commander) {
     const enemySettlement = this.sim.settlementSystem.settlements.get(warband.targetSettlementId);
-    if (!enemySettlement) {
+    if (!enemySettlement || enemySettlement.ruined || ((enemySettlement.abandonedTicks || 0) > 15 && (enemySettlement.population || enemySettlement.agentIds?.size || 0) === 0)) {
       warband.state = "retreating";
       return;
     }
@@ -1345,6 +1577,21 @@ export class WarfareSystem {
   handleDefending(warband, commander) {
     const home = this.sim.settlementSystem.settlements.get(warband.settlementId);
     if (!home) return;
+
+    // Stand down frontier militia once the targeting external raid has disbanded or departed
+    if (warband.targetSettlementId != null && warband.targetSettlementId < 0) {
+      let raidStillActive = false;
+      for (const wb of this.warbands.values()) {
+        if (wb.active && wb.isExternalRaid && wb.settlementId === warband.targetSettlementId) {
+          raidStillActive = true;
+          break;
+        }
+      }
+      if (!raidStillActive) {
+        this.demobilizeSettlement(warband.settlementId, warband.targetSettlementId);
+        return;
+      }
+    }
 
     // Look for hostile attackers near home territory
     const nearbyEnemy = this.findNearbyEnemy(commander, warband.settlementId, 16.0);
@@ -1694,7 +1941,18 @@ export class WarfareSystem {
     defender.battlesFought = (defender.battlesFought || 0) + 1;
 
     // Scavengable gear left behind on the field
-    this.sim.dropInventoryOnGround(defender);
+    const droppedPile = this.sim.dropInventoryOnGround(defender, { forceWarSpoils: true });
+
+    // Field battle plunder onto warband cargo + war ledger
+    let fieldSpoils = 0;
+    if (warband && !warband.isRebellion && defender.militaryDuty) {
+      warband.plunderCargo = warband.plunderCargo || { food: 0, wood: 0, ore: 0 };
+      const spoilFood = 1;
+      const spoilOre = defender.hasWeapon ? 1 : 0;
+      warband.plunderCargo.food = (warband.plunderCargo.food || 0) + spoilFood;
+      if (spoilOre > 0) warband.plunderCargo.ore = (warband.plunderCargo.ore || 0) + spoilOre;
+      fieldSpoils = spoilFood + spoilOre;
+    }
 
     // Civil war casualty tracking & immediate resolution if claimant/monarch fell
     if (warband?.isCivilWar && this.sim.dynastySystem) {
@@ -1717,9 +1975,9 @@ export class WarfareSystem {
     if (killerBand) killerBand.morale = Math.min(100, (killerBand.morale ?? 100) + 4);
     if (victimBand) victimBand.morale = Math.max(0, (victimBand.morale ?? 100) - 6);
 
-    // Record war casualty & weariness
+    // Record war casualty, loot & weariness
     let battleName = warband?.isRebellion ? `Street Clashes of ${warband.settlementName}` : "the Front Line";
-    if (this.sim.diplomacySystem && warband && !warband.isRebellion) {
+    if (this.sim.diplomacySystem && warband && !warband.isRebellion && !warband.isExternalRaid && !defender.isExternalRaider) {
       const defenderSettlementId = this.sim.settlementSystem.getAgentSettlement(defender.id)?.id;
       const war = this.sim.diplomacySystem.activeWars.find(w =>
         (w.attackerId === warband.settlementId && w.defenderId === defenderSettlementId) ||
@@ -1727,6 +1985,13 @@ export class WarfareSystem {
       );
       if (war && defenderSettlementId) {
         war.casualties[defenderSettlementId] = (war.casualties[defenderSettlementId] || 0) + 1;
+        if (fieldSpoils > 0) {
+          war.plundered = war.plundered || { food: 0, wood: 0, ore: 0 };
+          war.plundered.food = (war.plundered.food || 0) + 1;
+          if (fieldSpoils > 1) war.plundered.ore = (war.plundered.ore || 0) + 1;
+          war.plunderedBy = war.plunderedBy || {};
+          war.plunderedBy[warband.settlementId] = (war.plunderedBy[warband.settlementId] || 0) + fieldSpoils;
+        }
         war.weariness = war.weariness || {};
         const killWeariness = (war.totalWar || (warband.eraId || 1) >= 6) ? 8 : 12;
         war.weariness[defenderSettlementId] = (war.weariness[defenderSettlementId] || 0) + killWeariness;
@@ -1749,6 +2014,16 @@ export class WarfareSystem {
           this.sim.world?.addSkullMonument?.(battleName, defender.x, defender.y, 1, "battle", tickNow);
         }
       }
+    }
+    if ((droppedPile || fieldSpoils > 0) && this.combatEffects.length < 44) {
+      const totalAmt = Math.max(fieldSpoils, droppedPile?.total?.() || 0);
+      this.combatEffects.push({
+        x: defender.x,
+        y: defender.y,
+        type: "loot",
+        label: totalAmt > 0 ? `+${totalAmt} Spoils` : "Spoils",
+        duration: 24
+      });
     }
 
     attacker?.addLifeEvent?.("KILL", `Slew ${defender.name} at ${battleName}`, tickNow, "🩸", attacker.kills === 1 || attacker.kills >= 3);
@@ -1778,7 +2053,7 @@ export class WarfareSystem {
 
   handleSieging(warband, commander) {
     const enemySettlement = this.sim.settlementSystem.settlements.get(warband.targetSettlementId);
-    if (!enemySettlement) {
+    if (!enemySettlement || enemySettlement.ruined) {
       warband.state = "retreating";
       return;
     }
@@ -1787,6 +2062,48 @@ export class WarfareSystem {
     const defenders = this.getAllNearbyEnemies(commander, warband.settlementId, 10.0);
     if (defenders.length > 0) {
       warband.state = "engaging";
+      return;
+    }
+
+    // External map-edge raiders plunder supplies quickly and flee toward the border (never annex/raze)
+    if (warband.isExternalRaid) {
+      const stock = enemySettlement.stockpile;
+      const stolenFood = stock ? Math.min(10, Math.floor((stock.food || 0) * 0.35)) : 0;
+      const stolenWood = stock ? Math.min(6, Math.floor((stock.wood || 0) * 0.25)) : 0;
+      const stolenOre = stock ? Math.min(5, Math.floor((stock.ore || 0) * 0.3)) : 0;
+      if (stock) {
+        stock.food = Math.max(0, (stock.food || 0) - stolenFood);
+        stock.wood = Math.max(0, (stock.wood || 0) - stolenWood);
+        stock.ore = Math.max(0, (stock.ore || 0) - stolenOre);
+      }
+      warband.plunderCargo = warband.plunderCargo || { food: 0, wood: 0, ore: 0 };
+      warband.plunderCargo.food = (warband.plunderCargo.food || 0) + stolenFood;
+      warband.plunderCargo.wood = (warband.plunderCargo.wood || 0) + stolenWood;
+      warband.plunderCargo.ore = (warband.plunderCargo.ore || 0) + stolenOre;
+      const totalStolen = stolenFood + stolenWood + stolenOre;
+      if (totalStolen > 0 && this.combatEffects.length < 44) {
+        this.combatEffects.push({
+          x: enemySettlement.center.x,
+          y: enemySettlement.center.y,
+          type: "loot",
+          label: `+${totalStolen} Raided`,
+          duration: 28
+        });
+      }
+      this.sim.eventBus?.emit("SETTLEMENT_PLUNDERED", {
+        attackerName: warband.settlementName,
+        defenderName: enemySettlement.name,
+        food: stolenFood,
+        wood: stolenWood,
+        ore: stolenOre
+      });
+      if (totalStolen > 0 && this.sim.chronicleSystem?.addEntry) {
+        this.sim.chronicleSystem.addEntry(
+          "EXTERNAL_RAID_PLUNDER",
+          `🏴 ${warband.raiderClan || warband.settlementName} pillaged ${totalStolen} crates from ${enemySettlement.name} and fled toward the frontier!`
+        );
+      }
+      warband.state = "retreating";
       return;
     }
 
@@ -1898,9 +2215,29 @@ export class WarfareSystem {
 
       // Phase 3b Step 4: plunder cargo is carried by the warband on wagons and
       // unloaded only when safely returning to home territory.
+      warband.plunderCargo = warband.plunderCargo || { food: 0, wood: 0, ore: 0 };
       warband.plunderCargo.food = (warband.plunderCargo.food || 0) + stolenFood;
       warband.plunderCargo.wood = (warband.plunderCargo.wood || 0) + stolenWood;
       warband.plunderCargo.ore = (warband.plunderCargo.ore || 0) + stolenOre;
+
+      const totalStolen = stolenFood + stolenWood + stolenOre;
+      if (activeWarForSiege && totalStolen > 0) {
+        activeWarForSiege.plundered = activeWarForSiege.plundered || { food: 0, wood: 0, ore: 0 };
+        activeWarForSiege.plundered.food = (activeWarForSiege.plundered.food || 0) + stolenFood;
+        activeWarForSiege.plundered.wood = (activeWarForSiege.plundered.wood || 0) + stolenWood;
+        activeWarForSiege.plundered.ore = (activeWarForSiege.plundered.ore || 0) + stolenOre;
+        activeWarForSiege.plunderedBy = activeWarForSiege.plunderedBy || {};
+        activeWarForSiege.plunderedBy[warband.settlementId] = (activeWarForSiege.plunderedBy[warband.settlementId] || 0) + totalStolen;
+      }
+      if (totalStolen > 0 && this.combatEffects.length < 44) {
+        this.combatEffects.push({
+          x: enemySettlement.center.x,
+          y: enemySettlement.center.y,
+          type: "loot",
+          label: `+${totalStolen} Plunder`,
+          duration: 28
+        });
+      }
 
       // Retaliatory casus belli / resource grievance: plundered town remembers the sack
       if (this.sim.diplomacySystem) {
@@ -2119,6 +2456,33 @@ export class WarfareSystem {
   }
 
   handleRetreating(warband, commander) {
+    if (warband.isExternalRaid) {
+      const origin = warband.raidOrigin || { x: 2.5, y: 2.5 };
+      const distToOrigin = Math.hypot(commander.x - origin.x, commander.y - origin.y);
+      const tickNow = this.sim.clock?.tick ?? 0;
+      if (distToOrigin < 3.5 || (tickNow - (warband.startedAtTick || 0)) > 600) {
+        for (const sId of warband.soldiers) {
+          const r = this.sim._agentById(sId);
+          if (r) {
+            r.alive = false;
+            r.deathCause = "departed";
+            r._departedRaider = true;
+            r.militaryDuty = false;
+            r.warbandId = null;
+          }
+        }
+        warband.active = false;
+        warband.state = "disbanded";
+        if (warband.targetSettlementId != null) {
+          this.demobilizeSettlement(warband.targetSettlementId, warband.settlementId);
+        }
+        return;
+      }
+      commander.moveToward(origin, this.sim.world);
+      this.keepSquadInFormation(warband, commander);
+      return;
+    }
+
     const home = this.sim.settlementSystem.settlements.get(warband.settlementId);
     if (!home) return;
 
@@ -2296,25 +2660,61 @@ export class WarfareSystem {
       }
     }
 
-    if (!this.sim.diplomacySystem) return out;
-    const hostileSettlementIds = this.sim.diplomacySystem.getEnemies(mySettlementId);
-    if (hostileSettlementIds.length === 0) return out;
-
-    // Perf: scan only the agents currently in combat (bucketed by settlement
-    // once per tick) instead of filtering the entire roster on every call.
-    // Only in-combat agents can appear in a filter result anyway, and bucket
-    // order mirrors roster order, so output is identical to the old scan.
-    const snapshot = this._getEnemySnapshot();
-    for (const sid of hostileSettlementIds) {
-      const bucket = snapshot.buckets.get(sid);
-      if (!bucket) continue;
-      for (const a of bucket) {
-        if (a.id === agent.id) continue;
+    if (myBand?.isExternalRaid) {
+      const scanAgents = this.sim.world?._getScanBuckets
+        ? this.sim.world._getScanBuckets(Math.floor(agent.x), Math.floor(agent.y), Math.ceil(radius)).agents
+        : (this.sim.agents || []);
+      for (let i = 0; i < scanAgents.length; i++) {
+        const a = scanAgents[i];
+        if (!a || !a.alive || a.id === agent.id || a.isExternalRaider) continue;
+        if ((a.age ?? 20) < 16) continue;
+        const isTargetOrDefender = a.settlementId === myBand.targetSettlementId || a.militaryDuty || a.job === "soldier";
+        if (!isTargetOrDefender) continue;
         const dx = a.x - agent.x;
         if (dx < -radius || dx > radius) continue;
         const dy = a.y - agent.y;
         if (dy < -radius || dy > radius) continue;
         if (dx * dx + dy * dy <= r2) out.push(a);
+      }
+      if (out.length >= 2) {
+        const pos = this.sim._agentIdMap;
+        out.sort((p, q) => (pos.get(p.id) ?? 0) - (pos.get(q.id) ?? 0));
+      }
+      return out;
+    }
+
+    // Active external border raiders are hostile to all regular settlement defenders
+    for (const wb of this.warbands.values()) {
+      if (!wb.active || !wb.isExternalRaid) continue;
+      for (const sId of wb.soldiers) {
+        const a = this.sim._agentById(sId);
+        if (!a || !a.alive || a.id === agent.id) continue;
+        const dx = a.x - agent.x;
+        if (dx < -radius || dx > radius) continue;
+        const dy = a.y - agent.y;
+        if (dy < -radius || dy > radius) continue;
+        if (dx * dx + dy * dy <= r2) out.push(a);
+      }
+    }
+
+    if (this.sim.diplomacySystem) {
+      const hostileSettlementIds = this.sim.diplomacySystem.getEnemies(mySettlementId);
+      if (hostileSettlementIds.length > 0) {
+        // Perf: scan only the agents currently in combat (bucketed by settlement
+        // once per tick) instead of filtering the entire roster on every call.
+        const snapshot = this._getEnemySnapshot();
+        for (const sid of hostileSettlementIds) {
+          const bucket = snapshot.buckets.get(sid);
+          if (!bucket) continue;
+          for (const a of bucket) {
+            if (a.id === agent.id) continue;
+            const dx = a.x - agent.x;
+            if (dx < -radius || dx > radius) continue;
+            const dy = a.y - agent.y;
+            if (dy < -radius || dy > radius) continue;
+            if (dx * dx + dy * dy <= r2 && !out.includes(a)) out.push(a);
+          }
+        }
       }
     }
     if (out.length < 2) return out;

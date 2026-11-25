@@ -155,8 +155,30 @@ export class InfrastructureSystem {
         if (currentTick - this.lastUpdate >= this.UPDATE_INTERVAL) {
             this.lastUpdate = currentTick;
             this.updateInfrastructureEffects();
+            this.cleanObsoleteInfrastructure();
             if (currentTick > 0 && currentTick % 200 === 0) {
                 this.planAutonomousBridges();
+            }
+        }
+    }
+
+    cleanObsoleteInfrastructure() {
+        const world = this.sim?.world;
+        if (!world || !world.roadTiles) return;
+        const W = world.width;
+        const H = world.height;
+        const fort = this.sim?.fortificationSystem;
+        for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) {
+                const idx = y * W + x;
+                if (!world.roadTiles[idx]) continue;
+                const blockedWater = this.isWaterTile(x, y) && !(world.bridgeTiles && world.bridgeTiles[idx]);
+                const cratered = world.craterTiles && world.craterTiles[idx] > 40;
+                const wallSeg = fort?.getSegmentAt?.(x, y);
+                const solidWall = wallSeg && wallSeg.kind !== 'gate' && wallSeg.state !== 'breach' && wallSeg.hp > 0;
+                if (blockedWater || cratered || solidWall) {
+                    world.roadTiles[idx] = 0;
+                }
             }
         }
     }
@@ -577,12 +599,12 @@ export class InfrastructureSystem {
      * Update infrastructure effects on economy and movement
      */
     updateInfrastructureEffects() {
-        // Roads boost movement speed for agents on them
+        // Roads boost movement speed for agents on them (capped, never stacks unbounded)
         this.roads.forEach(road => {
             road.path.forEach(tile => {
                 const agents = this.sim.world?.getNearbyAgents ? this.sim.world.getNearbyAgents(tile.x, tile.y, 0.5) : [];
                 agents.forEach(agent => {
-                    agent.speedMultiplier = (agent.speedMultiplier || 1) + 0.5; // 50% faster
+                    agent.speedMultiplier = Math.max(agent.speedMultiplier || 1, 1.5);
                 });
             });
         });

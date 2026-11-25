@@ -1,5 +1,26 @@
 # Aetheria — Development Roadmap & Project Status
 
+## ✅ Phase 12 — Core Stability, Bug Fixes & Pathfinding Overhaul (COMPLETE)
+- [x] **Upgraded Local A* Pathfinding & Anti-Oscillation**: Bounded deterministic A* pathfinding around rivers/walls/mountains with road preference (`isRoad`), straight-line LOS fast path, oscillation detection, and temporary unreachable-target cooldowns.
+- [x] **Settlement Population in Any View**: Display settlement banners & live `Pop` counts across both 2.5D Isometric and 2D Top-Down views (`overlaysPass.js`, `topDownPass.js`).
+- [x] **Abandoned Settlements Peace Cleanup**: Automatically close active wars, reset hostile diplomatic statuses, and recall marching warbands as soon as a settlement becomes abandoned/ruined.
+- [x] **Visible War Loot & Spoils**: Record siege & battlefield plunder in `war.plundered` / `warband.plunderCargo`, spawn visible spoils piles (`GroundItem`), render warband cargo badges (`💰`), and show floating loot popups.
+- [x] **Visible Resource Gathering & Balanced Wood Supply**: Multi-tick chop/mine/harvest animations with floating yield indicators (`+🪵`, `+⛏️`, `+🌾`), carried cargo visuals on agents, fair harvest depletion ratios (`1.5:1`), and non-wasteful construction timber consumption.
+- [x] **Dynamic Job Switching (No Stuck Builders / Unemployed)**: Per-settlement pending construction checks, automatic idle-builder pivoting to resource/food jobs, and removal of permanent unemployment lockouts.
+
+## 📋 Phase 13 — Statistics Analytics, Era Mountain Mines, Map-Edge Raids & Civic Autonomy
+- [x] **World Statistics Dashboard with SVG Pie Charts**: Dedicated Statistics tab in Civilization modal with interactive SVG donut/pie charts for Causes of Death, Average Lifespan/Age, Religions, and Professions/Demographics plus historical trend curves and realm ledger comparison.
+- [ ] **Era-Locked Mountain Resource Deposits & God Spawn Tool**: Huge limited Iron Mountain & Nuclear/Uranium Mountain deposits unlocked by settlement era, plus God Dock spawn tool.
+- [ ] **Periodic Map-Edge External Raids**: Raiding bands emerging from map borders to test frontier defenses, plunder wealth, and drop spoils.
+- [ ] **Autonomous Demolition, Stronger Need-Seeking & Plausible Peace**: Autonomous clearing of ruined/blocking buildings/roads/walls, stronger hunger/thirst resource seeking, and realistic war-weariness peace treaties.
+- [ ] **History of fallen cetlements(wars, born, dead, all other that cetlements hade)
+
+## 📋 Phase 14 — Deep Procedural Religions, Fallen Conjuring & Elder Splintering
+- [ ] **Procedural Religions, History, Compatibility & Churches**: Procedurally generated faiths with doctrinal tenets, shared-tenet harmony vs hostility, multi-faith coexistence, prophets/religious leaders, and founding churches/temples/shrines.
+- [ ] **Conjuring Fallen Citizens**: Ancestral/priest rituals honoring and conjuring spirits of fallen citizens with spectral visual FX.
+- [ ] **Rebellious / Elder Splinter Settlements, Paved Roads/Floors & Wandering**: Disgruntled citizens rebelling or led by Elders to found splinter settlements, settlement road/floor networks boosting prosperity, and adventurous citizens visiting distant towns.
+- [ ] **Cemeteries and buildings for religional purposes(clicking cemetry shows all the wallen and there we can chek history of fallen legends)
+
 ## ✅ Phase 1 — Deep Economy & Supply Chains (COMPLETE)
 - [x] **Ground items / loot drops**: Dead agents & animals drop scavengable loot piles; survivors forage and scavenge equipment.
 - [x] **Crafting recipes & workshops**: Multi-tier recipes (wheat→flour→bread, log→plank, ore→tools/weapons/shields); dedicated workshop buildings with task queues.
@@ -101,3 +122,24 @@
 - [x] **Full Historical Lives, Houses & People Browser**: Deterministic multi-generation family surnames, Era-stamped `lifeHistory` timelines, landmark builder/upgrade attributions, heirloom weapon/artifact inheritance, synthesized biographies/epitaphs, and the searchable **People & Legends** roster inside Chancellery (`C`).
 - [x] **25 Automated Test Suites** (`tests/era_buildings_upgrades.mjs`, `tests/city_expansion_era_landmarks.mjs`, `tests/historical_lives_and_people.mjs`, `tests/combatdepth.mjs`, `tests/soldiers.mjs`).
 
+## ✅ Phase 13 — Bug Audit, Fixes & GitHub Release Hardening (COMPLETE)
+- [x] **Diplomatic Feed Chronological Fix (`App.tsx`, `CivilizationModal.tsx`)**: Removed erroneous `.reverse()` on `diplomacySystem.diplomaticHistory` (already `unshift()`-ordered newest-first) so latest treaties, ultimatums, and wars appear at the top.
+- [x] **Modal Hotkey Gating & Duplicate Listener Removal (`App.tsx`, `godPowers.js`)**: Removed the duplicate `'1'..'0'` `keydown` listener in `godPowers.js` and gated `App.tsx` world shortcuts (`1..0`, `Space`, `W`) behind `civilizationOpenRef` / `helpOpenRef` while keeping `Escape` and `C` active.
+- [x] **Clean `Remove` Tool & Registry Cleanup (`godPowers.js`, `simulation.js`)**: Fixed `case "remove"` to clean `ownerSettlement.buildings`, `world.entityRegistry`, `craftingSystem.workshops`, and inspector selections; added wall/gate and bridge erasure plus empty-tile feedback; updated `removeResource()` to delete stale `entityRegistry` entries.
+- [x] **Ruined Building Inspection & Dead Agent Selection (`App.tsx`, `renderer.js`)**: Preserved live inspection of ruined structures (`health <= 0` / `RUINED` badge) and suppressed canvas selection halos for deceased agents inspected via Memorial Dossiers.
+- [x] **Lifecycle Reset, Safe LocalStorage Save & Fallen Hero Export (`App.tsx`, `CivilizationModal.tsx`)**: Reset tool/selection/chronicle/diplomacy UI state on new world init and save load, cleared `CivilizationModal` selections/filters across simulation swaps, wrapped `localStorage.setItem` in `try/catch` quota handling, and fixed `handleExportChronicle()` to export `sim.fallenHeroes`.
+- [x] **Strict TS & CI Alignment (`CivilizationModal.tsx`, `package.json`, `.gitignore`, `README.md`, `docs/ROADMAP.md`)**: Removed unused `useMemo`/`Simulation` imports so `tsc --noEmit --noUnusedLocals --noUnusedParameters` passes cleanly, wired `combatdepth.mjs` & `soldiers.mjs` into `npm test` (25/25 suites), ignored Playwright artifacts, and reconciled repo documentation.
+
+## ✅ Technical Debt & Refactoring Backlog (COMPLETE)
+- [x] **Split Renderer Monolith (`src/presentation/renderer.js` -> `passes/*`)**: Extracted 2.5D rendering into 6 focused pass modules (`terrainPass.js`, `structuresPass.js`, `entitiesPass.js`, `overlaysPass.js`, `topDownPass.js`, `hudPass.js`), trimming `renderer.js` from 4,657 lines to a 958-line orchestrator with full backward-compatible API.
+- [x] **Split Remaining Monolithic Engine & UI Files**:
+  - [x] **Split Simulation Orchestrator (`src/simulation/simulation.js` -> `modules/*`)**: Extracted world seeding/resources, diplomacy/nuclear strikes, warfare/espionage, demographics/buildings, and serialization into focused modules (4,209 -> 1,549 lines).
+  - [x] **Split Agent AI & Execution (`src/simulation/agent.js` -> `agentModules/*`)**: Extracted perception/memory/gossip, goal/action selection, and execution/navigation into focused modules (3,646 -> 898 lines) with byte-identical RNG determinism.
+  - [x] **Split Inspector Panel & World Snapshot Builders (`InspectorPanel.tsx` -> `inspector/*`, `App.tsx` -> `worldSnapshot.ts`)**: Decomposed agent/settlement/building/resource inspector views and centralized HUD/inspection payload assembly.
+  - [x] **Split Chancellery & War Room Modal (`src/components/CivilizationModal.tsx` -> `civilization/*`)**: Decomposed 2,472-line modal into 5 focused tab modules (`DynastiesTab.tsx`, `DiplomacyTab.tsx`, `WarRoomTab.tsx`, `WondersTab.tsx`, `HeroesAndArchivesTab.tsx`) plus a 258-line shell with `WeakMap` simulation instance keying.
+- [x] **Strict TypeScript & Full-Codebase ESLint**: Enabled `"strict": true`, `"noUnusedLocals": true`, `"noUnusedParameters": true`, and `"noFallthroughCasesInSwitch": true` in `tsconfig.json`, and extended `eslint.config.js` with `typescript-eslint` + `eslint-plugin-react-hooks` rules across `.ts`/`.tsx` alongside `.js`/`.mjs`.
+- [x] **Bundle Code-Splitting & Asset Optimization**: Lazy-loaded `CivilizationModal` and `GuideModal` (`React.lazy`), added Vite `manualChunks` (`vendor-react`, `engine-sim`, `engine-render`), shrinking `dist/assets/index-*.js` from ~1.9 MB to ~190 KB, and optimized banner/emblem JPEGs from ~2.1 MB total down to ~245 KB.
+- [x] **Typed State Subscriptions Over Event Bus / Scattered Polling**: Introduced `src/state/worldUiStore.ts` (`useSyncExternalStore` selectors + typed pub/sub event channels), replacing `window.dispatchEvent(CustomEvent)` channels and scattered HUD `useState` hooks across `App.tsx`, `renderer.js`, and `godPowers.js`.
+- [x] **Tailwind Consolidation & Narrow-Viewport HUD**: Migrated React UI components and panels from large inline `React.CSSProperties` objects to Tailwind CSS utility classes, wrapped base resets cleanly in `@layer base`, added `< 960px` responsive StartScreen/HUD drawers, and added `hudPass.js` narrow-viewport war-banner clamping and offset support.
+- [x] **IndexedDB / Compressed Save Storage (`src/utils/saveStorage.ts`)**: Added gzip-compressed (`CompressionStream` / `DecompressionStream`) IndexedDB save storage (`aetheria_db`) with automatic `localStorage` fallback and legacy save migration.
+- [x] **Fast vs. Deep Test Tiers (`package.json`)**: Separated quick verification/determinism suites (`npm run test:fast`) from multi-thousand-tick endurance suites (`npm run test:deep`) while keeping `npm test` / `npm run test:full` at full CI parity.

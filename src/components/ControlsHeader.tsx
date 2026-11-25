@@ -32,6 +32,9 @@ interface ControlsHeaderProps {
   onReturnToMenu?: () => void;
 }
 
+const baseBtn =
+  'px-2.5 py-1 bg-slate-800 border border-slate-700 rounded-md text-slate-200 cursor-pointer text-[11.5px] font-medium min-h-[30px] transition-colors inline-flex items-center gap-1 whitespace-nowrap shrink-0 hover:bg-slate-700';
+
 export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
   is25D,
   heightScaleLabel,
@@ -64,79 +67,40 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
   onReturnToMenu,
 }) => {
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
-  const buttonStyle: React.CSSProperties = {
-    padding: '5px 10px',
-    background: '#1e293b',
-    border: '1px solid #334155',
-    borderRadius: '6px',
-    color: '#e2e8f0',
-    cursor: 'pointer',
-    fontSize: '11.5px',
-    fontWeight: 500,
-    minHeight: '30px',
-    transition: 'all 0.15s ease',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '4px',
-    whiteSpace: 'nowrap',
-    flexShrink: 0,
-  };
 
   return (
-    <div
-      style={{
-        background: 'rgba(15, 23, 42, 0.88)',
-        backdropFilter: 'blur(8px)',
-        border: '1px solid rgba(255, 255, 255, 0.12)',
-        padding: '7px 10px',
-        borderRadius: '12px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'flex-end',
-        gap: '6px',
-        pointerEvents: 'auto',
-        boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
-        flexWrap: 'wrap',
-        maxWidth: '100%',
-      }}
-    >
+    <div className="bg-slate-900/88 backdrop-blur-md border border-white/12 px-2.5 py-1.5 rounded-xl flex items-center justify-start md:justify-end gap-1.5 pointer-events-auto shadow-xl flex-wrap max-w-full">
       <button
-        style={{
-          ...buttonStyle,
-          background: is25D ? 'rgba(56, 189, 248, 0.2)' : '#1e293b',
-          borderColor: is25D ? 'rgba(56, 189, 248, 0.5)' : '#334155',
-          color: is25D ? '#38bdf8' : '#94a3b8',
-        }}
+        className={`${baseBtn} ${
+          is25D
+            ? 'bg-sky-400/20 border-sky-400/50 text-sky-400 hover:bg-sky-400/30'
+            : 'text-slate-400'
+        }`}
         onClick={onToggleView}
         title="Switch between 2.5D Isometric and 2D Top-Down"
       >
         {is25D ? '📐 2.5D View' : '🗺️ 2D View'}
       </button>
 
-      <button style={buttonStyle} onClick={onCycleHeight} title="Cycle terrain 3D heights">
+      <button className={baseBtn} onClick={onCycleHeight} title="Cycle terrain 3D heights">
         ⛰️ {heightScaleLabel}
       </button>
 
-      <button style={buttonStyle} onClick={onTogglePause}>
+      <button className={baseBtn} onClick={onTogglePause}>
         {isPaused ? '▶️ Play' : '⏸️ Pause'}
       </button>
 
-      <button style={buttonStyle} onClick={onCycleSpeed}>
+      <button className={baseBtn} onClick={onCycleSpeed}>
         ⚡ Speed ({speed}x)
       </button>
 
-      <button style={buttonStyle} onClick={onCenterCamera} title="Center on civilization">
+      <button className={baseBtn} onClick={onCenterCamera} title="Center on civilization">
         🎯 Center
       </button>
 
       {onNextBattle && (
         <button
-          style={{
-            ...buttonStyle,
-            background: 'rgba(239, 68, 68, 0.22)',
-            borderColor: 'rgba(239, 68, 68, 0.45)',
-            color: '#fecaca',
-          }}
+          className={`${baseBtn} bg-red-500/22 border-red-500/45 text-red-200 hover:bg-red-500/30`}
           onClick={onNextBattle}
           title="Jump camera to next active battle, siege, or blast site"
         >
@@ -145,12 +109,7 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
       )}
 
       <button
-        style={{
-          ...buttonStyle,
-          background: 'rgba(34, 197, 94, 0.25)',
-          borderColor: 'rgba(34, 197, 94, 0.5)',
-          color: '#86efac',
-        }}
+        className={`${baseBtn} bg-green-500/25 border-green-500/50 text-green-300 hover:bg-green-500/35`}
         onClick={onSpawnResources}
         title="Spawn Wood, Water & Ore across the map"
       >
@@ -158,11 +117,7 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
       </button>
 
       <button
-        style={{
-          ...buttonStyle,
-          background: societiesOpen ? '#334155' : '#1e293b',
-          borderColor: societiesOpen ? '#38bdf8' : '#334155',
-        }}
+        className={`${baseBtn} ${societiesOpen ? 'bg-slate-700 border-sky-400' : ''}`}
         onClick={onToggleSocieties}
         title="Toggle Societies List"
       >
@@ -170,31 +125,31 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
       </button>
 
       <button
-        style={{
-          ...buttonStyle,
-          background: diplomacyOpen ? '#334155' : (warsCount > 0 ? 'rgba(239, 68, 68, 0.16)' : '#1e293b'),
-          borderColor: diplomacyOpen ? '#ef4444' : (warsCount > 0 ? 'rgba(239, 68, 68, 0.5)' : '#334155'),
-          fontVariantNumeric: 'tabular-nums',
-        }}
+        className={`${baseBtn} font-mono-tabular ${
+          diplomacyOpen
+            ? 'bg-slate-700 border-red-500'
+            : warsCount > 0
+              ? 'bg-red-500/16 border-red-500/50'
+              : ''
+        }`}
         onClick={onToggleDiplomacy}
         title="Toggle Diplomacy, Wars, Alliances & Treaties (W)"
       >
         ⚔️ Diplomacy
         {(warsCount > 0 || treatiesCount > 0) && (
-          <span style={{ fontSize: '10px', color: warsCount > 0 ? '#fca5a5' : '#86efac', fontWeight: 700 }}>
-            ({warsCount > 0 ? `${warsCount}⚔️` : ''}{warsCount > 0 && treatiesCount > 0 ? ' ' : ''}{treatiesCount > 0 ? `${treatiesCount}🤝` : ''})
+          <span className={`text-[10px] font-bold ${warsCount > 0 ? 'text-red-300' : 'text-green-300'}`}>
+            ({warsCount > 0 ? `${warsCount}⚔️` : ''}
+            {warsCount > 0 && treatiesCount > 0 ? ' ' : ''}
+            {treatiesCount > 0 ? `${treatiesCount}🤝` : ''})
           </span>
         )}
       </button>
 
       {onToggleCivilization && (
         <button
-          style={{
-            ...buttonStyle,
-            background: civilizationOpen ? 'rgba(245, 158, 11, 0.25)' : '#1e293b',
-            borderColor: civilizationOpen ? '#f59e0b' : 'rgba(245, 158, 11, 0.4)',
-            color: '#fbbf24',
-          }}
+          className={`${baseBtn} text-amber-400 ${
+            civilizationOpen ? 'bg-amber-500/25 border-amber-500' : 'border-amber-500/40'
+          }`}
           onClick={onToggleCivilization}
           title="Open Full-Screen Civilization, Dynasties, Wonders & War Room (C)"
         >
@@ -202,16 +157,16 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
         </button>
       )}
 
-      <button style={buttonStyle} onClick={onSave} title="Save world state to local storage">
+      <button className={baseBtn} onClick={onSave} title="Save world state to storage">
         💾 Save
       </button>
 
-      <button style={buttonStyle} onClick={onLoad} title="Load world state from local storage">
+      <button className={baseBtn} onClick={onLoad} title="Load world state from storage">
         📂 Load
       </button>
 
       {onExportWorld && (
-        <button style={buttonStyle} onClick={onExportWorld} title="Export full world snapshot as JSON">
+        <button className={baseBtn} onClick={onExportWorld} title="Export full world snapshot as JSON">
           Export JSON
         </button>
       )}
@@ -222,7 +177,7 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
             ref={fileInputRef}
             type="file"
             accept=".json,application/json"
-            style={{ display: 'none' }}
+            className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
               if (file) onImportWorld(file);
@@ -230,7 +185,7 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
             }}
           />
           <button
-            style={buttonStyle}
+            className={baseBtn}
             onClick={() => fileInputRef.current?.click()}
             title="Import exported world JSON snapshot"
           >
@@ -241,11 +196,9 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
 
       {onToggleMute && (
         <button
-          style={{
-            ...buttonStyle,
-            color: isMuted ? '#94a3b8' : '#38bdf8',
-            borderColor: isMuted ? '#334155' : 'rgba(56, 189, 248, 0.4)',
-          }}
+          className={`${baseBtn} ${
+            isMuted ? 'text-slate-400 border-slate-700' : 'text-sky-400 border-sky-400/40'
+          }`}
           onClick={onToggleMute}
           title={isMuted ? 'Sound Muted. Click to enable WebAudio SFX' : 'Sound Enabled. Click to mute'}
         >
@@ -258,33 +211,28 @@ export const ControlsHeader: React.FC<ControlsHeaderProps> = ({
           value={scenario}
           onChange={(e) => onChangeScenario(e.target.value as 'modern_nuclear' | 'warring')}
           title="Start a fresh world in Modern & Nuclear Age or Tribal Warring Kingdoms"
-          style={{
-            ...buttonStyle,
-            background: scenario === 'modern_nuclear' ? 'rgba(132, 204, 22, 0.16)' : '#1e293b',
-            borderColor: scenario === 'modern_nuclear' ? 'rgba(132, 204, 22, 0.5)' : '#334155',
-            color: scenario === 'modern_nuclear' ? '#bef264' : '#e2e8f0',
-          }}
+          className={`${baseBtn} ${
+            scenario === 'modern_nuclear'
+              ? 'bg-lime-500/16 border-lime-500/50 text-lime-300'
+              : 'bg-slate-800 border-slate-700 text-slate-200'
+          }`}
         >
-          <option value="warring" style={{ background: '#0f172a', color: '#f8fafc' }}>
+          <option value="warring" className="bg-slate-900 text-slate-50">
             ⚔️ Tribal Kingdoms
           </option>
-          <option value="modern_nuclear" style={{ background: '#0f172a', color: '#f8fafc' }}>
+          <option value="modern_nuclear" className="bg-slate-900 text-slate-50">
             ☢️ Modern &amp; Nuclear
           </option>
         </select>
       )}
 
-      <button style={buttonStyle} onClick={onToggleHelp} title="Divine Instructions Guide">
+      <button className={baseBtn} onClick={onToggleHelp} title="Divine Instructions Guide">
         ❓ Guide
       </button>
 
       {onReturnToMenu && (
         <button
-          style={{
-            ...buttonStyle,
-            borderColor: 'rgba(148, 163, 184, 0.35)',
-            color: '#cbd5e1',
-          }}
+          className={`${baseBtn} border-slate-400/35 text-slate-300`}
           onClick={onReturnToMenu}
           title="Return to Title Screen (New Game / Continue)"
         >

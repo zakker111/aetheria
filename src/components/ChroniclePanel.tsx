@@ -33,81 +33,34 @@ const ChroniclePanelComponent: React.FC<ChroniclePanelProps> = ({
 }) => {
   const [eraFilter, setEraFilter] = useState<number | null>(null);
 
-  const filteredEntries = structuredEntries.length > 0
-    ? (eraFilter == null
-      ? structuredEntries
-      : structuredEntries.filter((e) => (e.eraId ?? 1) === eraFilter))
-    : [];
+  const filteredEntries =
+    structuredEntries.length > 0
+      ? eraFilter == null
+        ? structuredEntries
+        : structuredEntries.filter((e) => (e.eraId ?? 1) === eraFilter)
+      : [];
 
   return (
-    <div
-      style={{
-        background: 'rgba(15, 23, 42, 0.88)',
-        backdropFilter: 'blur(8px)',
-        border: '1px solid rgba(255, 255, 255, 0.12)',
-        borderRadius: '12px',
-        padding: '12px 14px',
-        pointerEvents: 'auto',
-        boxShadow: '0 6px 20px rgba(0, 0, 0, 0.35)',
-        fontSize: '12px',
-        maxHeight: '240px',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          fontWeight: 600,
-          color: '#38bdf8',
-          marginBottom: '6px',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-          paddingBottom: '4px',
-          fontSize: '13px',
-          gap: '6px',
-        }}
-      >
-        <span style={{ whiteSpace: 'nowrap' }}>📜 World Chronicle</span>
-        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+    <div className="bg-slate-900/90 backdrop-blur-md border border-white/12 rounded-xl px-3.5 py-3 pointer-events-auto shadow-xl text-xs max-h-[240px] flex flex-col overflow-hidden">
+      <div className="flex items-center justify-between font-semibold text-sky-400 mb-1.5 border-b border-white/8 pb-1 text-[13px] gap-1.5">
+        <span className="whitespace-nowrap">📜 World Chronicle</span>
+        <div className="flex gap-1 items-center">
           {onExportChronicle && (
             <button
+              type="button"
               onClick={onExportChronicle}
               title="Download historical chronicle replay JSON"
-              style={{
-                background: 'rgba(56, 189, 248, 0.14)',
-                border: '1px solid rgba(56, 189, 248, 0.3)',
-                borderRadius: '4px',
-                color: '#38bdf8',
-                fontSize: '9px',
-                fontWeight: 600,
-                padding: '2px 6px',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-                flexShrink: 0,
-              }}
+              className="bg-sky-400/15 border border-sky-400/30 hover:bg-sky-400/25 rounded text-sky-400 text-[9px] font-semibold px-1.5 py-0.5 cursor-pointer whitespace-nowrap shrink-0 transition-colors"
             >
               Export Log
             </button>
           )}
           {onExportWorld && (
             <button
+              type="button"
               onClick={onExportWorld}
               title="Download full save snapshot JSON"
-              style={{
-                background: 'rgba(245, 158, 11, 0.14)',
-                border: '1px solid rgba(245, 158, 11, 0.3)',
-                borderRadius: '4px',
-                color: '#fbbf24',
-                fontSize: '9px',
-                fontWeight: 600,
-                padding: '2px 6px',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-                flexShrink: 0,
-              }}
+              className="bg-amber-500/15 border border-amber-500/30 hover:bg-amber-500/25 rounded text-amber-400 text-[9px] font-semibold px-1.5 py-0.5 cursor-pointer whitespace-nowrap shrink-0 transition-colors"
             >
               Export Save
             </button>
@@ -116,32 +69,18 @@ const ChroniclePanelComponent: React.FC<ChroniclePanelProps> = ({
       </div>
 
       {structuredEntries.length > 0 && (
-        <div
-          style={{
-            display: 'flex',
-            gap: '3px',
-            marginBottom: '6px',
-            flexShrink: 0,
-          }}
-        >
+        <div className="flex gap-1 mb-1.5 shrink-0">
           {ERA_FILTERS.map((ef) => (
             <button
+              type="button"
               key={String(ef.id ?? 'all')}
               onClick={() => setEraFilter(ef.id)}
               title={ef.id == null ? 'All Eras' : `Filter Era ${ef.id}`}
-              style={{
-                flex: 1,
-                padding: '2px 4px',
-                borderRadius: '4px',
-                border: 'none',
-                background: eraFilter === ef.id ? '#38bdf8' : 'rgba(30, 41, 59, 0.7)',
-                color: eraFilter === ef.id ? '#0f172a' : '#94a3b8',
-                fontSize: '9px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-                flexShrink: 0,
-              }}
+              className={`flex-1 py-0.5 px-1 rounded border-0 text-[9px] font-bold cursor-pointer whitespace-nowrap shrink-0 transition-colors ${
+                eraFilter === ef.id
+                  ? 'bg-sky-400 text-slate-900'
+                  : 'bg-slate-800/70 text-slate-400 hover:text-slate-200'
+              }`}
             >
               {ef.label}
             </button>
@@ -149,15 +88,16 @@ const ChroniclePanelComponent: React.FC<ChroniclePanelProps> = ({
         </div>
       )}
 
-      <div style={{ overflowY: 'auto', flex: 1, paddingRight: '4px', maxHeight: '165px', lineHeight: 1.4 }}>
+      <div className="overflow-y-auto flex-1 pr-1 max-h-[165px] leading-snug">
         {structuredEntries.length > 0 ? (
           filteredEntries.length === 0 ? (
-            <div style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: '11px' }}>
+            <div className="text-slate-400 italic text-[11px]">
               No chronicle highlights recorded in Era {eraFilter} yet.
             </div>
           ) : (
             filteredEntries.slice(0, 35).map((entry) => {
-              const targetAgentId = entry.agentId ?? entry.killerId ?? entry.builderId ?? entry.victimId ?? null;
+              const targetAgentId =
+                entry.agentId ?? entry.killerId ?? entry.builderId ?? entry.victimId ?? null;
               return (
                 <div
                   key={entry.id}
@@ -166,69 +106,39 @@ const ChroniclePanelComponent: React.FC<ChroniclePanelProps> = ({
                       onPanTo(entry.x, entry.y);
                     }
                   }}
-                  style={{
-                    padding: '4px 0',
-                    borderBottom: '1px solid rgba(255, 255, 255, 0.04)',
-                    fontSize: '11px',
-                    color: '#cbd5e1',
-                    cursor: typeof entry.x === 'number' ? 'pointer' : 'default',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'flex-start',
-                    gap: '6px',
-                  }}
+                  className={`py-1 border-b border-white/5 text-[11px] text-slate-300 flex justify-between items-start gap-1.5 ${
+                    typeof entry.x === 'number' ? 'cursor-pointer hover:bg-slate-800/40 rounded px-0.5' : ''
+                  }`}
                 >
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <span style={{ fontSize: '9px', color: '#64748b', marginRight: '5px', fontVariantNumeric: 'tabular-nums' }}>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[9px] text-slate-500 mr-1.5 font-mono-tabular">
                       {entry.date}
                     </span>
                     <span>{entry.text}</span>
                   </div>
-                  <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
+                  <div className="flex gap-1 items-center shrink-0">
                     {entry.buildingId != null && onSelectBuilding && (
                       <button
+                        type="button"
                         onClick={(ev) => {
                           ev.stopPropagation();
                           onSelectBuilding(entry.buildingId!);
                         }}
                         title="Inspect landmark structure"
-                        style={{
-                          background: 'rgba(245, 158, 11, 0.14)',
-                          border: '1px solid rgba(245, 158, 11, 0.35)',
-                          borderRadius: '4px',
-                          color: '#fbbf24',
-                          fontSize: '9px',
-                          fontWeight: 600,
-                          padding: '1px 5px',
-                          cursor: 'pointer',
-                          whiteSpace: 'nowrap',
-                          flexShrink: 0,
-                          marginTop: '1px',
-                        }}
+                        className="bg-amber-500/15 border border-amber-500/35 hover:bg-amber-500/25 rounded text-amber-400 text-[9px] font-semibold px-1.5 py-0.5 cursor-pointer whitespace-nowrap shrink-0 mt-0.5"
                       >
                         🏛️ Site
                       </button>
                     )}
                     {targetAgentId != null && onSelectAgent && (
                       <button
+                        type="button"
                         onClick={(ev) => {
                           ev.stopPropagation();
                           onSelectAgent(targetAgentId);
                         }}
                         title="Inspect historical figure"
-                        style={{
-                          background: 'rgba(56, 189, 248, 0.14)',
-                          border: '1px solid rgba(56, 189, 248, 0.35)',
-                          borderRadius: '4px',
-                          color: '#38bdf8',
-                          fontSize: '9px',
-                          fontWeight: 600,
-                          padding: '1px 5px',
-                          cursor: 'pointer',
-                          whiteSpace: 'nowrap',
-                          flexShrink: 0,
-                          marginTop: '1px',
-                        }}
+                        className="bg-sky-400/15 border border-sky-400/35 hover:bg-sky-400/25 rounded text-sky-400 text-[9px] font-semibold px-1.5 py-0.5 cursor-pointer whitespace-nowrap shrink-0 mt-0.5"
                       >
                         👤 Inspect
                       </button>
@@ -239,20 +149,12 @@ const ChroniclePanelComponent: React.FC<ChroniclePanelProps> = ({
             })
           )
         ) : events.length === 0 ? (
-          <div style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: '11px' }}>
+          <div className="text-slate-400 italic text-[11px]">
             World awakened with 128×128 terrain and biomes.
           </div>
         ) : (
           events.map((evt, idx) => (
-            <div
-              key={idx}
-              style={{
-                padding: '4px 0',
-                borderBottom: '1px solid rgba(255, 255, 255, 0.04)',
-                fontSize: '11px',
-                color: '#cbd5e1',
-              }}
-            >
+            <div key={idx} className="py-1 border-b border-white/5 text-[11px] text-slate-300">
               {evt}
             </div>
           ))

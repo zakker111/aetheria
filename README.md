@@ -2,7 +2,7 @@
 
 [![Build & Tests](https://img.shields.io/badge/tests-25%2F25%20passing-brightgreen)](#-automated-test-suites)
 [![React 19](https://img.shields.io/badge/React-19.3-blue)](https://react.dev/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-7.x-blue)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.x-blue)](https://www.typescriptlang.org/)
 [![Vite](https://img.shields.io/badge/Vite-8.x-purple)](https://vitejs.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -87,6 +87,7 @@
 - **`5` Wood / `6` Ore**: Plant ancient groves or seed rich iron veins.
 - **`7` House / `8` Workshop / `9` Farm / `⚓` Dock / `🌉` Bridge / `🧱` Wall / `🗼` Tower**: Place building foundations (`⚓ Dock` snaps to shorelines; `🌉 Bridge` spans 1–10 tile rivers; `🧱 Wall` builds/toggles gates or repairs breaches; `🗼 Tower` erects active defensive watchtowers).
 - **`0` Bless / Smite**: Bestow divine abundance or cast lightning down upon heretics.
+- **`Remove` Tool**: Cleanly erase structures, resource nodes, fortification wall/gate segments, or bridges.
 - **Provoke War / Enforce Peace**: Instigate casus belli or compel belligerents to sign a peace concordat.
 
 ---
@@ -120,11 +121,20 @@ Open your browser and navigate to `http://localhost:3000`.
 Aetheria maintains 25 comprehensive automated test suites enforcing 100% save/load determinism, economic loops, living ecology, deeper structures, Era 1–6 upgradable buildings, Era 1–7 heritage landmarks, continuous city expansion, historical agent lives, heirlooms, warfare rules, Nuclear Age deterrence, fortifications, maritime logistics, bridge engineering, espionage/wonders, carrying capacity, and high-population performance:
 
 ```bash
-# Run all 25 automated test suites
+# Run all 25 automated test suites (CI parity)
 npm test
+
+# Run fast verification & determinism tier (13 rapid suites)
+npm run test:fast
+
+# Run deep multi-thousand-tick endurance tier (12 suites)
+npm run test:deep
 
 # Run code style and lint check
 npm run lint
+
+# Run TypeScript typecheck
+npm run typecheck
 
 # Build production bundle
 npm run build
@@ -194,10 +204,11 @@ git push -u origin main
 ├── .github/workflows/     # Automated CI and GitHub Pages deployment workflows
 ├── docs/                  # Architectural guidelines and game design constitution
 ├── src/
-│   ├── components/        # React UI panels (Inspector, Wars, Societies, TopBar, Controls)
+│   ├── components/        # Tailwind React UI panels, inspector/*, and lazy civilization/* tabs
 │   ├── core/              # Constants, biomes, and game configurations
-│   ├── presentation/      # 2.5D Isometric Canvas Renderer, lighting, and camera
-│   ├── simulation/        # Core tick loop, clock, agents, and spatial LOD management
+│   ├── presentation/      # 2.5D Isometric Canvas Renderer & modular passes (passes/*)
+│   ├── simulation/        # Core orchestrator (modules/*), agent AI (agentModules/*), & worldSnapshot.ts
+│   ├── state/             # Typed useSyncExternalStore worldUiStore & event channels
 │   ├── systems/           # Modular simulation systems:
 │   │   ├── combatSystem.js     # Health, melee damage, and lethal blow resolution
 │   │   ├── warfareSystem.js    # Warbands, tactics, sieges, and plunder
@@ -210,7 +221,7 @@ git push -u origin main
 │   │   ├── tradeSystem.js      # Commercial trade routes and caravan logistics
 │   │   ├── chronicleSystem.js  # Living historical chronicle and event logger
 │   │   └── religionSystem.js   # Beliefs, temples, missionaries, and inquisitions
-│   └── utils/             # Deterministic PRNG, math, and spatial hashing
+│   └── utils/             # Deterministic PRNG, math, spatial hashing & gzipped IndexedDB saveStorage.ts
 ├── tests/                 # 25 automated regression & determinism test suites
 ├── index.html             # HTML5 entry point
 ├── package.json           # Scripts and dependencies
