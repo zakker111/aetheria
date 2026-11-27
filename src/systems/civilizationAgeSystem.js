@@ -460,9 +460,15 @@ export class CivilizationAgeSystem {
         if (wonder.buildingId && Array.isArray(this.sim?.buildings)) {
           const b = this.sim.buildings.find(x => x && x.id === wonder.buildingId);
           if (b) {
+            const wasComplete = b.complete === true;
             b.complete = true;
+            b.isComplete = true;
             b.constructionProgress = 100;
             b.customName = wonder.name;
+            if (!wasComplete) {
+              if (!s.stats) s.stats = { births: 0, deaths: 0, buildingsBuilt: 0, warsFought: 0, battlesWon: 0, peakPopulation: s.population || 0 };
+              s.stats.buildingsBuilt = (s.stats.buildingsBuilt || 0) + 1;
+            }
           }
         }
         this.sim?.eventBus?.emit('WONDER_COMPLETED', {
@@ -729,6 +735,7 @@ export class CivilizationAgeSystem {
             mb.ruinedAtTick = null;
             mb.health = Math.round((mb.maxHealth || 500) * 0.5);
             mb.complete = true;
+            mb.isComplete = true;
             mb.constructionProgress = 100;
           }
         }

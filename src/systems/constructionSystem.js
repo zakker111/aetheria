@@ -444,7 +444,18 @@ export class ConstructionSystem {
      */
     completeConstruction(building) {
         building.isComplete = true;
+        building.complete = true;
         building.health = building.maxHealth;
+
+        const targetSettlement = building.settlementId != null
+            ? (this.simulation || this.worldState?.simulation)?.settlementSystem?.settlements?.get(building.settlementId)
+            : null;
+        if (targetSettlement) {
+            if (!targetSettlement.stats) {
+                targetSettlement.stats = { births: 0, deaths: 0, buildingsBuilt: 0, warsFought: 0, battlesWon: 0, peakPopulation: targetSettlement.population || 0 };
+            }
+            targetSettlement.stats.buildingsBuilt = (targetSettlement.stats.buildingsBuilt || 0) + 1;
+        }
         
         // Apply bonuses immediately
         if (building.bonuses.popCap) {

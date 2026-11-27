@@ -76,7 +76,8 @@ export class Agent {
   static MEMORY_RECENCY_TICKS = 400;     // ~2 sim years of "fresh" feeling
   static SPATIAL_MEMORY_MAX = 12;        // remembered resource nodes per agent
   static SOCIAL_ACTION_TYPES = new Set([
-    "socialize", "visit_neighbor", "reproduce", "gather_at_hearth", "visit_market", "pray_at_temple", "play_in_town"
+    "socialize", "visit_neighbor", "reproduce", "gather_at_hearth", "visit_market", "pray_at_temple", "play_in_town",
+    "conjure_fallen", "wander_to_town"
   ]);
   static POSITIVE_MEMORY_TYPES = new Set([
     "MADE_FRIEND", "GOOD_MEAL", "RECEIVED_GIFT", "SAVED_LIFE"
@@ -129,6 +130,7 @@ export class Agent {
     this.health = 100;
     this.maxHealth = 100;
     this.starvationTicks = 0;
+    this.deathDetail = null;
     this._lastCombatTick = null;
     
     // Components (doc 02: avoid giant NPC class, use components)
@@ -338,9 +340,14 @@ export class Agent {
         this.needs.food = Math.min(100, this.needs.food + 25);
       } else if (this.settlementId && simulation?.settlementSystem) {
         const set = simulation.settlementSystem.settlements.get(this.settlementId);
-        if (set && set.stockpile && (set.stockpile.food || 0) > 0) {
-          set.stockpile.food = Math.max(0, set.stockpile.food - 1);
-          this.needs.food = Math.min(100, this.needs.food + 50);
+        if (set && set.stockpile) {
+          if ((set.stockpile.food || 0) > 0) {
+            set.stockpile.food = Math.max(0, set.stockpile.food - 1);
+            this.needs.food = Math.min(100, this.needs.food + 50);
+          } else if ((set.stockpile.bread || 0) > 0) {
+            set.stockpile.bread = Math.max(0, set.stockpile.bread - 1);
+            this.needs.food = Math.min(100, this.needs.food + 50);
+          }
         }
       }
     }
@@ -357,16 +364,41 @@ export class Agent {
       }
     }
 
-    // 2. Macro production contribution for rural workers
-    if (this.settlementId && simulation?.settlementSystem) {
+    // 2. Macro production contribution backed by actual map resource consumption
+    if (this.settlementId && simulation?.settlementSystem && simulation.world) {
       const set = simulation.settlementSystem.settlements.get(this.settlementId);
       if (set && set.stockpile) {
-        if (this.job === 'farmer' || this.job === 'gatherer') {
-          set.stockpile.food = (set.stockpile.food || 0) + 1;
-        } else if (this.job === 'lumberjack') {
-          set.stockpile.wood = (set.stockpile.wood || 0) + 1;
-        } else if (this.job === 'miner') {
-          set.stockpile.ore = (set.stockpile.ore || 0) + 1;
+        const wantedType =
+          (this.job === 'farmer' || this.job === 'gatherer') ? 'food' :
+          this.job === 'lumberjack' ? 'wood' :
+          this.job === 'miner' ? 'ore' : null;
+        if (wantedType) {
+          const cx = Math.floor(this.x);
+          const cy = Math.floor(this.y);
+          const near = typeof simulation.world._getScan === 'function'
+            ? simulation.world._getScan(cx, cy, 12)
+            : simulation.world.getEntitiesNear(cx, cy, 12);
+          let consumedNode = false;
+          for (let i = 0; i < near.length; i++) {
+            const ent = near[i];
+            if (ent && ent.type === 'resource' && !ent.destroyed && !ent.depleted && !ent.exhausted &&
+                ent.resourceType === wantedType && ent.amount > 0 && (ent.requiredEraId || 1) <= 1) {
+              if (typeof ent.consume === 'function') {
+                ent.consume(1.5, simulation.world);
+              } else {
+                ent.amount = Math.max(0, ent.amount - 1.5);
+                if (ent.amount <= 0 && ent.markDepleted) ent.markDepleted(simulation.world);
+              }
+              consumedNode = true;
+              break;
+            }
+          }
+          if (consumedNode) {
+            set.stockpile[wantedType] = (set.stockpile[wantedType] || 0) + 1;
+          } else if (this.job === 'farmer' && Array.isArray(set.buildings) &&
+                     set.buildings.some(b => b && !b.isRuined && b.complete && b.buildingType === 'farm')) {
+            set.stockpile.food = (set.stockpile.food || 0) + 1;
+          }
         }
       }
     }
@@ -623,6 +655,7 @@ export class Agent {
       reproduceCooldown: this.reproduceCooldown || 0,
       starvationTicks: this.starvationTicks || 0,
       deathCause: this.deathCause ?? null,
+      deathDetail: this.deathDetail ?? null,
       kills: this.kills || 0,
       epithet: this.epithet ?? null,
       legendaryWeapon: this.legendaryWeapon ?? null,
@@ -786,6 +819,7 @@ export class Agent {
     agent._lastCombatTick = data._lastCombatTick ?? null;
     agent.reproduceCooldown = data.reproduceCooldown || 0;
     agent.deathCause = data.deathCause ?? null;
+    agent.deathDetail = data.deathDetail ?? null;
     agent.kills = data.kills || 0;
     agent.epithet = data.epithet ?? null;
     agent.legendaryWeapon = data.legendaryWeapon ?? null;

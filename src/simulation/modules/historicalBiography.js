@@ -7,6 +7,7 @@ export function recordDeadDossier(sim, agent, cause = "natural") {
   const dossier = buildAgentDossier(sim, agent, {
     alive: false,
     deathCause: cause || agent.deathCause || "natural",
+    deathDetail: agent.deathDetail ?? null,
   });
   const existingIdx = sim._deadDossiers.findIndex((d) => d.id === agent.id);
   if (existingIdx !== -1) {
@@ -46,6 +47,7 @@ export function buildAgentBiography(sim, agentOrDossier, overrides = {}) {
     ? agentOrDossier.children.length
     : (agentOrDossier.children || 0);
   const deathCause = overrides.deathCause || agentOrDossier.deathCause || "natural causes";
+  const deathDetail = overrides.deathDetail ?? agentOrDossier.deathDetail ?? null;
 
   let roleClause = `a ${job.toLowerCase()} of ${home}`;
   if (isMonarch) {
@@ -59,9 +61,12 @@ export function buildAgentBiography(sim, agentOrDossier, overrides = {}) {
   }
 
   const houseClause = surname ? ` (House ${surname}, Gen ${gen})` : "";
+  const deathPhrase = deathDetail
+    ? `${String(deathCause).replace(/_/g, " ")} — ${deathDetail}`
+    : String(deathCause).replace(/_/g, " ");
   const firstSentence = alive
     ? `${fullName}${houseClause} is ${roleClause}, now aged ${age}.`
-    : `${fullName}${houseClause} served as ${roleClause} before passing at age ${age} (${String(deathCause).replace(/_/g, " ")}).`;
+    : `${fullName}${houseClause} served as ${roleClause} before passing at age ${age} (${deathPhrase}).`;
 
   const details = [];
   if (weapon && !isMonarch && kills < 3) details.push(`wielded ${weapon}`);
@@ -162,6 +167,7 @@ export function buildAgentDossier(sim, agent, overrides = {}) {
 
   const aliveFlag = overrides.alive !== undefined ? overrides.alive : agent.alive !== false;
   const deathCause = overrides.deathCause ?? agent.deathCause ?? null;
+  const deathDetail = overrides.deathDetail ?? agent.deathDetail ?? null;
   const fullName = formatAgentFullName(agent);
   const builtStructures = getBuiltStructuresForAgent(sim, agent.id);
   const dossier = {
@@ -176,6 +182,7 @@ export function buildAgentDossier(sim, agent, overrides = {}) {
     gender: agent.gender || "neutral",
     alive: aliveFlag,
     deathCause,
+    deathDetail,
     deathTick: aliveFlag === false ? (sim.clock?.tick ?? 0) : null,
     job: agent.job || "unemployed",
     jobTitle: agent.jobTitle || agent.job || "Unemployed",
@@ -211,7 +218,7 @@ export function buildAgentDossier(sim, agent, overrides = {}) {
   dossier.biography = buildAgentBiography(sim, {
     ...dossier,
     children: children.length
-  }, { alive: aliveFlag, deathCause, settlementName, fullName });
+  }, { alive: aliveFlag, deathCause, deathDetail, settlementName, fullName });
   return dossier;
 }
 
@@ -250,6 +257,7 @@ export function getAgentDossier(sim, agentOrId) {
         gender: "neutral",
         alive: false,
         deathCause: hero.cause || "combat",
+        deathDetail: hero.deathDetail || null,
         deathTick,
         job: "soldier",
         jobTitle: hero.isMonarch ? "Fallen Sovereign" : "Fallen Hero",
@@ -358,6 +366,7 @@ export function getHistoricalPeopleRoster(sim) {
         epithet: d.epithet || null,
         age: Math.floor(d.age || 0),
         deathCause: d.deathCause || "natural",
+        deathDetail: d.deathDetail || null,
         deathTick: d.deathTick ?? 0,
         settlementId: d.settlementId ?? null,
         settlementName: d.settlementName || "Wilds",
@@ -387,6 +396,7 @@ export function getHistoricalPeopleRoster(sim) {
         epithet: h.epithet || null,
         age: Math.floor(h.age || 0),
         deathCause: h.cause || "combat",
+        deathDetail: h.deathDetail || null,
         deathTick: h.deathTick ?? 0,
         settlementId: h.settlementId ?? null,
         settlementName: h.settlementName || "Wilds",

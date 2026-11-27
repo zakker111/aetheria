@@ -18,7 +18,7 @@ function _cmpEntityId(a, b) {
 }
 
 export class WorldState {
-  constructor(width = 128, height = 128, seed = Date.now(), options = {}) {
+  constructor(width = 160, height = 160, seed = Date.now(), options = {}) {
     this.width = width;
     this.height = height;
     this.seed = seed;
@@ -44,6 +44,7 @@ export class WorldState {
     this.fireTiles = new Uint16Array(width * height);
     // Scorched earth layer: per-tile charring intensity (0 = pristine, 255 = charred ash)
     this.scorchedTiles = new Uint8Array(width * height);
+    this._scorchedActive = false;
     // Blast crater layer: per-tile crater depth/rim intensity (0 = flat, 255 = deep crater)
     this.craterTiles = new Uint8Array(width * height);
     // Nuclear fallout layer: per-tile radiation intensity (0 = safe, 255 = lethal fallout)
@@ -933,17 +934,13 @@ export class WorldState {
   }
 
   isWalkable(x, y) {
-    const terrain = this.getTerrain(x, y);
-    if (!terrain) return false;
-    // Bridges make any water tile passable (persistent ground layer).
-    if (this.bridgeTiles && this.bridgeTiles[y * this.width + x] === 1) return true;
-    // Mountains are impassable.
-    if (terrain.type === 'mountain') return false;
-    // Lakes and rivers (and ocean) are impassable without a bridge.
-    if (terrain.waterLevel > 0.3) return false;
-    // Some biomes are not walkable
-    const nonWalkable = ["water", "deep_water"];
-    return !nonWalkable.includes(terrain.type);
+    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
+    const idx = y * this.width + x;
+    if (this.bridgeTiles && this.bridgeTiles[idx] === 1) return true;
+    const b = this.biome[idx];
+    if (b === undefined) return false;
+    if (b === 'mountain' || b === 'water' || b === 'deep_water') return false;
+    return !(this.waterLevel[idx] > 0.3);
   }
 
   isTilePassableForAgent(x, y, agent = null) {
@@ -969,17 +966,22 @@ export class WorldState {
     return true;
   }
 
-  // Road network accessors (persistent ground layer)
+  // Road network accessors (persistent ground layer: 1 = dirt road, 2 = paved stone road)
   isRoad(x, y) {
     if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
-    return this.roadTiles[y * this.width + x] === 1;
+    return this.roadTiles[y * this.width + x] > 0;
+  }
+
+  isPavedRoad(x, y) {
+    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
+    return this.roadTiles[y * this.width + x] === 2;
   }
 
   setRoad(x, y, on = true) {
     if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
     const idx = y * this.width + x;
     if (!this.isWalkable(x, y)) return false;
-    this.roadTiles[idx] = on ? 1 : 0;
+    this.roadTiles[idx] = typeof on === 'number' ? on : (on ? 1 : 0);
     return true;
   }
 
@@ -996,6 +998,7 @@ export class WorldState {
     this.fireTiles[idx] = Math.max(this.fireTiles[idx], duration);
     if (this.scorchedTiles) {
       this.scorchedTiles[idx] = Math.min(255, (this.scorchedTiles[idx] || 0) + 120);
+      this._scorchedActive = true;
     }
     if (this._fireMinX === undefined || fx < this._fireMinX) this._fireMinX = fx;
     if (this._fireMaxX === undefined || fx > this._fireMaxX) this._fireMaxX = fx;
@@ -1016,6 +1019,7 @@ export class WorldState {
     const idx = y * this.width + x;
     if (this.scorchedTiles) {
       this.scorchedTiles[idx] = Math.min(255, (this.scorchedTiles[idx] || 0) + amount);
+      if (this.scorchedTiles[idx] > 0) this._scorchedActive = true;
     }
   }
 
@@ -1125,8 +1129,6 @@ export class WorldState {
     // Slower spread cadence (every 6 ticks normally, 4 in drought; never in rain/storm)
     const spreadInterval = isDrought ? 4 : 6;
     const spread = !isWet && (tick % spreadInterval) === 0;
-    const weatherTick = (tick & 31) === 0;
-    // Tight global cap so wildfires remain small localized patches rather than consuming the map.
     const MAX_BURNING = isDrought ? 36 : 20;
     const forestThreshold = isDrought ? 56 : 30; // ~12% normal, ~22% drought
     const grassThreshold = isDrought ? 28 : 10;  // ~4% normal, ~11% drought
@@ -1139,12 +1141,7 @@ export class WorldState {
       for (let x = 0; x < w; x++) {
         const idx = row + x;
         const burn = ft[idx];
-        if (burn <= 0) {
-          if (weatherTick && st && st[idx] > 0) {
-            st[idx]--;
-          }
-          continue;
-        }
+        if (burn <= 0) continue;
         burning++;
         const nextBurn = burn - 1;
         ft[idx] = nextBurn;
@@ -1233,7 +1230,43 @@ export class WorldState {
     this._fireMaxX = fMaxX;
     this._fireMinY = fMinY;
     this._fireMaxY = fMaxY;
+    if (burning > 0 && st) this._scorchedActive = true;
     return burning;
+  }
+
+  /**
+   * Naturally recover scorched tiles back to green after fires extinguish.
+   * Rain/storm accelerate recovery; droughts slow it; heavy radiation pauses regrowth.
+   */
+  updateScorchRecovery(tick) {
+    const st = this.scorchedTiles;
+    if (!st) {
+      this._scorchedActive = false;
+      return 0;
+    }
+    const weather = this.simulation?.weatherSystem?.currentWeather?.type || this.simulation?.weatherSystem?.currentWeather || 'clear';
+    const isWet = weather === 'rain' || weather === 'storm';
+    const isDrought = weather === 'drought';
+    const interval = isWet ? 8 : isDrought ? 24 : 12;
+    if ((tick % interval) !== 0) return -1;
+
+    const ft = this.fireTiles;
+    const rt = this.radiationTiles;
+    const step = isWet ? 3 : 1;
+    let active = 0;
+    for (let i = 0; i < st.length; i++) {
+      const val = st[i];
+      if (val <= 0) continue;
+      if ((ft && ft[i] > 0) || (rt && rt[i] > 40)) {
+        active++;
+        continue;
+      }
+      const next = Math.max(0, val - step);
+      st[i] = next;
+      if (next > 0) active++;
+    }
+    this._scorchedActive = active > 0;
+    return active;
   }
 
   countFires() {
@@ -1614,6 +1647,7 @@ export class WorldState {
     world.skullMonuments = Array.isArray(data.skullMonuments) ? data.skullMonuments.map(m => ({ ...m })) : [];
     world.nextMonumentId = data.nextMonumentId || (world.skullMonuments.length + 1);
     world._radiationActive = world.radiationTiles.some(v => v > 0);
+    world._scorchedActive = world.scorchedTiles.some(v => v > 0);
     world.bridgeTiles = new Uint8Array(data.bridgeTiles || new Uint8Array(data.width * data.height));
     return world;
   }

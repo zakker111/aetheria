@@ -49,7 +49,7 @@ export function updateFactions(sim) {
 export function updateResources(sim) {
   const season = sim.clock.getSeason();
   const seasonFertility = WorldState.seasonFertility(season);
-  const weatherType = sim.weatherSystem?.currentWeather?.type;
+  const weatherType = sim.weatherSystem?.currentWeather?.type || sim.weatherSystem?.currentWeather || "clear";
   const isRaining = weatherType === "rain" || weatherType === "storm";
   const envBoost = (isRaining ? 1.6 : 1.0) * seasonFertility;
 
@@ -101,12 +101,13 @@ export function maintainWorldResources(sim) {
 
   const season = sim.clock.getSeason();
   const fertility = WorldState.seasonFertility(season);
-  const weatherType = sim.weatherSystem?.currentWeather?.type;
+  const weatherType = sim.weatherSystem?.currentWeather?.type || sim.weatherSystem?.currentWeather || "clear";
   const isRaining = weatherType === "rain" || weatherType === "storm";
 
-  const targetWood = 150;
+  const areaScale = (sim.world.width * sim.world.height) / (128 * 128);
+  const targetWood = Math.max(80, Math.round(150 * areaScale));
   if (woodCount < targetWood) {
-    const needed = Math.max(1, Math.min(10, Math.round((targetWood - woodCount) * (isRaining ? 1.4 : 1.0) * fertility)));
+    const needed = Math.max(1, Math.min(12, Math.round((targetWood - woodCount) * (isRaining ? 1.4 : 1.0) * fertility)));
     for (let k = 0; k < needed; k++) {
       for (let attempt = 0; attempt < 8; attempt++) {
         const x = Math.floor(sim._rng().next() * (sim.world.width - 4)) + 2;
@@ -126,9 +127,9 @@ export function maintainWorldResources(sim) {
     }
   }
 
-  const targetFood = 140;
+  const targetFood = Math.max(70, Math.round(140 * areaScale));
   if (foodCount < targetFood) {
-    const needed = Math.max(1, Math.min(10, Math.round((targetFood - foodCount) * (isRaining ? 1.4 : 1.0) * fertility)));
+    const needed = Math.max(1, Math.min(12, Math.round((targetFood - foodCount) * (isRaining ? 1.4 : 1.0) * fertility)));
     for (let k = 0; k < needed; k++) {
       for (let attempt = 0; attempt < 8; attempt++) {
         const x = Math.floor(sim._rng().next() * (sim.world.width - 4)) + 2;
@@ -148,9 +149,9 @@ export function maintainWorldResources(sim) {
     }
   }
 
-  const targetOre = 48;
+  const targetOre = Math.max(30, Math.round(48 * areaScale));
   if (oreCount < targetOre && (sim.clock.tick % 90 === 0)) {
-    const needed = Math.min(2, targetOre - oreCount);
+    const needed = Math.min(3, targetOre - oreCount);
     for (let k = 0; k < needed; k++) {
       for (let attempt = 0; attempt < 8; attempt++) {
         const x = Math.floor(sim._rng().next() * (sim.world.width - 4)) + 2;
@@ -209,7 +210,8 @@ export function updateBuildings(sim) {
             if (nearFood >= cropCap) break;
           }
         }
-        if (nearFood < cropCap && sim.resources.length < 700) {
+        const maxResCap = Math.max(700, Math.round(700 * ((sim.world.width * sim.world.height) / (128 * 128))));
+        if (nearFood < cropCap && sim.resources.length < maxResCap) {
           const fx = Math.floor(building.x + (sim._rng().next() - 0.5) * 4);
           const fy = Math.floor(building.y + (sim._rng().next() - 0.5) * 4);
           if (fx >= 2 && fx < sim.world.width - 2 && fy >= 2 && fy < sim.world.height - 2 && sim.world.isWalkable(fx, fy)) {
@@ -303,8 +305,8 @@ export function detonateNuclearStrike(
   { x, y, attackerSettlementId = null, targetSettlementId = null, reason = "Strategic Nuclear Strike", isGodPower = false, isRetaliation = false } = {}
 ) {
   const tick = sim.clock?.tick ?? 0;
-  const W = sim.world.width || 128;
-  const H = sim.world.height || 128;
+  const W = sim.world.width || 160;
+  const H = sim.world.height || 160;
   const cx = Math.max(1, Math.min(W - 2, Math.floor(x ?? W / 2)));
   const cy = Math.max(1, Math.min(H - 2, Math.floor(y ?? H / 2)));
 

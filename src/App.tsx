@@ -93,7 +93,7 @@ export const App: React.FC = () => {
 
   const [notification, setNotification] = useState<string | null>(null);
   const [chronicleEvents, setChronicleEvents] = useState<string[]>([
-    'World awakened with 128×128 terrain and biomes.',
+    'World awakened with 160×160 terrain and biomes.',
   ]);
   const [inspectedEntity, setInspectedEntity] = useState<InspectedEntityData | null>(null);
 
@@ -188,7 +188,7 @@ export const App: React.FC = () => {
     canvas.height = window.innerHeight;
 
     const activeScenario = pendingScenarioRef.current;
-    const sim = new Simulation(Date.now(), 128, 128, { scenario: activeScenario });
+    const sim = new Simulation(Date.now(), 160, 160, { scenario: activeScenario });
     simRef.current = sim;
 
     if (gameScreenRef.current === 'playing') {
@@ -217,7 +217,7 @@ export const App: React.FC = () => {
 
     // Reset React HUD state and store cleanly for fresh world initialization
     setCurrentTool('inspect');
-    setChronicleEvents(['World awakened with 128×128 terrain and biomes.']);
+    setChronicleEvents(['World awakened with 160×160 terrain and biomes.']);
     resetWorldHudSnapshot();
     publishWorldHudSnapshot(buildWorldHudSnapshot(sim, societiesOpenRef.current));
 
@@ -842,8 +842,8 @@ export const App: React.FC = () => {
 
     const jobs = ['farmer', 'miner', 'lumberjack', 'builder', 'craftsman', 'soldier'];
     let spawned = 0;
-    const w = sim.world?.width || 128;
-    const h = sim.world?.height || 128;
+    const w = sim.world?.width || 160;
+    const h = sim.world?.height || 160;
 
     for (let i = 0; i < count; i++) {
       let sx = Math.floor(s.center.x);
@@ -971,6 +971,39 @@ export const App: React.FC = () => {
       if (s && inspectedEntity?.kind === 'settlement' && inspectedEntity.entity?.id === settlementId) {
         setInspectedEntity(buildSettlementInspectPayload(sim, s));
       }
+    } else if (res?.reason) {
+      showNotification(`⚠️ ${res.reason}`);
+    }
+  };
+
+  const handleRenameSettlement = (settlementId: number, newName: string) => {
+    const sim = simRef.current;
+    if (!sim || typeof sim.renameSettlement !== 'function') return;
+    const res = sim.renameSettlement(settlementId, newName);
+    if (res?.ok) {
+      soundManager.playClick();
+      showNotification(`✏️ Renamed realm to ${res.name}`);
+      if (inspectedEntity?.kind === 'settlement' && inspectedEntity.entity?.id === settlementId && res.settlement) {
+        setInspectedEntity(buildSettlementInspectPayload(sim, res.settlement));
+      }
+      publishWorldHudSnapshot(buildWorldHudSnapshot(sim, societiesOpenRef.current));
+    } else if (res?.reason) {
+      showNotification(`⚠️ ${res.reason}`);
+    }
+  };
+
+  const handleRenameAgent = (agentId: number, newName: string) => {
+    const sim = simRef.current;
+    if (!sim || typeof sim.renameAgent !== 'function') return;
+    const res = sim.renameAgent(agentId, newName);
+    if (res?.ok) {
+      soundManager.playClick();
+      showNotification(`✏️ Renamed citizen to ${res.fullName || res.name}`);
+      if (inspectedEntity?.kind === 'agent' && inspectedEntity.entity?.id === agentId) {
+        const refreshed = buildAgentInspectPayload(sim, agentId);
+        if (refreshed) setInspectedEntity(refreshed);
+      }
+      publishWorldHudSnapshot(buildWorldHudSnapshot(sim, societiesOpenRef.current));
     } else if (res?.reason) {
       showNotification(`⚠️ ${res.reason}`);
     }
@@ -1266,6 +1299,8 @@ export const App: React.FC = () => {
                       onFortifySettlement={handleFortifySettlement}
                       onUpgradeBuilding={handleUpgradeBuilding}
                       onCommissionBuilding={handleCommissionBuilding}
+                      onRenameSettlement={handleRenameSettlement}
+                      onRenameAgent={handleRenameAgent}
                       onClose={() => {
                         setInspectedEntity(null);
                         if (rendererRef.current) {
@@ -1357,6 +1392,8 @@ export const App: React.FC = () => {
                 onExportWorld={handleExportWorld}
                 onExportChronicle={handleExportChronicle}
                 onImportWorld={handleImportWorld}
+                onRenameSettlement={handleRenameSettlement}
+                onRenameAgent={handleRenameAgent}
                 onPanTo={handlePanTo}
               />
             )}

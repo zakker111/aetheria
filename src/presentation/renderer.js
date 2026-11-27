@@ -35,7 +35,8 @@ import {
   renderClouds,
   renderWeather,
   renderDayNightLighting,
-  renderVisualEffects
+  renderVisualEffects,
+  renderSpectralSpirits
 } from "./passes/overlaysPass.js";
 import { render2DScene } from "./passes/topDownPass.js";
 import { buildWarsPanelRows, renderHUD, renderSelectionReticle } from "./passes/hudPass.js";
@@ -54,8 +55,8 @@ export class CanvasRenderer {
     this.simulation = simulation;
 
     // Camera state
-    const initX = world ? world.width / 2 : 64;
-    const initY = world ? world.height / 2 : 64;
+    const initX = world ? world.width / 2 : 80;
+    const initY = world ? world.height / 2 : 80;
     this.camera = {
       x: initX,
       y: initY,
@@ -854,6 +855,7 @@ export class CanvasRenderer {
       }
     }
 
+    renderSpectralSpirits(this);
     renderSkullMonuments(this, minX, maxX, minY, maxY);
     renderWarbandMarkers(this);
     renderCombatEffects(this);

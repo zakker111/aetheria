@@ -1,4 +1,6 @@
 # Aetheria — Development Roadmap & Project Status
+## Gamebreaking issues
+- [x] **there ver error bug chek our code and fix all issues
 
 ## ✅ Phase 12 — Core Stability, Bug Fixes & Pathfinding Overhaul (COMPLETE)
 - [x] **Upgraded Local A* Pathfinding & Anti-Oscillation**: Bounded deterministic A* pathfinding around rivers/walls/mountains with road preference (`isRoad`), straight-line LOS fast path, oscillation detection, and temporary unreachable-target cooldowns.
@@ -7,19 +9,21 @@
 - [x] **Visible War Loot & Spoils**: Record siege & battlefield plunder in `war.plundered` / `warband.plunderCargo`, spawn visible spoils piles (`GroundItem`), render warband cargo badges (`💰`), and show floating loot popups.
 - [x] **Visible Resource Gathering & Balanced Wood Supply**: Multi-tick chop/mine/harvest animations with floating yield indicators (`+🪵`, `+⛏️`, `+🌾`), carried cargo visuals on agents, fair harvest depletion ratios (`1.5:1`), and non-wasteful construction timber consumption.
 - [x] **Dynamic Job Switching (No Stuck Builders / Unemployed)**: Per-settlement pending construction checks, automatic idle-builder pivoting to resource/food jobs, and removal of permanent unemployment lockouts.
+- [x] ** make agents to deconstruct walls and gates or roads too(only if they are owning it only citizens of cettlements)
 
 ## 📋 Phase 13 — Statistics Analytics, Era Mountain Mines, Map-Edge Raids & Civic Autonomy
 - [x] **World Statistics Dashboard with SVG Pie Charts**: Dedicated Statistics tab in Civilization modal with interactive SVG donut/pie charts for Causes of Death, Average Lifespan/Age, Religions, and Professions/Demographics plus historical trend curves and realm ledger comparison.
-- [ ] **Era-Locked Mountain Resource Deposits & God Spawn Tool**: Huge limited Iron Mountain & Nuclear/Uranium Mountain deposits unlocked by settlement era, plus God Dock spawn tool.
-- [ ] **Periodic Map-Edge External Raids**: Raiding bands emerging from map borders to test frontier defenses, plunder wealth, and drop spoils.
-- [ ] **Autonomous Demolition, Stronger Need-Seeking & Plausible Peace**: Autonomous clearing of ruined/blocking buildings/roads/walls, stronger hunger/thirst resource seeking, and realistic war-weariness peace treaties.
-- [ ] **History of fallen cetlements(wars, born, dead, all other that cetlements hade)
+- [x] **Era-Locked Mountain Resource Deposits & God Spawn Tool**: Huge limited Iron Mountain & Nuclear/Uranium Mountain deposits unlocked by settlement era, plus God Dock spawn tool.
+- [x] **Periodic Map-Edge External Raids**: Raiding bands emerging from map borders to test frontier defenses, plunder wealth, and drop spoils.
+- [x] **Autonomous Demolition, Stronger Need-Seeking & Plausible Peace**: Autonomous clearing of ruined/blocking buildings/roads/walls, stronger hunger/thirst resource seeking, and realistic war-weariness peace treaties.
+- [x] **History of fallen cetlements(wars, born, dead, all other that cetlements hade)
+- [x] **Make it abel to god(player) rename cetlements or agents make it easy in Chancellary
 
-## 📋 Phase 14 — Deep Procedural Religions, Fallen Conjuring & Elder Splintering
-- [ ] **Procedural Religions, History, Compatibility & Churches**: Procedurally generated faiths with doctrinal tenets, shared-tenet harmony vs hostility, multi-faith coexistence, prophets/religious leaders, and founding churches/temples/shrines.
-- [ ] **Conjuring Fallen Citizens**: Ancestral/priest rituals honoring and conjuring spirits of fallen citizens with spectral visual FX.
-- [ ] **Rebellious / Elder Splinter Settlements, Paved Roads/Floors & Wandering**: Disgruntled citizens rebelling or led by Elders to found splinter settlements, settlement road/floor networks boosting prosperity, and adventurous citizens visiting distant towns.
-- [ ] **Cemeteries and buildings for religional purposes(clicking cemetry shows all the wallen and there we can chek history of fallen legends)
+## ✅ Phase 14 — Deep Procedural Religions, Fallen Conjuring & Elder Splintering (COMPLETE)
+- [x] **Procedural Religions, History, Compatibility & Churches**: Procedurally generated faiths with doctrinal tenets, shared-tenet harmony vs hostility, multi-faith coexistence, prophets/religious leaders, and founding churches/temples/shrines.
+- [x] **Conjuring Fallen Citizens**: Ancestral/priest rituals honoring and conjuring spirits of fallen citizens with spectral visual FX.
+- [x] **Rebellious / Elder Splinter Settlements, Paved Roads/Floors & Wandering**: Disgruntled citizens rebelling or led by Elders to found splinter settlements, settlement road/floor networks boosting prosperity, and adventurous citizens visiting distant towns.
+- [x] **Cemeteries and buildings for religional purposes(clicking cemetry shows all the wallen and there we can chek history of fallen legends)
 
 ## ✅ Phase 1 — Deep Economy & Supply Chains (COMPLETE)
 - [x] **Ground items / loot drops**: Dead agents & animals drop scavengable loot piles; survivors forage and scavenge equipment.
@@ -35,6 +39,7 @@
 - [x] **Life stages & demographics**: Children (learning, playing), Adults (labor, family, warfare), Elders (wisdom, slower travel).
 - [x] **Gossip & interpersonal relations**: Memory-grounded gossip network spreading reputations and feuds across settlement hearths.
 - [x] **Heroic epithets & slayer lore**: Warriors earn legendary cultural titles ("the Blooded", "the Slayer", "the Fierce", "the Undefeated") based on combat triumphs.
+- [x] **Make deths occure sometimes from(diseases, accidents, (other like realy small change to die funny way these funny ways are procedulary generated and rare occurances))
 
 ## ✅ Phase 3 — Dynasties, Warfare & Grand Strategy (COMPLETE)
 - [x] **Noble houses & dynastic lineages**: Royal dynasties with hereditary succession, monarch crowns, royal mottos, and lineage graphs.
@@ -46,6 +51,7 @@
 - [x] **Peace conferences**: Automated peace summits resolving wars with formal treaties, demilitarization, and prisoner exchanges.
 - [x] **Lethal combat & casualties**: Health drops to zero result in genuine mortal casualties, war casualty tracking, and loot drops.
 - [x] **Named historic battles**: Clashes generate storied battle names ("Battle of Oakhaven Ridge", "The Slaughter at Highpass Ford") preserved in war archives.
+- [x] ** make it so that naturally burned crass and others regain their naturall greenish look make too that old ruins look old ruins when inspecting they player should see the age of the ruin
 
 ## ✅ Phase 4 — Visual Polish, Smooth Locomotion & High-Agent LOD Performance (COMPLETE)
 - [x] **Smooth continuous locomotion**: Adaptive velocity-aware glide interpolation eliminating tick stutter and rubber-banding.

@@ -391,8 +391,12 @@ export function render25DBuilding(r, b, screen, elev) {
 
   if (isRuined) {
     const wallH = bs * 0.45;
+    const tickNow = r.simulation?.clock?.tick ?? 0;
+    const ruinAge = b.ruinedAtTick != null ? Math.max(0, tickNow - b.ruinedAtTick) : 0;
+    const isFresh = ruinAge < 120;
+    const isOvergrown = ruinAge > 450;
 
-    ctx.fillStyle = "#1c1917";
+    ctx.fillStyle = isOvergrown ? "#292524" : isFresh ? "#1c1917" : "#262322";
     ctx.beginPath();
     ctx.moveTo(screen.x - bs * 0.55, screen.y);
     ctx.lineTo(screen.x, screen.y + bs * 0.28);
@@ -401,12 +405,12 @@ export function render25DBuilding(r, b, screen, elev) {
     ctx.closePath();
     ctx.fill();
 
-    ctx.fillStyle = "#475569";
+    ctx.fillStyle = isOvergrown ? "#78716c" : "#475569";
     ctx.fillRect(screen.x - bs * 0.48, screen.y - wallH * 0.8, bs * 0.16, wallH * 0.8);
-    ctx.fillStyle = "#64748b";
+    ctx.fillStyle = isOvergrown ? "#a8a29e" : "#64748b";
     ctx.fillRect(screen.x + bs * 0.32, screen.y - wallH * 0.5, bs * 0.16, wallH * 0.5);
 
-    ctx.strokeStyle = "#0f172a";
+    ctx.strokeStyle = isOvergrown ? "#44403c" : "#0f172a";
     ctx.lineWidth = Math.max(2, bs * 0.12);
     ctx.beginPath();
     ctx.moveTo(screen.x - bs * 0.45, screen.y - wallH * 0.7);
@@ -420,17 +424,29 @@ export function render25DBuilding(r, b, screen, elev) {
     ctx.lineTo(screen.x + bs * 0.4, screen.y - bs * 0.05);
     ctx.stroke();
 
-    const emberFlicker = 0.5 + 0.5 * Math.sin(now * 0.01 + (b.id || 0));
-    ctx.fillStyle = `rgba(239, 68, 68, ${0.4 + emberFlicker * 0.5})`;
-    ctx.beginPath();
-    ctx.arc(screen.x, screen.y - wallH * 0.1, Math.max(2, bs * 0.15), 0, Math.PI * 2);
-    ctx.fill();
+    if (isFresh) {
+      const emberFlicker = 0.5 + 0.5 * Math.sin(now * 0.01 + (b.id || 0));
+      ctx.fillStyle = `rgba(239, 68, 68, ${0.4 + emberFlicker * 0.5})`;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y - wallH * 0.1, Math.max(2, bs * 0.15), 0, Math.PI * 2);
+      ctx.fill();
 
-    const smokeOffset = ((now * 0.002 + (b.id || 0) * 0.3) % 1);
-    ctx.fillStyle = `rgba(100, 100, 100, ${0.35 * (1 - smokeOffset)})`;
-    ctx.beginPath();
-    ctx.arc(screen.x + Math.sin(now * 0.004) * 3, screen.y - wallH - smokeOffset * 14, 2 + smokeOffset * 5, 0, Math.PI * 2);
-    ctx.fill();
+      const smokeOffset = ((now * 0.002 + (b.id || 0) * 0.3) % 1);
+      ctx.fillStyle = `rgba(100, 100, 100, ${0.35 * (1 - smokeOffset)})`;
+      ctx.beginPath();
+      ctx.arc(screen.x + Math.sin(now * 0.004) * 3, screen.y - wallH - smokeOffset * 14, 2 + smokeOffset * 5, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (isOvergrown) {
+      ctx.fillStyle = "#15803d";
+      ctx.beginPath();
+      ctx.arc(screen.x - bs * 0.36, screen.y - wallH * 0.72, Math.max(2, bs * 0.14), 0, Math.PI * 2);
+      ctx.arc(screen.x + bs * 0.34, screen.y - wallH * 0.46, Math.max(1.8, bs * 0.12), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#4d7c0f";
+      ctx.beginPath();
+      ctx.arc(screen.x - bs * 0.06, screen.y + bs * 0.05, Math.max(2, bs * 0.15), 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     ctx.restore();
     return;
@@ -635,6 +651,104 @@ export function render25DBuilding(r, b, screen, elev) {
     ctx.fillStyle = "#38bdf8";
     ctx.beginPath();
     ctx.arc(screen.x, screen.y - wallH * 0.35, bs * 0.18 + bGlow * 0.5, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (type === "shrine") {
+    const sH = bs * 0.65;
+    ctx.fillStyle = "#94a3b8";
+    ctx.fillRect(screen.x - bs * 0.42, screen.y - bs * 0.1, bs * 0.84, bs * 0.2);
+
+    ctx.fillStyle = "#b91c1c";
+    ctx.fillRect(screen.x - bs * 0.28, screen.y - sH, bs * 0.11, sH);
+    ctx.fillRect(screen.x + bs * 0.17, screen.y - sH, bs * 0.11, sH);
+
+    ctx.fillStyle = "#78350f";
+    ctx.beginPath();
+    ctx.moveTo(screen.x, screen.y - sH - bs * 0.32);
+    ctx.lineTo(screen.x - bs * 0.48, screen.y - sH + bs * 0.04);
+    ctx.lineTo(screen.x + bs * 0.48, screen.y - sH + bs * 0.04);
+    ctx.closePath();
+    ctx.fill();
+
+    const sPulse = 0.75 + 0.25 * Math.sin(now * 0.008 + screen.x);
+    ctx.fillStyle = `rgba(251, 191, 36, ${sPulse.toFixed(2)})`;
+    ctx.beginPath();
+    ctx.arc(screen.x, screen.y - sH * 0.48, bs * 0.14, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (type === "church") {
+    const naveH = bs * 0.88;
+    const spireH = bs * 1.48;
+
+    ctx.fillStyle = "#cbd5e1";
+    ctx.fillRect(screen.x - bs * 0.5, screen.y - naveH, bs * 1.0, naveH + bs * 0.1);
+
+    ctx.fillStyle = "#475569";
+    ctx.beginPath();
+    ctx.moveTo(screen.x, screen.y - naveH - bs * 0.36);
+    ctx.lineTo(screen.x - bs * 0.56, screen.y - naveH);
+    ctx.lineTo(screen.x + bs * 0.56, screen.y - naveH);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "#94a3b8";
+    ctx.fillRect(screen.x - bs * 0.18, screen.y - spireH, bs * 0.36, spireH - naveH * 0.35);
+
+    ctx.fillStyle = "#334155";
+    ctx.beginPath();
+    ctx.moveTo(screen.x, screen.y - spireH - bs * 0.48);
+    ctx.lineTo(screen.x - bs * 0.24, screen.y - spireH);
+    ctx.lineTo(screen.x + bs * 0.24, screen.y - spireH);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "#fbbf24";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(screen.x, screen.y - spireH - bs * 0.62);
+    ctx.lineTo(screen.x, screen.y - spireH - bs * 0.46);
+    ctx.moveTo(screen.x - bs * 0.08, screen.y - spireH - bs * 0.56);
+    ctx.lineTo(screen.x + bs * 0.08, screen.y - spireH - bs * 0.56);
+    ctx.stroke();
+
+    ctx.fillStyle = "#60a5fa";
+    ctx.beginPath();
+    ctx.arc(screen.x, screen.y - naveH * 0.55, bs * 0.14, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (type === "cemetery") {
+    ctx.fillStyle = "#334155";
+    ctx.beginPath();
+    ctx.moveTo(screen.x - bs * 0.62, screen.y);
+    ctx.lineTo(screen.x, screen.y + bs * 0.3);
+    ctx.lineTo(screen.x + bs * 0.62, screen.y);
+    ctx.lineTo(screen.x, screen.y - bs * 0.3);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "#1e293b";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    const stones = [
+      [-0.3, 0.02], [-0.1, 0.1], [0.22, 0.06], [0.34, -0.04], [-0.18, -0.1]
+    ];
+    ctx.fillStyle = "#94a3b8";
+    for (const [ox, oy] of stones) {
+      const sx = screen.x + bs * ox;
+      const sy = screen.y + bs * oy;
+      ctx.fillRect(sx - bs * 0.06, sy - bs * 0.22, bs * 0.12, bs * 0.22);
+    }
+
+    ctx.fillStyle = "#cbd5e1";
+    ctx.beginPath();
+    ctx.moveTo(screen.x, screen.y - bs * 0.72);
+    ctx.lineTo(screen.x - bs * 0.1, screen.y - bs * 0.1);
+    ctx.lineTo(screen.x + bs * 0.1, screen.y - bs * 0.1);
+    ctx.closePath();
+    ctx.fill();
+
+    const mistAlpha = 0.25 + 0.15 * Math.sin(now * 0.004 + screen.x);
+    ctx.fillStyle = `rgba(56, 189, 248, ${mistAlpha.toFixed(2)})`;
+    ctx.beginPath();
+    ctx.arc(screen.x, screen.y - bs * 0.18, bs * 0.24, 0, Math.PI * 2);
     ctx.fill();
   } else if (type === "market") {
     const stallH = bs * 0.7;

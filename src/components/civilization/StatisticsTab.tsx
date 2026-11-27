@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 
 interface StatisticsTabProps {
   simulation: any;
+  onRenameSettlement?: (settlementId: number, newName: string) => void;
   onPanTo?: (x: number, y: number) => void;
   onClose: () => void;
 }
@@ -200,6 +201,7 @@ const TREND_SERIES: Record<TrendCategory, HistorySeriesDef[]> = {
 
 export const StatisticsTab: React.FC<StatisticsTabProps> = ({
   simulation,
+  onRenameSettlement,
   onPanTo,
   onClose,
 }) => {
@@ -207,6 +209,9 @@ export const StatisticsTab: React.FC<StatisticsTabProps> = ({
   const [trendCategory, setTrendCategory] = useState<TrendCategory>('demographics');
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const [liveTick, setLiveTick] = useState<number>(() => simulation?.clock?.tick ?? 0);
+  const [editingSid, setEditingSid] = useState<number | null>(null);
+  const [draftRealmName, setDraftRealmName] = useState('');
+  const [renameRev, setRenameRev] = useState(0);
 
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -217,12 +222,12 @@ export const StatisticsTab: React.FC<StatisticsTabProps> = ({
   }, [simulation]);
 
   const stats = useMemo(() => {
-    if (liveTick < 0 || !simulation || typeof simulation.getStatisticsSnapshot !== 'function') {
+    if (liveTick < 0 || renameRev < 0 || !simulation || typeof simulation.getStatisticsSnapshot !== 'function') {
       return null;
     }
     const filterId = selectedSettlementId === 'all' ? null : Number(selectedSettlementId);
     return simulation.getStatisticsSnapshot(filterId);
-  }, [simulation, selectedSettlementId, liveTick]);
+  }, [simulation, selectedSettlementId, liveTick, renameRev]);
 
   const activeSeries = TREND_SERIES[trendCategory];
   const history = useMemo(() => stats?.history ?? [], [stats]);
@@ -635,8 +640,62 @@ export const StatisticsTab: React.FC<StatisticsTabProps> = ({
                     }}
                     className="hover:bg-slate-800/70 cursor-pointer transition-colors h-10"
                   >
-                    <td className="py-2 px-3 font-semibold text-slate-100 whitespace-nowrap">
-                      {s.tierIcon} {s.name}
+                    <td
+                      className="py-2 px-3 font-semibold text-slate-100 whitespace-nowrap"
+                      onClick={editingSid === s.id ? (ev) => ev.stopPropagation() : undefined}
+                    >
+                      {editingSid === s.id ? (
+                        <div className="flex items-center gap-1" onClick={(ev) => ev.stopPropagation()}>
+                          <input
+                            type="text"
+                            value={draftRealmName}
+                            maxLength={40}
+                            autoFocus
+                            onChange={(ev) => setDraftRealmName(ev.target.value)}
+                            onKeyDown={(ev) => {
+                              if (ev.key === 'Enter' && draftRealmName.trim()) {
+                                onRenameSettlement?.(s.id, draftRealmName.trim());
+                                setEditingSid(null);
+                                setRenameRev((r) => r + 1);
+                              } else if (ev.key === 'Escape') {
+                                setEditingSid(null);
+                              }
+                            }}
+                            className="w-32 px-1.5 py-0.5 rounded bg-slate-900 border border-sky-400/60 text-slate-50 text-xs outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (draftRealmName.trim()) {
+                                onRenameSettlement?.(s.id, draftRealmName.trim());
+                                setRenameRev((r) => r + 1);
+                              }
+                              setEditingSid(null);
+                            }}
+                            className="px-1.5 py-0.5 rounded bg-sky-400 text-slate-950 text-[10px] font-bold border-0 cursor-pointer"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5">
+                          <span>{s.tierIcon} {s.name}</span>
+                          {onRenameSettlement && (
+                            <button
+                              type="button"
+                              title="Rename settlement"
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                setDraftRealmName(s.name || '');
+                                setEditingSid(s.id);
+                              }}
+                              className="px-1 py-0.5 rounded bg-slate-800/90 border border-white/15 text-slate-400 hover:text-white text-[10px] cursor-pointer"
+                            >
+                              ✏️
+                            </button>
+                          )}
+                        </span>
+                      )}
                     </td>
                     <td className="py-2 px-3 text-slate-300 whitespace-nowrap">
                       {s.eraIcon} {s.eraName}

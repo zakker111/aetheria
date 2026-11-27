@@ -21,6 +21,8 @@ export interface CivilizationModalProps {
   onExportWorld?: () => void;
   onExportChronicle?: () => void;
   onImportWorld?: (file: File) => void;
+  onRenameSettlement?: (settlementId: number, newName: string) => void;
+  onRenameAgent?: (agentId: number, newName: string) => void;
   onPanTo?: (x: number, y: number) => void;
   onFollowAgent?: (id: number) => void;
 }
@@ -54,6 +56,8 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
   onExportWorld,
   onExportChronicle,
   onImportWorld,
+  onRenameSettlement,
+  onRenameAgent,
   onPanTo,
   onFollowAgent,
 }) => {
@@ -202,6 +206,8 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
             simulation={sim}
             dynasties={dynasties}
             settlements={settlements}
+            onRenameSettlement={onRenameSettlement}
+            onRenameAgent={onRenameAgent}
             onPanTo={onPanTo}
             onRefresh={bumpUi}
           />
@@ -258,8 +264,10 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
             onExportWorld={onExportWorld}
             onExportChronicle={onExportChronicle}
             onImportWorld={onImportWorld}
+            onRenameAgent={onRenameAgent}
             onPanTo={onPanTo}
             onFollowAgent={onFollowAgent}
+            onRefresh={bumpUi}
             onClose={onClose}
           />
         )}
@@ -267,6 +275,7 @@ export const CivilizationModal: React.FC<CivilizationModalProps> = ({
         {activeTab === 'statistics' && (
           <StatisticsTab
             simulation={sim}
+            onRenameSettlement={onRenameSettlement}
             onPanTo={onPanTo}
             onClose={onClose}
           />

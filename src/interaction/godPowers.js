@@ -45,8 +45,8 @@ export class Interaction {
 
   useTool(x, y) {
     if (!this.simulation || !this.simulation.world) return;
-    const w = this.simulation.world.width || 128;
-    const h = this.simulation.world.height || 128;
+    const w = this.simulation.world.width || 160;
+    const h = this.simulation.world.height || 160;
 
     // Bounds check to avoid out-of-world exceptions
     if (x < 0 || x >= w || y < 0 || y >= h) return;
@@ -267,15 +267,22 @@ export class Interaction {
       case "build_house":
       case "build_workshop":
       case "build_farm":
-      case "build_temple": {
+      case "build_temple":
+      case "build_church":
+      case "build_shrine":
+      case "build_cemetery": {
         const type = String(this.currentTool ?? '').replace("build_", "");
-        if (this.simulation.world.isWalkable(tx, ty)) {
+        const hasWall = Boolean(this.simulation.fortificationSystem?.getSegmentAt?.(tx, ty));
+        const hasBuilding = Array.isArray(this.simulation.buildings) && this.simulation.buildings.some(
+          (existing) => existing && !existing.isRuined && Math.hypot(existing.x - tx, existing.y - ty) < 1.5
+        );
+        if (this.simulation.world.isWalkable(tx, ty) && !hasWall && !hasBuilding) {
           // Identify nearest settlement to associate building with
           let nearestS = null;
           let minSDist = 24.0;
           if (this.simulation.settlementSystem) {
             for (const s of this.simulation.settlementSystem.settlements.values()) {
-              if (!s.center) continue;
+              if (!s || s.ruined || !s.center) continue;
               const d = Math.hypot(s.center.x - tx, s.center.y - ty);
               if (d < minSDist) {
                 minSDist = d;
@@ -288,8 +295,11 @@ export class Interaction {
           const b = new Building(tx, ty, type, this.simulation.idGen, sid, fid);
           b.constructionProgress = 0;
           b.complete = false;
+          b.isComplete = false;
           this.simulation.buildings.push(b);
           this.simulation.world.addToSpatialIndex(tx, ty, b);
+          this.simulation.world.entityRegistry?.set(b.id, b);
+          this.simulation._occStamp = -1;
           if (nearestS) {
             if (!nearestS.buildings) nearestS.buildings = [];
             nearestS.buildings.push(b);
@@ -297,7 +307,7 @@ export class Interaction {
           soundManager.playBuild();
           this.notify(`Planned ${type} blueprint${nearestS ? ` for ${nearestS.name}` : ''} at (${tx}, ${ty})!`);
         } else {
-          this.notify("Invalid terrain for building blueprint!");
+          this.notify("Invalid or occupied terrain for building blueprint!");
         }
         break;
       }
@@ -353,6 +363,7 @@ export class Interaction {
         let closestS = null;
         let minDist = 30.0;
         for (const s of this.simulation.settlementSystem.settlements.values()) {
+          if (!s || s.ruined || !s.center) continue;
           const d = Math.hypot(s.center.x - x, s.center.y - y);
           if (d < minDist) {
             minDist = d;
@@ -364,7 +375,7 @@ export class Interaction {
           let rival = null;
           let rivalDist = Infinity;
           for (const other of this.simulation.settlementSystem.settlements.values()) {
-            if (other.id === closestS.id) continue;
+            if (!other || other.ruined || !other.center || other.id === closestS.id) continue;
             const d = Math.hypot(other.center.x - closestS.center.x, other.center.y - closestS.center.y);
             if (d < rivalDist) {
               rivalDist = d;
@@ -403,6 +414,7 @@ export class Interaction {
         let closestS = null;
         let minDist = 30.0;
         for (const s of this.simulation.settlementSystem.settlements.values()) {
+          if (!s || s.ruined || !s.center) continue;
           const d = Math.hypot(s.center.x - x, s.center.y - y);
           if (d < minDist) {
             minDist = d;
@@ -465,7 +477,7 @@ export class Interaction {
           : null;
         soundManager.playThunder();
         emitGodEffect({ type: "nuke", x, y, duration: 2400 });
-        const dead = res?.deaths ?? 0;
+        const dead = res?.casualties ?? res?.deaths ?? 0;
         const ruins = res?.buildingsRuined ?? 0;
         this.notify(`☢️ Atomic blast at (${tx}, ${ty})! ${dead} casualties, ${ruins} structures shattered.`);
         break;

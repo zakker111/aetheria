@@ -56,8 +56,19 @@ export const InspectorBuildingView: React.FC<InspectorBuildingViewProps> = ({
         )}
       </div>
 
-      {!e.complete && <NeedBar label="Construction" value={e.constructionProgress || 0} />}
+      {!e.complete && !e.isRuined && <NeedBar label="Construction" value={e.constructionProgress || 0} />}
       <NeedBar label={`Integrity (${hp} / ${maxHp} HP)`} value={(hp / Math.max(1, maxHp)) * 100} />
+      {e.isRuined && (() => {
+        const ageTicks = e.ruinAgeTicks ?? (e.currentTick != null && e.ruinedAtTick != null ? Math.max(0, e.currentTick - e.ruinedAtTick) : 0);
+        const ageYears = (ageTicks / 400).toFixed(1);
+        const stageLabel = ageTicks < 120 ? 'Smoldering Embers' : ageTicks > 450 ? 'Overgrown Mossy Ruins' : 'Cooled Ash & Stone';
+        return (
+          <div className="mt-1.5 px-2 py-1 rounded bg-red-950/35 border border-red-400/25 text-[10px] text-red-200 font-mono-tabular flex justify-between items-center">
+            <span>🏚️ {stageLabel}</span>
+            <span>Ruin Age: {ageTicks}t ({ageYears} yrs)</span>
+          </div>
+        );
+      })()}
 
       <div className="mt-2 text-[11px] text-slate-300 leading-snug font-mono-tabular">
         <div>
@@ -199,6 +210,51 @@ export const InspectorBuildingView: React.FC<InspectorBuildingViewProps> = ({
       {e.complete && !e.isRuined && lvl >= maxLvl && (
         <div className="mt-2 text-[10px] text-amber-400 font-bold">
           ★ Maximum Architectural Tier Reached (Lv {lvl}/{maxLvl})
+        </div>
+      )}
+
+      {bType === 'cemetery' && (
+        <div className="mt-2.5 p-2 rounded-md bg-slate-900/75 border border-cyan-400/20">
+          <div className="text-[10px] font-bold text-cyan-200 uppercase mb-1 flex justify-between items-center">
+            <span>🪦 Interred Memorials</span>
+            <span className="text-slate-400 font-mono-tabular">
+              {Array.isArray(e.interredSummaries)
+                ? e.interredSummaries.length
+                : Array.isArray(e.interredAgentIds)
+                  ? e.interredAgentIds.length
+                  : 0}
+            </span>
+          </div>
+          {Array.isArray(e.interredSummaries) && e.interredSummaries.length > 0 ? (
+            <div className="flex flex-col gap-1 max-h-40 overflow-y-auto pr-0.5">
+              {e.interredSummaries.map((m: any) => (
+                <div
+                  key={`interred_${m.id}`}
+                  className="flex justify-between items-center gap-1.5 text-[10px] bg-slate-800/60 rounded px-1.5 py-1 border border-white/5"
+                >
+                  <div className="min-w-0">
+                    <div className="text-slate-100 font-semibold truncate">{m.fullName}</div>
+                    <div className="text-[9px] text-slate-400 truncate">
+                      Age {m.age} · {m.deathDetail || m.deathCause}
+                    </div>
+                  </div>
+                  {onSelectAgent && (
+                    <button
+                      type="button"
+                      onClick={() => onSelectAgent(m.id)}
+                      className="bg-cyan-500/15 border border-cyan-400/35 hover:bg-cyan-500/25 rounded text-cyan-200 text-[9px] font-semibold px-1.5 py-0.5 cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      Inspect
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-[10px] text-slate-400 italic">
+              Quiet hallowed grounds awaiting the town&apos;s departed.
+            </div>
+          )}
         </div>
       )}
     </div>

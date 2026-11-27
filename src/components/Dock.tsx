@@ -125,6 +125,27 @@ export const Dock: React.FC<DockProps> = ({ currentTool, onSelectTool }) => {
             ⛩️ Temple
           </button>
           <button
+            className={getToolBtnClass('build_shrine')}
+            onClick={() => onSelectTool('build_shrine')}
+            title="Place a Wayside Shrine to nurture local faith"
+          >
+            🪔 Shrine
+          </button>
+          <button
+            className={getToolBtnClass('build_church')}
+            onClick={() => onSelectTool('build_church')}
+            title="Build a Parish Church for congregation sermons & priests"
+          >
+            ⛪ Church
+          </button>
+          <button
+            className={getToolBtnClass('build_cemetery')}
+            onClick={() => onSelectTool('build_cemetery')}
+            title="Consecrate a Cemetery to inter fallen citizens & conjure ancestral spirits"
+          >
+            🪦 Cemetery
+          </button>
+          <button
             className={getToolBtnClass('build_dock')}
             onClick={() => onSelectTool('build_dock')}
             title="Place shoreline Dock for fishing boats & river barges"

@@ -14,8 +14,8 @@ interface DiplomacyTabProps {
 
 export const DiplomacyTab: React.FC<DiplomacyTabProps> = ({
   simulation,
-  settlements,
-  treaties,
+  settlements: rawSettlements,
+  treaties: rawTreaties,
   onImposeSanctions,
   onIssueUltimatum,
   onLaunchNuke,
@@ -23,9 +23,11 @@ export const DiplomacyTab: React.FC<DiplomacyTabProps> = ({
   onClose,
   onRefresh,
 }) => {
+  const settlements = Array.isArray(rawSettlements) ? rawSettlements : [];
+  const treaties = Array.isArray(rawTreaties) ? rawTreaties : [];
   const [selectedSettlementId, setSelectedSettlementId] = useState<number | null>(null);
 
-  const diplomaticHistory: any[] = Array.isArray(simulation.diplomacySystem?.diplomaticHistory)
+  const diplomaticHistory: any[] = Array.isArray(simulation?.diplomacySystem?.diplomaticHistory)
     ? simulation.diplomacySystem.diplomaticHistory.slice(0, 24)
     : [];
   const activeSettlement = selectedSettlementId

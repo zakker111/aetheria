@@ -156,8 +156,69 @@ export class InfrastructureSystem {
             this.lastUpdate = currentTick;
             this.updateInfrastructureEffects();
             this.cleanObsoleteInfrastructure();
+            if (currentTick > 0) {
+                this.upgradePavedRoads();
+            }
             if (currentTick > 0 && currentTick % 200 === 0) {
                 this.planAutonomousBridges();
+            }
+        }
+    }
+
+    /**
+     * Upgrade heavily trafficked Era 2+ dirt trails inside active unbesieged towns to paved stone roads (tier 2).
+     */
+    upgradePavedRoads() {
+        const world = this.sim?.world;
+        if (!world || !world.roadTiles) return;
+        const W = world.width;
+        const H = world.height;
+
+        const underAttackIds = new Set();
+        const warbands = this.sim?.warfareSystem?.warbands;
+        if (warbands) {
+            for (const wb of warbands.values()) {
+                if (wb.active && (wb.state === 'breaching' || wb.state === 'sieging' || wb.state === 'attacking') && wb.targetSettlementId != null) {
+                    underAttackIds.add(wb.targetSettlementId);
+                }
+            }
+        }
+
+        const settlements = this.getSettlements().sort((a, b) => (a.id || 0) - (b.id || 0));
+        for (const s of settlements) {
+            if (!s || s.ruined || !s.center || underAttackIds.has(s.id)) continue;
+            const ageId = this.sim.civilizationAgeSystem?.getSettlementAge?.(s.id)?.ageId || 1;
+            if (ageId < 2) continue;
+
+            const rad = Math.min(18, Math.max(8, (s.urbanRadius || 12) + 2));
+            const minX = Math.max(0, Math.floor(s.center.x - rad));
+            const maxX = Math.min(W - 1, Math.ceil(s.center.x + rad));
+            const minY = Math.max(0, Math.floor(s.center.y - rad));
+            const maxY = Math.min(H - 1, Math.ceil(s.center.y + rad));
+
+            const candidates = [];
+            for (let y = minY; y <= maxY; y++) {
+                for (let x = minX; x <= maxX; x++) {
+                    if (Math.hypot(x - s.center.x, y - s.center.y) > rad) continue;
+                    const idx = y * W + x;
+                    if (world.roadTiles[idx] !== 1) continue;
+                    if (world.bridgeTiles && world.bridgeTiles[idx]) continue;
+                    const traffic = world.footTraffic ? world.footTraffic[idx] : 0;
+                    if (traffic >= 4) {
+                        candidates.push({ idx, traffic });
+                    }
+                }
+            }
+            if (candidates.length === 0) continue;
+
+            candidates.sort((a, b) => (b.traffic - a.traffic) || (a.idx - b.idx));
+            const limit = Math.min(10, candidates.length);
+            for (let i = 0; i < limit; i++) {
+                world.roadTiles[candidates[i].idx] = 2;
+            }
+            if (s.stockpile && (s.stockpile.ore || 0) >= 1) {
+                const stoneCost = Math.min(Math.floor(s.stockpile.ore), Math.max(1, Math.floor(limit / 4)));
+                s.stockpile.ore = Math.max(0, (s.stockpile.ore || 0) - stoneCost);
             }
         }
     }
@@ -168,6 +229,64 @@ export class InfrastructureSystem {
         const W = world.width;
         const H = world.height;
         const fort = this.sim?.fortificationSystem;
+
+        const buildingAtTile = new Set();
+        const buildings = this.sim?.buildings || [];
+        for (let i = 0; i < buildings.length; i++) {
+            const b = buildings[i];
+            if (!b || b.isRuined) continue;
+            buildingAtTile.add(Math.floor(b.y) * W + Math.floor(b.x));
+        }
+
+        const underAttackIds = new Set();
+        const warbands = this.sim?.warfareSystem?.warbands;
+        if (warbands) {
+            for (const wb of warbands.values()) {
+                if (wb.active && (wb.state === 'breaching' || wb.state === 'sieging' || wb.state === 'attacking') && wb.targetSettlementId != null) {
+                    underAttackIds.add(wb.targetSettlementId);
+                }
+            }
+        }
+        const activeCoreCenters = [];
+        for (const s of this.getSettlements()) {
+            if (!s || s.ruined || !s.center || underAttackIds.has(s.id)) continue;
+            if ((s.population || s.agentIds?.size || 0) < 4) continue;
+            activeCoreCenters.push({ x: s.center.x, y: s.center.y });
+        }
+
+        const isAdjacentToBridge = (tx, ty) => {
+            if (!world.bridgeTiles) return false;
+            for (let dy = -1; dy <= 1; dy++) {
+                const ny = ty + dy;
+                if (ny < 0 || ny >= H) continue;
+                for (let dx = -1; dx <= 1; dx++) {
+                    if (dx === 0 && dy === 0) continue;
+                    const nx = tx + dx;
+                    if (nx < 0 || nx >= W) continue;
+                    if (world.bridgeTiles[ny * W + nx]) return true;
+                }
+            }
+            return false;
+        };
+
+        const countRoadOrBridgeNeighbors = (tx, ty) => {
+            let count = 0;
+            for (let dy = -1; dy <= 1; dy++) {
+                const ny = ty + dy;
+                if (ny < 0 || ny >= H) continue;
+                for (let dx = -1; dx <= 1; dx++) {
+                    if (dx === 0 && dy === 0) continue;
+                    const nx = tx + dx;
+                    if (nx < 0 || nx >= W) continue;
+                    const nIdx = ny * W + nx;
+                    if (world.roadTiles[nIdx] > 0 || (world.bridgeTiles && world.bridgeTiles[nIdx])) {
+                        count++;
+                    }
+                }
+            }
+            return count;
+        };
+
         for (let y = 0; y < H; y++) {
             for (let x = 0; x < W; x++) {
                 const idx = y * W + x;
@@ -176,7 +295,21 @@ export class InfrastructureSystem {
                 const cratered = world.craterTiles && world.craterTiles[idx] > 40;
                 const wallSeg = fort?.getSegmentAt?.(x, y);
                 const solidWall = wallSeg && wallSeg.kind !== 'gate' && wallSeg.state !== 'breach' && wallSeg.hp > 0;
-                if (blockedWater || cratered || solidWall) {
+                const coveredByBuilding = buildingAtTile.has(idx);
+
+                let deadEndCoreStub = false;
+                if (!blockedWater && !cratered && !solidWall && !coveredByBuilding && activeCoreCenters.length > 0) {
+                    const inCore = activeCoreCenters.some(c => Math.hypot(x - c.x, y - c.y) <= 9);
+                    if (inCore && !isAdjacentToBridge(x, y)) {
+                        const nCount = countRoadOrBridgeNeighbors(x, y);
+                        const traffic = world.footTraffic ? world.footTraffic[idx] : 0;
+                        if (nCount === 0 || (nCount === 1 && traffic < 6)) {
+                            deadEndCoreStub = true;
+                        }
+                    }
+                }
+
+                if (blockedWater || cratered || solidWall || coveredByBuilding || deadEndCoreStub) {
                     world.roadTiles[idx] = 0;
                 }
             }

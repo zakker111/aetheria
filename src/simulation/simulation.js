@@ -150,7 +150,7 @@ export class Simulation {
     this._rebuildAgentIdMap();
   }
 
-  constructor(seed = Date.now(), width = 128, height = 128, options = {}) {
+  constructor(seed = Date.now(), width = 160, height = 160, options = {}) {
     this.seed = seed;
     // Step H: Warring scenario is active by default and always on.
     this._scenario = (options.scenario !== undefined && options.scenario !== null) ? options.scenario : 'warring';
@@ -188,6 +188,8 @@ export class Simulation {
     this.birthsThisSession = 0;
     this.deathsThisSession = 0;
     this.fallenHeroes = [];
+    this.fallenSettlements = [];
+    this.spectralSpirits = [];
     this._deadDossiers = [];
     this.mortalityStats = {
       totalDeaths: 0,
@@ -326,11 +328,27 @@ export class Simulation {
     this.eventBus.on("AGENT_CREATED", (data) => {
       if (data.reason === "birth") {
         this.birthsThisSession++;
+        const sid = data.settlementId ?? this.settlementSystem?.agentSettlementMap?.get(data.agentId) ?? this._agentById(data.agentId)?.settlementId ?? null;
+        if (sid != null) {
+          const s = this.settlementSystem?.settlements?.get(sid);
+          if (s) {
+            if (!s.stats) s.stats = { births: 0, deaths: 0, buildingsBuilt: 0, warsFought: 0, battlesWon: 0, peakPopulation: s.population || 0 };
+            s.stats.births = (s.stats.births || 0) + 1;
+          }
+        }
       }
     });
     
     this.eventBus.on("AGENT_DIED", (data) => {
       this.deathsThisSession++;
+      const deadSid = data.settlementId ?? this.settlementSystem?.agentSettlementMap?.get(data.agentId) ?? this._agentById(data.agentId)?.settlementId ?? null;
+      if (deadSid != null) {
+        const s = this.settlementSystem?.settlements?.get(deadSid);
+        if (s) {
+          if (!s.stats) s.stats = { births: 0, deaths: 0, buildingsBuilt: 0, warsFought: 0, battlesWon: 0, peakPopulation: s.population || 0 };
+          s.stats.deaths = (s.stats.deaths || 0) + 1;
+        }
+      }
       if (typeof data.age === 'number' && Number.isFinite(data.age)) {
         this.mortalityStats.totalDeaths++;
         this.mortalityStats.totalAgeAtDeath += data.age;
@@ -369,7 +387,8 @@ export class Simulation {
             age: deathAge,
             deathTick: this.clock?.tick ?? 0,
             cause,
-            biography: this.buildAgentBiography(fallenAgent, { alive: false, deathCause: cause, age: deathAge, settlementName: sName }),
+            deathDetail: fallenAgent.deathDetail || null,
+            biography: this.buildAgentBiography(fallenAgent, { alive: false, deathCause: cause, deathDetail: fallenAgent.deathDetail || null, age: deathAge, settlementName: sName }),
             x: fallenAgent.x,
             y: fallenAgent.y
           });
@@ -446,8 +465,9 @@ export class Simulation {
     // Populate wildlife BEFORE agents so the agent spawn stream is unchanged.
     this.animalSystem.initialPopulate();
     
-    // Cluster starting agents into habitable walkable centers across the 128x128 map
+    // Cluster starting agents into habitable walkable centers across the map
     const margin = 14;
+    const minCenterDist = this.world.width >= 160 ? 30 : 24;
     const centers = [];
     
     for (let attempt = 0; attempt < 250 && centers.length < 3; attempt++) {
@@ -458,7 +478,7 @@ export class Simulation {
       if (this.world.isWalkable(tx, ty)) {
         const terrain = this.world.getTerrain(tx, ty);
         if (terrain && terrain.type !== "water" && terrain.type !== "snow") {
-          const farEnough = centers.every(c => Math.hypot(c.x - cx, c.y - cy) > 24);
+          const farEnough = centers.every(c => Math.hypot(c.x - cx, c.y - cy) > minCenterDist);
           if (farEnough) {
             centers.push({ x: cx, y: cy });
           }
@@ -561,6 +581,11 @@ export class Simulation {
       }
     }
 
+    // Initialize state creeds and procedural beliefs BEFORE founding diplomatic relations
+    if (this.religionSystem) {
+      this.religionSystem.initWorldBeliefs();
+    }
+
     // Initialize diplomatic network between all founded realms
     if (this.diplomacySystem && this.settlementSystem) {
       const allSettlements = Array.from(this.settlementSystem.settlements.values());
@@ -569,11 +594,6 @@ export class Simulation {
           this.diplomacySystem.initRelation(allSettlements[a].id, allSettlements[b].id);
         }
       }
-    }
-
-    // Initialize state creeds and beliefs for founded settlements
-    if (this.religionSystem) {
-      this.religionSystem.initWorldBeliefs();
     }
 
     if (this._scenario === 'modern_nuclear') {
@@ -612,11 +632,13 @@ export class Simulation {
       }
     }
     
-    // Distribute abundant biome-specific resources across the 128x128 map
-    // 1. Wood (Forests & Jungles) - 220 trees
+    // Distribute abundant biome-specific resources scaled to map area
+    const areaScale = (this.world.width * this.world.height) / (128 * 128);
+    // 1. Wood (Forests & Jungles)
+    const woodTarget = Math.max(80, Math.round(220 * areaScale));
     let woodSpawned = 0;
     attempts = 0;
-    while (woodSpawned < 220 && attempts < 2500) {
+    while (woodSpawned < woodTarget && attempts < Math.round(2500 * Math.max(1, areaScale))) {
       attempts++;
       const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
       const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
@@ -632,10 +654,11 @@ export class Simulation {
       }
     }
 
-    // 2. Food (Grasslands, Savannas, Plains & Riverbanks) - 180 crops
+    // 2. Food (Grasslands, Savannas, Plains & Riverbanks)
+    const foodTarget = Math.max(60, Math.round(180 * areaScale));
     let foodSpawned = 0;
     attempts = 0;
-    while (foodSpawned < 180 && attempts < 2000) {
+    while (foodSpawned < foodTarget && attempts < Math.round(2000 * Math.max(1, areaScale))) {
       attempts++;
       const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
       const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
@@ -651,10 +674,11 @@ export class Simulation {
       }
     }
 
-    // 3. Ore (Mountains, Highlands & Caverns) - 160 mineral veins
+    // 3. Ore (Mountains, Highlands & Caverns)
+    const oreTarget = Math.max(50, Math.round(160 * areaScale));
     let oreSpawned = 0;
     attempts = 0;
-    while (oreSpawned < 160 && attempts < 2000) {
+    while (oreSpawned < oreTarget && attempts < Math.round(2000 * Math.max(1, areaScale))) {
       attempts++;
       const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
       const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
@@ -670,8 +694,9 @@ export class Simulation {
       }
     }
 
-    // 4. Freshwater sources across world - 60 water springs
-    for (let i = 0; i < 60; i++) {
+    // 4. Freshwater sources across world
+    const waterTarget = Math.max(25, Math.round(60 * areaScale));
+    for (let i = 0; i < waterTarget; i++) {
       const x = Math.floor(this._rng().next() * (this.world.width - 4)) + 2;
       const y = Math.floor(this._rng().next() * (this.world.height - 4)) + 2;
       if (this.world.isWalkable(x, y)) {
@@ -708,8 +733,8 @@ export class Simulation {
         }
       }
     };
-    spawnMountainTier("iron_mountain", 5);
-    spawnMountainTier("uranium_mountain", 3);
+    spawnMountainTier("iron_mountain", Math.max(5, Math.round(5 * areaScale)));
+    spawnMountainTier("uranium_mountain", Math.max(3, Math.round(3 * areaScale)));
 
     this.recordMetricsSnapshot();
   }
@@ -1209,7 +1234,7 @@ export class Simulation {
         }
         this.addAgent(baby);
         this.world.addToSpatialIndex(Math.floor(birth.x), Math.floor(birth.y), baby);
-        this.eventBus.emit("AGENT_CREATED", { agentId: baby.id, name: baby.name, x: baby.x, y: baby.y, reason: "birth" });
+        this.eventBus.emit("AGENT_CREATED", { agentId: baby.id, name: baby.name, x: baby.x, y: baby.y, settlementId: baby.settlementId ?? null, reason: "birth" });
         // Synchronously link parent-child & family union records (zero RNG)
         this.relationshipSystem.initializeAgent(baby.id);
         if (parent1) this.relationshipSystem.addParentChild(parent1.id, baby.id);
@@ -1293,6 +1318,7 @@ export class Simulation {
         this.eventBus.emit("AGENT_DIED", {
           agentId: dead.id,
           name: dead.name,
+          settlementId: dead.settlementId ?? null,
           x: dead.x,
           y: dead.y,
           age: Math.floor(dead.age),
@@ -1393,6 +1419,25 @@ export class Simulation {
         agent.addLifeEvent('DEATH', `Died of ${finalCause} at age ${Math.floor(agent.age || 0)}`, this.clock?.tick ?? 0, '🕯️', true);
       }
       this._recordDeadDossier(agent, finalCause);
+      if (Array.isArray(this.buildings) && this.buildings.length > 0) {
+        let cemetery = null;
+        let bestD = Infinity;
+        for (const b of this.buildings) {
+          if (!b || b.isRuined || !(b.complete || b.isComplete) || b.buildingType !== "cemetery") continue;
+          const sameTown = agent.settlementId != null && b.settlementId === agent.settlementId;
+          const d = Math.hypot(b.x - agent.x, b.y - agent.y);
+          if (!sameTown && d > 28) continue;
+          const rankD = sameTown ? d : d + 50;
+          if (rankD < bestD) { bestD = rankD; cemetery = b; }
+        }
+        if (cemetery) {
+          if (!Array.isArray(cemetery.interredAgentIds)) cemetery.interredAgentIds = [];
+          if (!cemetery.interredAgentIds.includes(agent.id)) {
+            cemetery.interredAgentIds.push(agent.id);
+            if (cemetery.interredAgentIds.length > 64) cemetery.interredAgentIds.shift();
+          }
+        }
+      }
       this.world.removeFromSpatialIndex(Math.floor(agent.x), Math.floor(agent.y), agent);
       this.world.entityRegistry?.delete(agentId);
       this.agents.splice(idx, 1);
@@ -1408,6 +1453,7 @@ export class Simulation {
       this.eventBus.emit("AGENT_DIED", { 
         agentId: agent.id, 
         name: agent.name, 
+        settlementId: agent.settlementId ?? null,
         x: agent.x, 
         y: agent.y, 
         age: Math.floor(agent.age),
@@ -1492,8 +1538,8 @@ export class Simulation {
   }
 
   spawnAgent(x, y) {
-    const w = this.world?.width || 128;
-    const h = this.world?.height || 128;
+    const w = this.world?.width || 160;
+    const h = this.world?.height || 160;
     const sx = Math.max(1, Math.min(w - 1.1, x));
     const sy = Math.max(1, Math.min(h - 1.1, y));
     const agent = new Agent(sx, sy, this.idGen, null, this.world.rng);
@@ -1520,8 +1566,8 @@ export class Simulation {
    * onto a clear neighboring tile and cleanly raises maxAgents when needed.
    */
   spawnCitizenAt(x, y) {
-    const w = this.world?.width || 128;
-    const h = this.world?.height || 128;
+    const w = this.world?.width || 160;
+    const h = this.world?.height || 160;
     const tx = Math.floor(x);
     const ty = Math.floor(y);
     const isClearTile = (cx, cy) => {
@@ -1581,6 +1627,172 @@ export class Simulation {
 
   detonateNuclearStrike(options = {}) {
     return runDetonateNuclearStrike(this, options);
+  }
+
+  renameSettlement(settlementId, newName) {
+    const clean = String(newName ?? "").trim().replace(/\s+/g, " ").slice(0, 40);
+    if (!clean) return { ok: false, reason: "Name cannot be empty" };
+    const s = this.settlementSystem?.settlements?.get(Number(settlementId));
+    if (!s) return { ok: false, reason: "Settlement not found" };
+    const oldName = s.name;
+    if (oldName === clean) return { ok: true, name: clean, settlement: s };
+    s.name = clean;
+
+    if (this.dynastySystem?.dynasties) {
+      for (const dyn of this.dynastySystem.dynasties.values()) {
+        if (dyn && dyn.settlementId === s.id) {
+          dyn.settlementName = clean;
+        }
+      }
+    }
+    if (this.diplomacySystem) {
+      for (const w of [...(this.diplomacySystem.activeWars || []), ...(this.diplomacySystem.warHistory || [])]) {
+        if (!w) continue;
+        if (w.attackerId === s.id) w.attackerName = clean;
+        if (w.defenderId === s.id) w.defenderName = clean;
+      }
+      if (Array.isArray(this.diplomacySystem.diplomaticHistory)) {
+        for (const ev of this.diplomacySystem.diplomaticHistory) {
+          if (!ev || !Array.isArray(ev.actors) || !Array.isArray(ev.actorNames)) continue;
+          ev.actors.forEach((aid, idx) => {
+            if (aid === s.id) ev.actorNames[idx] = clean;
+          });
+        }
+      }
+    }
+    if (this.warfareSystem?.warbands) {
+      for (const wb of this.warfareSystem.warbands.values()) {
+        if (!wb) continue;
+        if (wb.settlementId === s.id) wb.settlementName = clean;
+        if (wb.targetSettlementId === s.id) wb.targetSettlementName = clean;
+      }
+    }
+    for (const fs of (this.fallenSettlements || [])) {
+      if (!fs) continue;
+      if (fs.id === s.id) fs.name = clean;
+      if (fs.absorbedByName === oldName) fs.absorbedByName = clean;
+      if (fs.conqueredByName === oldName) fs.conqueredByName = clean;
+    }
+    for (const fh of (this.fallenHeroes || [])) {
+      if (fh && fh.settlementName === oldName) fh.settlementName = clean;
+    }
+    for (const d of (this._deadDossiers || [])) {
+      if (d && (d.settlementId === s.id || d.settlementName === oldName)) {
+        d.settlementName = clean;
+        d.biography = this.buildAgentBiography(d, { settlementName: clean });
+      }
+    }
+    return { ok: true, name: clean, oldName, settlement: s };
+  }
+
+  renameAgent(agentId, newName) {
+    const clean = String(newName ?? "").trim().replace(/\s+/g, " ").slice(0, 40);
+    if (!clean) return { ok: false, reason: "Name cannot be empty" };
+    const id = Number(agentId);
+    const live = this._agentById(id);
+    const dossier = (this._deadDossiers || []).find((d) => d && d.id === id) || null;
+    const hero = (this.fallenHeroes || []).find((h) => h && h.id === id) || null;
+    if (!live && !dossier && !hero) {
+      return { ok: false, reason: "Citizen not found" };
+    }
+
+    const applyNameSplit = (target, prevFull) => {
+      const oldFirst = target.name;
+      const oldSurname = target.surname || null;
+      let nextFirst = clean;
+      let nextSurname = oldSurname;
+      if (oldSurname && clean.toLowerCase().endsWith(` ${oldSurname.toLowerCase()}`)) {
+        nextFirst = clean.slice(0, clean.length - oldSurname.length).trim() || clean;
+      } else if (clean.includes(" ")) {
+        const parts = clean.split(" ");
+        nextFirst = parts[0];
+        nextSurname = parts.slice(1).join(" ");
+      }
+      target.name = nextFirst;
+      if (nextSurname !== null) target.surname = nextSurname;
+      return { oldFirst, prevFull };
+    };
+
+    let updatedFirst = clean;
+    let updatedFull = clean;
+    let oldFirst = null;
+    let oldFull = null;
+
+    if (live) {
+      oldFull = formatAgentFullName(live);
+      oldFirst = live.name;
+      applyNameSplit(live, oldFull);
+      updatedFirst = live.name;
+      updatedFull = formatAgentFullName(live);
+      if (live.settlementId != null) {
+        const home = this.settlementSystem?.settlements?.get(live.settlementId);
+        if (home && home.leadership === oldFirst) {
+          home.leadership = updatedFirst;
+        }
+      }
+    }
+
+    if (dossier) {
+      oldFull = oldFull || dossier.fullName || dossier.name;
+      oldFirst = oldFirst || dossier.name;
+      applyNameSplit(dossier, oldFull);
+      dossier.fullName = formatAgentFullName(dossier);
+      updatedFirst = dossier.name;
+      updatedFull = dossier.fullName;
+      dossier.biography = this.buildAgentBiography(dossier, { fullName: updatedFull });
+    }
+
+    if (hero) {
+      oldFull = oldFull || hero.fullName || hero.name;
+      oldFirst = oldFirst || hero.name;
+      applyNameSplit(hero, oldFull);
+      hero.fullName = formatAgentFullName(hero);
+      updatedFirst = hero.name;
+      updatedFull = hero.fullName;
+      hero.biography = this.buildAgentBiography(hero, { alive: false, fullName: updatedFull, deathCause: hero.cause });
+    }
+
+    if (this.dynastySystem?.dynasties) {
+      for (const dyn of this.dynastySystem.dynasties.values()) {
+        if (!dyn) continue;
+        if (dyn.monarchId === id) dyn.monarchName = updatedFirst;
+        if (dyn.heirId === id) dyn.heirName = updatedFirst;
+        if (dyn.consortId === id) dyn.consortName = updatedFirst;
+        if (dyn.pretenderId === id) dyn.pretenderName = updatedFirst;
+        if (dyn.civilWar && dyn.civilWar.claimantId === id) dyn.civilWar.claimantName = updatedFirst;
+        if (Array.isArray(dyn.lineage)) {
+          for (const node of dyn.lineage) {
+            if (node && node.id === id) node.name = updatedFirst;
+          }
+        }
+      }
+    }
+
+    if (Array.isArray(this.buildings)) {
+      for (const b of this.buildings) {
+        if (!b) continue;
+        if (b.builtByAgentId === id) b.builtByName = updatedFull;
+        if (b.upgradedByAgentId === id) b.upgradedByName = updatedFull;
+        if (Array.isArray(b.contributors)) {
+          for (const c of b.contributors) {
+            if (c && c.id === id) c.name = updatedFull;
+          }
+        }
+        if (Array.isArray(b.upgradeHistory)) {
+          for (const u of b.upgradeHistory) {
+            if (u && u.byAgentId === id) u.byName = updatedFull;
+          }
+        }
+      }
+    }
+
+    if (Array.isArray(this.spectralSpirits)) {
+      for (const sp of this.spectralSpirits) {
+        if (sp && sp.agentId === id) sp.name = updatedFull;
+      }
+    }
+
+    return { ok: true, id, name: updatedFirst, fullName: updatedFull };
   }
 
   _recordDeadDossier(agent, cause = "natural") {
@@ -1751,10 +1963,10 @@ export class Simulation {
 
     const religions = Array.from(creedCounts.entries())
       .map(([id, count]) => {
-        const meta = BELIEF_CREEDS[id];
+        const meta = this.religionSystem?.getCreed?.(id) || BELIEF_CREEDS[id];
         return {
           id,
-          name: meta?.name || "Unaffiliated",
+          name: meta?.name || (id === "unaffiliated" ? "Unaffiliated" : id.replace(/_/g, " ")),
           icon: meta?.icon || "✨",
           tenet: meta?.tenet || "Folk Customs",
           count,
@@ -1771,8 +1983,15 @@ export class Simulation {
       dehydration: { label: "Dehydration", color: "#06b6d4" },
       old_age: { label: "Old Age", color: "#10b981" },
       natural: { label: "Natural Causes", color: "#34d399" },
-      radiation: { label: "Radiation Fallout", color: "#a3e635" },
+      disease: { label: "Disease & Fever", color: "#84cc16" },
+      plague: { label: "Plague Outbreak", color: "#65a30d" },
+      illness: { label: "Sickness", color: "#a3e635" },
+      accident: { label: "Work & Civic Accidents", color: "#fb923c" },
+      misadventure: { label: "Misadventure", color: "#ec4899" },
+      flood: { label: "Flooding", color: "#0ea5e9" },
+      radiation: { label: "Radiation Fallout", color: "#bef264" },
       atomic: { label: "Atomic Blast", color: "#e11d48" },
+      nuclear_blast: { label: "Nuclear Blast", color: "#e11d48" },
       nuke: { label: "Nuclear Strike", color: "#be123c" },
       fire: { label: "Fire & Blaze", color: "#f97316" },
       mauled: { label: "Wild Predators", color: "#a855f7" },
@@ -1818,7 +2037,7 @@ export class Simulation {
         const ageInfo = this.civilizationAgeSystem?.getSettlementAge?.(s.id);
         const fortInfo = this.fortificationSystem?.getSettlementFortificationSummary?.(s.id);
         const creedId = this.religionSystem?.getDominantFaith?.(s) || s.culture?.beliefId || "solar_creed";
-        const creedMeta = BELIEF_CREEDS[creedId];
+        const creedMeta = this.religionSystem?.getCreed?.(creedId) || BELIEF_CREEDS[creedId];
         const warCount = activeWars.filter((w) => w.attackerId === s.id || w.defenderId === s.id).length;
         const st = s.stockpile || {};
         settlements.push({

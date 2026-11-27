@@ -51,7 +51,7 @@ class CraftingSystem {
         this.addRecipe('plank_to_tool_handle', {
             id: 'plank_to_tool_handle',
             name: 'Carve Handle',
-            input: { type: 'wood_plank', amount: 1 },
+            input: { type: 'plank', amount: 1 },
             output: { type: 'tool_handle', amount: 2 },
             time: 30,
             skill: 'carpentry',
@@ -449,6 +449,26 @@ class CraftingSystem {
         // first prospect a crystal vein), keeping luxury output genuinely rare.
         const order = ['log_to_plank', 'wheat_to_flour', 'flour_plus_water_to_bread', 'ore_to_ingot', 'gem_to_jewel'];
         for (const rid of order) {
+            const r = this.recipes.get(rid);
+            if (r && this.canCraft(workshop, r)) {
+                this.queueRecipe(workshop.id, rid, 1);
+                return true;
+            }
+        }
+        // Carve handles & gear only from genuine surplus planks/ingots so primary plank distribution (batches of 5) is never starved
+        const planks = workshop.storage.get('plank') || 0;
+        const ingots = workshop.storage.get('iron_ingot') || 0;
+        const handles = workshop.storage.get('tool_handle') || 0;
+        if (planks >= 12 && ingots >= 1 && handles < 2) {
+            const r = this.recipes.get('plank_to_tool_handle');
+            if (r && this.canCraft(workshop, r)) {
+                this.queueRecipe(workshop.id, 'plank_to_tool_handle', 1);
+                return true;
+            }
+        }
+        const gearOrder = ['ingot_plus_handle_to_sword', 'ingot_plus_handle_to_spear', 'ingot_plus_handle_to_pickaxe', 'plank_plus_ingot_to_shield', 'plank_to_bow'];
+        for (const rid of gearOrder) {
+            if ((rid === 'plank_plus_ingot_to_shield' || rid === 'plank_to_bow') && planks < 14) continue;
             const r = this.recipes.get(rid);
             if (r && this.canCraft(workshop, r)) {
                 this.queueRecipe(workshop.id, rid, 1);

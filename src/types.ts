@@ -12,6 +12,9 @@ export type ToolType =
   | 'build_workshop'
   | 'build_farm'
   | 'build_temple'
+  | 'build_shrine'
+  | 'build_church'
+  | 'build_cemetery'
   | 'build_dock'
   | 'build_bridge'
   | 'build_wall'
@@ -291,6 +294,7 @@ export interface AgentDossier {
   gender: string;
   alive: boolean;
   deathCause?: string | null;
+  deathDetail?: string | null;
   deathTick?: number | null;
   job: string;
   jobTitle: string;
@@ -347,6 +351,7 @@ export interface HistoricalPersonSummary {
   x?: number | null;
   y?: number | null;
   deathCause?: string | null;
+  deathDetail?: string | null;
   deathTick?: number | null;
   lifeHistoryCount?: number;
 }

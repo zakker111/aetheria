@@ -80,6 +80,14 @@ export class SettlementSystem {
       collapseReason: null,
       growthTrend: 'stable',
       previousPopulation: pop,
+      stats: {
+        births: 0,
+        deaths: 0,
+        buildingsBuilt: 0,
+        warsFought: 0,
+        battlesWon: 0,
+        peakPopulation: pop
+      },
       buildings: [],
       resources: {
         food: 30,
@@ -288,6 +296,17 @@ export class SettlementSystem {
       settlement.previousPopulation = currentPop;
       settlement.population = currentPop;
       settlement.peakPopulation = Math.max(settlement.peakPopulation || 0, currentPop);
+      if (!settlement.stats) {
+        settlement.stats = {
+          births: 0,
+          deaths: 0,
+          buildingsBuilt: Array.isArray(settlement.buildings) ? settlement.buildings.filter(b => b && b.complete).length : 0,
+          warsFought: 0,
+          battlesWon: 0,
+          peakPopulation: settlement.peakPopulation
+        };
+      }
+      settlement.stats.peakPopulation = Math.max(settlement.stats.peakPopulation || 0, settlement.peakPopulation);
 
       // Update tier, urban footprint & title
       const buildingsCount = Array.isArray(settlement.buildings)
@@ -360,6 +379,7 @@ export class SettlementSystem {
         if (gone) {
           gone.isRuined = true;
           gone.health = 0;
+          gone.ruinedAtTick = gone.ruinedAtTick ?? tickNow;
           if (this.sim?.world?.scorchTile) {
             this.sim.world.scorchTile(Math.floor(gone.x), Math.floor(gone.y), 200);
           }
@@ -444,12 +464,14 @@ export class SettlementSystem {
     this.sim?.espionageSystem?.cleanupSettlement?.(settlementId);
     this.sim?.fortificationSystem?.cleanupSettlement?.(settlementId);
 
-    this.settlements.delete(settlementId);
-    this.territories.delete(settlementId);
-
     const attackerName = attackerSettlementId
       ? (this.settlements.get(attackerSettlementId)?.name || 'Enemy Forces')
       : null;
+
+    this._archiveFallenSettlement(settlement, 'collapsed', reason, attackerName, tick);
+
+    this.settlements.delete(settlementId);
+    this.territories.delete(settlementId);
 
     this.sim?.eventBus?.emit('SETTLEMENT_COLLAPSED', {
       id: settlementId,
@@ -673,6 +695,7 @@ export class SettlementSystem {
     this.claimTerritory(primary.id, primary.center.x, primary.center.y, tierInfo.radius);
 
     // Clean up absorbed city walls & covert espionage records before deleting settlement
+    this._archiveFallenSettlement(secondary, 'merged', reason, primary.name, tick);
     this.sim?.espionageSystem?.cleanupSettlement?.(secondary.id);
     this.sim?.fortificationSystem?.cleanupSettlement?.(secondary.id);
 
@@ -697,6 +720,81 @@ export class SettlementSystem {
     }
 
     return primary;
+  }
+
+  _archiveFallenSettlement(settlement, outcome = 'collapsed', reason = 'Collapsed', relatedName = null, tick = 0) {
+    if (!settlement || !this.sim) return null;
+    if (!Array.isArray(this.sim.fallenSettlements)) this.sim.fallenSettlements = [];
+
+    const ageInfo = this.sim.civilizationAgeSystem?.getSettlementAge?.(settlement.id);
+    const eraId = ageInfo?.ageId || 1;
+    const eraName = ageInfo?.ageName || ageInfo?.name || 'Tribal Era';
+    const eraIcon = ageInfo?.icon || '🪨';
+
+    const beliefId = settlement.culture?.beliefId || this.sim.religionSystem?.getDominantFaith?.(settlement) || null;
+    const creedObj = beliefId ? (this.sim.religionSystem?.getCreed?.(beliefId) || null) : null;
+    const faithName = creedObj?.name || (beliefId ? String(beliefId).replace(/_/g, ' ') : 'Folk Customs');
+    const faithIcon = creedObj?.icon || '✨';
+
+    const notables = [];
+    if (settlement.leadership) notables.push(settlement.leadership);
+    if (Array.isArray(this.sim.fallenHeroes)) {
+      for (const h of this.sim.fallenHeroes) {
+        if (h && h.settlementName === settlement.name && h.fullName && !notables.includes(h.fullName)) {
+          notables.push(h.fullName);
+          if (notables.length >= 4) break;
+        }
+      }
+    }
+
+    const baseStats = settlement.stats || {};
+    const peakPop = Math.max(settlement.peakPopulation || 0, baseStats.peakPopulation || 0, settlement.population || 0, 1);
+    const builtTotal = Math.max(
+      baseStats.buildingsBuilt || 0,
+      Array.isArray(settlement.buildings) ? settlement.buildings.filter(b => b && b.complete).length : 0
+    );
+
+    const record = {
+      id: settlement.id,
+      name: settlement.name,
+      outcome,
+      reason,
+      absorbedByName: outcome === 'merged' ? relatedName : null,
+      conqueredByName: outcome === 'collapsed' ? relatedName : null,
+      center: settlement.center ? { x: Math.round(settlement.center.x), y: Math.round(settlement.center.y) } : { x: 0, y: 0 },
+      foundedAt: settlement.foundedAt ?? 0,
+      endedAt: tick,
+      endedYear: Math.floor(tick / 400) + 1,
+      tier: settlement.tier || 'Settlement',
+      tierIcon: settlement.tierIcon || '🏚️',
+      eraId,
+      eraName,
+      eraIcon,
+      beliefId,
+      faithName,
+      faithIcon,
+      leadership: settlement.leadership || null,
+      notables,
+      stats: {
+        births: baseStats.births || 0,
+        deaths: baseStats.deaths || 0,
+        buildingsBuilt: builtTotal,
+        warsFought: baseStats.warsFought || 0,
+        battlesWon: baseStats.battlesWon || 0,
+        peakPopulation: peakPop,
+      },
+    };
+
+    const idx = this.sim.fallenSettlements.findIndex((f) => f && f.id === settlement.id);
+    if (idx !== -1) {
+      this.sim.fallenSettlements[idx] = record;
+    } else {
+      this.sim.fallenSettlements.unshift(record);
+      if (this.sim.fallenSettlements.length > 60) {
+        this.sim.fallenSettlements.length = 60;
+      }
+    }
+    return record;
   }
   
   // Generate unique settlement name.
@@ -770,16 +868,23 @@ export class SettlementSystem {
       }
     });
     
-    // Add to settlement buildings
+    // Link to an existing settlement house if nearby rather than injecting malformed stubs
     if (settlementId && this.settlements.has(settlementId)) {
       const settlement = this.settlements.get(settlementId);
-      settlement.buildings.push({
-        type: 'house',
-        x,
-        y,
-        ownerId: agentId
-      });
-      
+      if (Array.isArray(settlement.buildings)) {
+        const realHouse = settlement.buildings.find(
+          (b) => b && !b.isRuined && (b.buildingType === 'house' || b.type === 'house') && b.ownerId == null
+        );
+        if (realHouse) {
+          realHouse.ownerId = agentId;
+          const homeRec = this.homes.get(agentId);
+          if (homeRec) {
+            homeRec.x = realHouse.x;
+            homeRec.y = realHouse.y;
+            homeRec.buildingId = realHouse.id ?? homeRec.buildingId;
+          }
+        }
+      }
       // Claim surrounding tiles as territory
       this.claimTerritory(settlementId, x, y, 6);
     }
@@ -927,8 +1032,8 @@ export class SettlementSystem {
       totalFood,
       totalWood,
       totalOre,
-      buildingCount: settlement.buildings.length,
-      homeCount: settlement.buildings.filter(b => b.type === 'house').length
+      buildingCount: settlement.buildings.filter(b => b && !b.isRuined).length,
+      homeCount: settlement.buildings.filter(b => b && !b.isRuined && (b.buildingType === 'house' || b.type === 'house')).length
     };
   }
   

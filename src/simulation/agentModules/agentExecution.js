@@ -1,6 +1,8 @@
 // Agent action execution, town-life spot selection, and movement steering.
 // Extracted from Agent for modularity with zero circular imports and byte-identical RNG order.
 
+import { BUILD_COSTS } from "../../core/constants.js";
+
 function tickOf(simulation) {
   return (simulation && simulation.clock && simulation.clock.tick) || 0;
 }
@@ -112,7 +114,7 @@ export function pickWorkshopSpot(agent, simulation, settlement) {
 
 export function pickTempleSpot(agent, simulation, settlement) {
   if (!settlement) return null;
-  const temple = findSettlementBuilding(agent, simulation, settlement, ["temple"]);
+  const temple = findSettlementBuilding(agent, simulation, settlement, ["temple", "church", "shrine"]);
   if (temple) {
     return { x: temple.x, y: temple.y, buildingId: temple.id };
   }
@@ -151,9 +153,12 @@ export function executeAction(agent, AgentClass, action, world, eventBus, crafti
       }
       if (agent.distanceTo(action.target) < 2.5) {
         const sid = agent.settlementId || (simulation?.settlementSystem?.agentSettlementMap?.get(agent.id));
+        const bType = action.target.buildingType || action.target.type || "house";
+        const costSpec = BUILD_COSTS[bType] || { plank: 2 };
         const prevProg = action.target.constructionProgress || 0;
         const needsMaterial = prevProg === 0 || Math.floor(prevProg / 15) < Math.floor((prevProg + 5) / 15);
         let woodUsed = 0;
+        let oreUsed = 0;
         if (needsMaterial) {
           if (sid && simulation?.settlementSystem) {
             woodUsed = simulation.settlementSystem.withdrawFromStockpile(sid, "wood", 1);
@@ -168,6 +173,42 @@ export function executeAction(agent, AgentClass, action, world, eventBus, crafti
             agent.inventory.plank--;
             woodUsed = 1;
           }
+
+          // Stone/iron buildings also consume ore/iron_ingot across construction milestones
+          const oreNeed = Math.min(4, costSpec.iron_ingot || 0);
+          if (oreNeed > 0 && (action.target._orePaid || 0) < oreNeed) {
+            if (sid && simulation?.settlementSystem) {
+              const st = simulation.settlementSystem.settlements.get(sid);
+              if ((st?.stockpile?.ore || 0) > 2) {
+                oreUsed = simulation.settlementSystem.withdrawFromStockpile(sid, "ore", 1);
+              }
+              if (oreUsed === 0 && (st?.stockpile?.iron_ingot || 0) > 0) {
+                oreUsed = simulation.settlementSystem.withdrawFromStockpile(sid, "iron_ingot", 1);
+              }
+            }
+            if (oreUsed === 0 && (agent.inventory.ore_iron || 0) > 0) {
+              agent.inventory.ore_iron--;
+              oreUsed = 1;
+            } else if (oreUsed === 0 && (agent.inventory.iron_ingot || 0) > 0) {
+              agent.inventory.iron_ingot--;
+              oreUsed = 1;
+            }
+            if (oreUsed > 0) {
+              action.target._orePaid = (action.target._orePaid || 0) + oreUsed;
+            }
+          }
+
+          // Prestige buildings (e.g. Castle) consume a gem/jewel halfway through when available
+          if ((costSpec.gem || 0) > 0 && !action.target._gemPaid && prevProg >= 45 && sid && simulation?.settlementSystem) {
+            let gemUsed = simulation.settlementSystem.withdrawFromStockpile(sid, "gem", 1);
+            if (gemUsed === 0) gemUsed = simulation.settlementSystem.withdrawFromStockpile(sid, "jewel", 1);
+            if (gemUsed > 0) {
+              action.target._gemPaid = (action.target._gemPaid || 0) + gemUsed;
+              if (eventBus) {
+                eventBus.emit("RESOURCE_CONSUMED", { agentId: agent.id, settlementId: sid, resourceType: "gem", amount: gemUsed });
+              }
+            }
+          }
         }
 
         const fullName = formatFullName(agent);
@@ -176,11 +217,14 @@ export function executeAction(agent, AgentClass, action, world, eventBus, crafti
           action.target.contributors.push({ id: agent.id, name: fullName });
         }
 
-        const progressInc = (!needsMaterial || woodUsed > 0) ? 5 : 2;
+        const progressInc = (!needsMaterial || woodUsed > 0 || oreUsed > 0) ? 5 : 2;
         action.target.constructionProgress = (action.target.constructionProgress || 0) + progressInc;
         agent.gainSkill("build", 0.05, 5, 1, tickOf(simulation));
         if (woodUsed > 0 && eventBus) {
           eventBus.emit("RESOURCE_CONSUMED", { agentId: agent.id, settlementId: sid, resourceType: "wood", amount: woodUsed });
+        }
+        if (oreUsed > 0 && eventBus) {
+          eventBus.emit("RESOURCE_CONSUMED", { agentId: agent.id, settlementId: sid, resourceType: "ore", amount: oreUsed });
         }
 
         if (action.target.constructionProgress >= 100) {
@@ -204,6 +248,15 @@ export function executeAction(agent, AgentClass, action, world, eventBus, crafti
               action.target.builtByAgentId = agent.id;
               action.target.builtByName = fullName;
               action.target.builtYear = builtYear;
+            }
+            if (targetSid != null) {
+              const targetSettlement = simulation?.settlementSystem?.settlements?.get(targetSid);
+              if (targetSettlement) {
+                if (!targetSettlement.stats) {
+                  targetSettlement.stats = { births: 0, deaths: 0, buildingsBuilt: 0, warsFought: 0, battlesWon: 0, peakPopulation: targetSettlement.population || 0 };
+                }
+                targetSettlement.stats.buildingsBuilt = (targetSettlement.stats.buildingsBuilt || 0) + 1;
+              }
             }
             action.target.builtInEra = builtEraId;
             action.target.builtEraName = builtEraName;
@@ -927,6 +980,68 @@ export function executeAction(agent, AgentClass, action, world, eventBus, crafti
       break;
     }
 
+    case "conjure_fallen": {
+      if (!action.target) { agent.currentAction = null; break; }
+      const anchor = resolveLiveTarget(action, world) || action.target;
+      if (agent.distanceTo(anchor) < 2.5) {
+        if (simulation?.religionSystem?.conjureFallenSpirit) {
+          simulation.religionSystem.conjureFallenSpirit(agent, anchor);
+        }
+        agent.needs.social = Math.min(100, agent.needs.social + 6);
+        agent.currentAction = null;
+      } else {
+        agent.moveToward(anchor, world);
+      }
+      break;
+    }
+
+    case "wander_to_town": {
+      if (!action.target) { agent.currentAction = null; break; }
+      if (agent.distanceTo(action.target) < 3.0) {
+        agent.needs.social = Math.min(100, (agent.needs.social ?? 50) + 15);
+        const hostId = action.target.settlementId ?? action.settlementId ?? null;
+        if (hostId != null && simulation?.settlementSystem?.settlements) {
+          const host = simulation.settlementSystem.settlements.get(hostId);
+          if (host && host.agentIds) {
+            let met = 0;
+            for (const aid of host.agentIds) {
+              const other = simulation._agentById(aid);
+              if (other && other.alive && other.id !== agent.id) {
+                if (simulation.relationshipSystem) {
+                  simulation.relationshipSystem.modifyRelationship(agent.id, other.id, { friendship: 2 });
+                }
+                if (typeof agent._exchangeGossip === "function") {
+                  agent._exchangeGossip(other, tickOf(simulation));
+                }
+                met++;
+                if (met >= 2) break;
+              }
+            }
+          }
+          if (agent.settlementId != null && agent.settlementId !== hostId && simulation.diplomacySystem) {
+            const rel = simulation.diplomacySystem.getRelation(agent.settlementId, hostId);
+            if (rel && rel.status !== "war") {
+              rel.score = Math.min(100, (rel.score ?? 50) + 0.5);
+              rel.tradeVisits = (rel.tradeVisits || 0) + 1;
+            }
+          }
+          if (eventBus) {
+            eventBus.emit("INTERTOWN_VISIT", {
+              agentId: agent.id,
+              fromSettlementId: agent.settlementId ?? null,
+              toSettlementId: hostId,
+              x: agent.x,
+              y: agent.y
+            });
+          }
+        }
+        agent.currentAction = null;
+      } else {
+        agent.moveToward(action.target, world);
+      }
+      break;
+    }
+
     case "visit_neighbor": {
       const neighbor = resolveLiveTarget(action, world);
       if (!neighbor || !neighbor.alive) {
@@ -1082,8 +1197,8 @@ export function executeAction(agent, AgentClass, action, world, eventBus, crafti
       const dirY = awayX * sinV + awayY * cosV;
       const runDist = 6;
       const margin = 4;
-      let destX = Math.max(margin, Math.min((world.width || 128) - margin, agent.x + dirX * runDist));
-      let destY = Math.max(margin, Math.min((world.height || 128) - margin, agent.y + dirY * runDist));
+      let destX = Math.max(margin, Math.min((world.width || 160) - margin, agent.x + dirX * runDist));
+      let destY = Math.max(margin, Math.min((world.height || 160) - margin, agent.y + dirY * runDist));
       if (!world.isWalkable(Math.floor(destX), Math.floor(destY))) {
         const alt = [
           { x: agent.x + dirY * runDist, y: agent.y - dirX * runDist },
@@ -1091,8 +1206,8 @@ export function executeAction(agent, AgentClass, action, world, eventBus, crafti
           { x: agent.x + dirX * 3, y: agent.y + dirY * 3 }
         ];
         for (const cand of alt) {
-          const cx = Math.max(margin, Math.min((world.width || 128) - margin, cand.x));
-          const cy = Math.max(margin, Math.min((world.height || 128) - margin, cand.y));
+          const cx = Math.max(margin, Math.min((world.width || 160) - margin, cand.x));
+          const cy = Math.max(margin, Math.min((world.height || 160) - margin, cand.y));
           if (world.isWalkable(Math.floor(cx), Math.floor(cy))) { destX = cx; destY = cy; break; }
         }
       }
@@ -1212,6 +1327,33 @@ const ASTAR_DIRS = [
   [1, 1, 1.414], [1, -1, 1.414], [-1, 1, 1.414], [-1, -1, 1.414]
 ];
 
+let _astarSize = 0;
+let _astarStamp = 0;
+let _astarClosedStamp = null;
+let _astarSeenStamp = null;
+let _astarG = null;
+let _astarParent = null;
+const _astarHeapK = new Int32Array(4096);
+const _astarHeapF = new Float64Array(4096);
+
+function ensureAStarBuffers(totalTiles) {
+  if (_astarSize !== totalTiles) {
+    _astarSize = totalTiles;
+    _astarClosedStamp = new Int32Array(totalTiles);
+    _astarSeenStamp = new Int32Array(totalTiles);
+    _astarG = new Float64Array(totalTiles);
+    _astarParent = new Int32Array(totalTiles);
+    _astarStamp = 0;
+  }
+  _astarStamp++;
+  if (_astarStamp >= 0x7fffffff) {
+    _astarClosedStamp.fill(0);
+    _astarSeenStamp.fill(0);
+    _astarStamp = 1;
+  }
+  return _astarStamp;
+}
+
 function findLocalAStarPath(startX, startY, goalX, goalY, world, agent) {
   const W = world.width;
   const H = world.height;
@@ -1227,37 +1369,63 @@ function findLocalAStarPath(startX, startY, goalX, goalY, world, agent) {
   const minY = Math.max(1, Math.min(sy, gy) - radius);
   const maxY = Math.min(H - 2, Math.max(sy, gy) + radius);
 
-  const open = [];
-  const gScore = new Map();
-  const cameFrom = new Map();
-  const closed = new Set();
+  const stamp = ensureAStarBuffers(W * H);
+  const closedStamp = _astarClosedStamp;
+  const seenStamp = _astarSeenStamp;
+  const gScore = _astarG;
+  const cameFrom = _astarParent;
 
   const startKey = sy * W + sx;
   const goalKey = gy * W + gx;
   const startH = Math.hypot(gx - sx, gy - sy);
-  gScore.set(startKey, 0);
-  open.push({ key: startKey, f: startH });
+
+  seenStamp[startKey] = stamp;
+  gScore[startKey] = 0;
+  cameFrom[startKey] = -1;
+
+  let heapLen = 1;
+  _astarHeapK[0] = startKey;
+  _astarHeapF[0] = startH;
 
   let bestKey = startKey;
   let bestDist = startH;
   let expansions = 0;
   const maxExpansions = 260;
+  const hasIsRoad = typeof world.isRoad === "function";
 
-  while (open.length > 0 && expansions < maxExpansions) {
-    // Deterministic min extraction (lowest f, lowest key tie-break)
-    let minIdx = 0;
-    for (let i = 1; i < open.length; i++) {
-      if (open[i].f < open[minIdx].f || (open[i].f === open[minIdx].f && open[i].key < open[minIdx].key)) {
-        minIdx = i;
+  while (heapLen > 0 && expansions < maxExpansions) {
+    const ck = _astarHeapK[0];
+    heapLen--;
+    if (heapLen > 0) {
+      const lastK = _astarHeapK[heapLen];
+      const lastF = _astarHeapF[heapLen];
+      let idx = 0;
+      const half = heapLen >> 1;
+      while (idx < half) {
+        let child = (idx << 1) + 1;
+        let childF = _astarHeapF[child];
+        let childK = _astarHeapK[child];
+        const right = child + 1;
+        if (right < heapLen) {
+          const rf = _astarHeapF[right];
+          const rk = _astarHeapK[right];
+          if (rf < childF || (rf === childF && rk < childK)) {
+            child = right;
+            childF = rf;
+            childK = rk;
+          }
+        }
+        if (lastF < childF || (lastF === childF && lastK <= childK)) break;
+        _astarHeapK[idx] = childK;
+        _astarHeapF[idx] = childF;
+        idx = child;
       }
+      _astarHeapK[idx] = lastK;
+      _astarHeapF[idx] = lastF;
     }
-    const current = open[minIdx];
-    open[minIdx] = open[open.length - 1];
-    open.pop();
 
-    const ck = current.key;
-    if (closed.has(ck)) continue;
-    closed.add(ck);
+    if (closedStamp[ck] === stamp) continue;
+    closedStamp[ck] = stamp;
     expansions++;
 
     const cx = ck % W;
@@ -1273,32 +1441,61 @@ function findLocalAStarPath(startX, startY, goalX, goalY, world, agent) {
       break;
     }
 
-    const cg = gScore.get(ck) ?? Infinity;
-    for (let d = 0; d < ASTAR_DIRS.length; d++) {
-      const nx = cx + ASTAR_DIRS[d][0];
-      const ny = cy + ASTAR_DIRS[d][1];
+    const cg = gScore[ck];
+    // Cache cardinal passability checks (E, W, S, N) for diagonal corner-cut checks
+    let cardPass0 = -1, cardPass1 = -1, cardPass2 = -1, cardPass3 = -1;
+
+    for (let d = 0; d < 8; d++) {
+      const dx = ASTAR_DIRS[d][0];
+      const dy = ASTAR_DIRS[d][1];
+      const nx = cx + dx;
+      const ny = cy + dy;
       if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
       const nk = ny * W + nx;
-      if (closed.has(nk)) continue;
-      if (nk !== goalKey && !canStepTile(nx, ny, world, agent, false)) continue;
-      if (nk === goalKey && !canStepTile(nx, ny, world, agent, false)) {
-        // Goal tile itself may hold a building/tree/water node; allow stepping adjacent only
-        continue;
-      }
+      if (closedStamp[nk] === stamp) continue;
+
+      const pass = canStepTile(nx, ny, world, agent, false);
+      if (d === 0) cardPass0 = pass ? 1 : 0;
+      else if (d === 1) cardPass1 = pass ? 1 : 0;
+      else if (d === 2) cardPass2 = pass ? 1 : 0;
+      else if (d === 3) cardPass3 = pass ? 1 : 0;
+      if (!pass) continue;
+
       // Prevent corner-cutting through solid diagonals
-      if (ASTAR_DIRS[d][0] !== 0 && ASTAR_DIRS[d][1] !== 0) {
-        if (!canStepTile(cx + ASTAR_DIRS[d][0], cy, world, agent, false) &&
-            !canStepTile(cx, cy + ASTAR_DIRS[d][1], world, agent, false)) {
-          continue;
+      if (d >= 4) {
+        const pxOk = dx > 0
+          ? (cardPass0 !== -1 ? cardPass0 === 1 : canStepTile(cx + 1, cy, world, agent, false))
+          : (cardPass1 !== -1 ? cardPass1 === 1 : canStepTile(cx - 1, cy, world, agent, false));
+        if (!pxOk) {
+          const pyOk = dy > 0
+            ? (cardPass2 !== -1 ? cardPass2 === 1 : canStepTile(cx, cy + 1, world, agent, false))
+            : (cardPass3 !== -1 ? cardPass3 === 1 : canStepTile(cx, cy - 1, world, agent, false));
+          if (!pyOk) continue;
         }
       }
-      const roadMul = (world.isRoad && world.isRoad(nx, ny)) ? 0.72 : 1.0;
+
+      const roadMul = (hasIsRoad && world.isRoad(nx, ny)) ? 0.72 : 1.0;
       const tentativeG = cg + ASTAR_DIRS[d][2] * roadMul;
-      if (tentativeG < (gScore.get(nk) ?? Infinity)) {
-        cameFrom.set(nk, ck);
-        gScore.set(nk, tentativeG);
+      if (seenStamp[nk] !== stamp || tentativeG < gScore[nk]) {
+        cameFrom[nk] = ck;
+        gScore[nk] = tentativeG;
+        seenStamp[nk] = stamp;
         const h = Math.hypot(gx - nx, gy - ny);
-        open.push({ key: nk, f: tentativeG + h * 1.15 });
+        const nf = tentativeG + h * 1.15;
+        if (heapLen < _astarHeapK.length) {
+          let i = heapLen++;
+          while (i > 0) {
+            const p = (i - 1) >> 1;
+            const pf = _astarHeapF[p];
+            const pk = _astarHeapK[p];
+            if (pf < nf || (pf === nf && pk <= nk)) break;
+            _astarHeapK[i] = pk;
+            _astarHeapF[i] = pf;
+            i = p;
+          }
+          _astarHeapK[i] = nk;
+          _astarHeapF[i] = nf;
+        }
       }
     }
   }
@@ -1308,11 +1505,11 @@ function findLocalAStarPath(startX, startY, goalX, goalY, world, agent) {
   const rev = [];
   let cur = bestKey;
   let guard = 0;
-  while (cur !== undefined && cur !== startKey && guard++ < 120) {
+  while (cur !== -1 && cur !== startKey && guard++ < 120) {
     const px = cur % W;
     const py = (cur / W) | 0;
     rev.push({ x: px + 0.5, y: py + 0.5 });
-    cur = cameFrom.get(cur);
+    cur = cameFrom[cur];
   }
   if (rev.length === 0) return null;
   rev.reverse();
@@ -1349,8 +1546,12 @@ export function moveToward(agent, target, world, speedBoost = 1) {
     if (agent.needs.food < 30 || agent.needs.water < 30) {
       effectiveSpeed *= 1.35;
     }
-    if (world.isRoad && world.isRoad(Math.floor(agent.x), Math.floor(agent.y))) {
-      effectiveSpeed *= 1.6;
+    const ax = Math.floor(agent.x);
+    const ay = Math.floor(agent.y);
+    if (world.isPavedRoad && world.isPavedRoad(ax, ay)) {
+      effectiveSpeed *= 1.85;
+    } else if (world.isRoad && world.isRoad(ax, ay)) {
+      effectiveSpeed *= 1.45;
     }
   }
 

@@ -2,7 +2,7 @@
 import { getBiomeColor } from "./terrainPass.js";
 import { render25DResource, render25DBuilding, render25DGroundItem } from "./structuresPass.js";
 import { render25DAnimal, render25DVessel, render25DAgent } from "./entitiesPass.js";
-import { renderSkullMonuments, renderWarbandMarkers, renderCombatEffects, renderSettlementTerritories, renderDiplomacyLines } from "./overlaysPass.js";
+import { renderSkullMonuments, renderWarbandMarkers, renderCombatEffects, renderSettlementTerritories, renderDiplomacyLines, renderSpectralSpirits } from "./overlaysPass.js";
 
 export function render2DScene(r) {
   const ctx = r.ctx;
@@ -39,8 +39,15 @@ export function render2DScene(r) {
         ctx.fillStyle = "#854d0e";
         ctx.fillRect(screen.x, screen.y, zoom, zoom);
       } else if (world.roadTiles && world.roadTiles[idx]) {
-        ctx.fillStyle = "rgba(195, 180, 155, 0.7)";
-        ctx.fillRect(screen.x, screen.y, zoom, zoom);
+        if (world.roadTiles[idx] >= 2) {
+          ctx.fillStyle = "rgba(148, 163, 184, 0.9)";
+          ctx.fillRect(screen.x, screen.y, zoom, zoom);
+          ctx.fillStyle = "rgba(226, 232, 240, 0.45)";
+          ctx.fillRect(screen.x + zoom * 0.15, screen.y + zoom * 0.15, Math.max(1, zoom * 0.7), Math.max(1, zoom * 0.7));
+        } else {
+          ctx.fillStyle = "rgba(195, 180, 155, 0.7)";
+          ctx.fillRect(screen.x, screen.y, zoom, zoom);
+        }
       }
 
       if (world.scorchedTiles && world.scorchedTiles[idx] > 0) {
@@ -119,13 +126,17 @@ export function render2DScene(r) {
     for (const b of r.simulation.buildings) {
       const screen = r.worldToScreen(b.x, b.y);
       if (b.isRuined || (b.health !== undefined && b.health <= 0)) {
+        const tickNow = r.simulation?.clock?.tick ?? 0;
+        const ruinAge = b.ruinedAtTick != null ? Math.max(0, tickNow - b.ruinedAtTick) : 0;
+        const isFresh = ruinAge < 120;
+        const isOvergrown = ruinAge > 450;
         const rSize = Math.max(8, zoom * 0.9);
-        ctx.fillStyle = "#1c1917";
+        ctx.fillStyle = isOvergrown ? "#292524" : "#1c1917";
         ctx.fillRect(screen.x - rSize * 0.5, screen.y - rSize * 0.5, rSize, rSize);
-        ctx.strokeStyle = "#475569";
+        ctx.strokeStyle = isOvergrown ? "#78716c" : "#475569";
         ctx.lineWidth = 1.5;
         ctx.strokeRect(screen.x - rSize * 0.5, screen.y - rSize * 0.5, rSize, rSize);
-        ctx.strokeStyle = "#0f172a";
+        ctx.strokeStyle = isOvergrown ? "#44403c" : "#0f172a";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(screen.x - rSize * 0.4, screen.y - rSize * 0.35);
@@ -133,8 +144,15 @@ export function render2DScene(r) {
         ctx.moveTo(screen.x + rSize * 0.3, screen.y - rSize * 0.3);
         ctx.lineTo(screen.x - rSize * 0.25, screen.y + rSize * 0.35);
         ctx.stroke();
-        ctx.fillStyle = "#f97316";
-        ctx.fillRect(screen.x - 1, screen.y - 1, 3, 3);
+        if (isFresh) {
+          ctx.fillStyle = "#f97316";
+          ctx.fillRect(screen.x - 1, screen.y - 1, 3, 3);
+        } else if (isOvergrown) {
+          ctx.fillStyle = "#15803d";
+          ctx.fillRect(screen.x - rSize * 0.35, screen.y - rSize * 0.35, Math.max(2, rSize * 0.28), Math.max(2, rSize * 0.28));
+          ctx.fillStyle = "#4d7c0f";
+          ctx.fillRect(screen.x + rSize * 0.1, screen.y + rSize * 0.08, Math.max(2, rSize * 0.24), Math.max(2, rSize * 0.24));
+        }
       } else {
         render25DBuilding(r, b, screen, 20);
       }
@@ -186,6 +204,7 @@ export function render2DScene(r) {
     }
   }
 
+  renderSpectralSpirits(r);
   renderDiplomacyLines(r);
   renderSettlementTerritories(r);
   renderSkullMonuments(r, startX, endX, startY, endY);

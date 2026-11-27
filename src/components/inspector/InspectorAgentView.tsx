@@ -73,7 +73,8 @@ export const InspectorAgentView: React.FC<InspectorAgentViewProps> = ({
               🕯️ Fallen Memorial
             </div>
             <div className="text-[11px] text-slate-200 mt-0.5 font-mono-tabular">
-              Age {Math.floor(dossier?.age ?? e.age ?? 0)} · Cause: {dossier?.deathCause || e.deathCause || 'Natural'}
+              Age {Math.floor(dossier?.age ?? e.age ?? 0)} · Cause: {String(dossier?.deathCause || e.deathCause || 'Natural').replace(/_/g, ' ')}
+              {(dossier?.deathDetail || e.deathDetail) ? ` (${dossier?.deathDetail || e.deathDetail})` : ''}
               {dossier?.deathTick != null ? ` · Tick ${dossier.deathTick}` : ''}
             </div>
             <div className="text-[10px] text-red-300 mt-0.5 font-mono-tabular">

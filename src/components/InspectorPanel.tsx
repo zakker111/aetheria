@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { AgentDossier, InspectedEntityData } from '../types';
 import { BUILDING_META_MAP } from './inspector/InspectorShared';
 import { InspectorAgentView } from './inspector/InspectorAgentView';
@@ -19,6 +19,8 @@ interface InspectorPanelProps {
   onFortifySettlement?: (settlementId: number) => void;
   onUpgradeBuilding?: (buildingId: number) => void;
   onCommissionBuilding?: (settlementId: number, buildingType: string) => void;
+  onRenameSettlement?: (settlementId: number, newName: string) => void;
+  onRenameAgent?: (agentId: number, newName: string) => void;
   onClose: () => void;
 }
 
@@ -35,14 +37,51 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onFortifySettlement,
   onUpgradeBuilding,
   onCommissionBuilding,
+  onRenameSettlement,
+  onRenameAgent,
   onClose,
 }) => {
+  const entityId = data?.entity?.id;
+  const entityKind = data?.kind;
+  const entityKey = entityId != null && entityKind ? `${entityKind}_${entityId}` : null;
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState('');
+  const editingName = editingKey !== null && editingKey === entityKey;
+
   if (!data || !data.entity) return null;
 
   const e = data.entity;
   const dossier: AgentDossier | null = data.dossier || null;
   const isAlive = e.alive !== false && dossier?.alive !== false;
   const isDeceasedAgent = !isAlive && data.kind === 'agent';
+
+  const canRename =
+    (data.kind === 'settlement' && Boolean(onRenameSettlement)) ||
+    (data.kind === 'agent' && Boolean(onRenameAgent));
+
+  const startEditing = () => {
+    if (data.kind === 'settlement') {
+      setDraftName(e.name || '');
+    } else if (data.kind === 'agent') {
+      const full =
+        dossier?.fullName ||
+        `${e.name || 'Citizen'}${e.surname && !String(e.name || '').includes(e.surname) ? ` ${e.surname}` : ''}`;
+      setDraftName(full);
+    }
+    setEditingKey(entityKey);
+  };
+
+  const commitRename = () => {
+    const clean = draftName.trim();
+    if (clean) {
+      if (data.kind === 'settlement' && onRenameSettlement) {
+        onRenameSettlement(e.id, clean);
+      } else if (data.kind === 'agent' && onRenameAgent) {
+        onRenameAgent(e.id, clean);
+      }
+    }
+    setEditingKey(null);
+  };
 
   return (
     <div
@@ -55,26 +94,69 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           isDeceasedAgent ? 'text-red-300' : 'text-sky-400'
         } mb-2 border-b border-white/8 pb-1.5 text-[13px] shrink-0`}
       >
-        <span className="truncate">
-          {data.kind === 'agent' && (() => {
-            const full =
-              dossier?.fullName ||
-              `${e.name || 'Citizen'}${e.surname && !String(e.name || '').includes(e.surname) ? ` ${e.surname}` : ''}${e.epithet ? ` ${e.epithet}` : ''}`;
-            return `${isAlive ? '👤' : '🕯️'} ${full}`;
-          })()}
-          {data.kind === 'settlement' &&
-            `${e.tierIcon || '🏡'} ${e.name} (${e.ruined ? 'Collapsed Ruins' : e.tier || 'Village'})`}
-          {data.kind === 'building' && (() => {
-            const bType = e.buildingType || e.type;
-            const bMeta = BUILDING_META_MAP[bType];
-            const lvl = e.level || 1;
-            const maxLvl = e.maxLevel || bMeta?.maxLevel || 3;
-            return `${bMeta?.icon || '🏛️'} ${bMeta?.name || bType} · Lv ${lvl}/${maxLvl}`;
-          })()}
-          {data.kind === 'resource' &&
-            `${e.resourceType === 'food' ? '🌾' : e.resourceType === 'wood' ? '🌲' : e.resourceType === 'uranium' ? '☢️' : e.depositTier === 'iron_mountain' ? '⛰️' : e.resourceType === 'ore' ? '⛏️' : e.resourceType === 'gem' ? '💎' : '💧'} ${e.label || e.resourceType?.toUpperCase()}`}
-        </span>
+        {editingName ? (
+          <div className="flex items-center gap-1 flex-1 min-w-0">
+            <input
+              type="text"
+              value={draftName}
+              maxLength={40}
+              autoFocus
+              aria-label="Rename entity"
+              onChange={(ev) => setDraftName(ev.target.value)}
+              onKeyDown={(ev) => {
+                if (ev.key === 'Enter') commitRename();
+                else if (ev.key === 'Escape') setEditingKey(null);
+              }}
+              className="flex-1 min-w-0 px-2 py-0.5 rounded bg-slate-800 border border-sky-400/60 text-slate-50 text-xs outline-none"
+            />
+            <button
+              type="button"
+              onClick={commitRename}
+              className="px-1.5 py-0.5 rounded bg-sky-500 text-slate-950 text-[10px] font-bold border-0 cursor-pointer shrink-0"
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditingKey(null)}
+              className="px-1.5 py-0.5 rounded bg-slate-700 text-slate-200 text-[10px] border-0 cursor-pointer shrink-0"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <span className="truncate">
+            {data.kind === 'agent' && (() => {
+              const full =
+                dossier?.fullName ||
+                `${e.name || 'Citizen'}${e.surname && !String(e.name || '').includes(e.surname) ? ` ${e.surname}` : ''}${e.epithet ? ` ${e.epithet}` : ''}`;
+              return `${isAlive ? '👤' : '🕯️'} ${full}`;
+            })()}
+            {data.kind === 'settlement' &&
+              `${e.tierIcon || '🏡'} ${e.name} (${e.ruined ? 'Collapsed Ruins' : e.tier || 'Village'})`}
+            {data.kind === 'building' && (() => {
+              const bType = e.buildingType || e.type;
+              const bMeta = BUILDING_META_MAP[bType];
+              const lvl = e.level || 1;
+              const maxLvl = e.maxLevel || bMeta?.maxLevel || 3;
+              return `${bMeta?.icon || '🏛️'} ${bMeta?.name || bType} · Lv ${lvl}/${maxLvl}`;
+            })()}
+            {data.kind === 'resource' &&
+              `${e.resourceType === 'food' ? '🌾' : e.resourceType === 'wood' ? '🌲' : e.resourceType === 'uranium' ? '☢️' : e.depositTier === 'iron_mountain' ? '⛰️' : e.resourceType === 'ore' ? '⛏️' : e.resourceType === 'gem' ? '💎' : '💧'} ${e.label || e.resourceType?.toUpperCase()}`}
+          </span>
+        )}
         <div className="flex items-center gap-1.5 shrink-0">
+          {!editingName && canRename && (
+            <button
+              type="button"
+              onClick={startEditing}
+              title="Rename"
+              aria-label="Rename"
+              className="rounded px-1.5 py-0.5 text-[10px] font-bold cursor-pointer whitespace-nowrap shrink-0 border border-white/15 bg-slate-800/80 text-slate-300 hover:text-white hover:border-sky-400/50"
+            >
+              ✏️
+            </button>
+          )}
           {data.kind === 'agent' && isAlive && onFollowAgent && (
             <button
               type="button"

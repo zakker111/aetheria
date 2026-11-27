@@ -57,7 +57,10 @@ export function serializeSimulation(sim) {
     },
     religion: {
       priests: Array.from(sim.religionSystem.priests),
-      activeRituals: Array.from(sim.religionSystem.activeRituals.entries())
+      activeRituals: Array.from(sim.religionSystem.activeRituals.entries()),
+      customCreeds: sim.religionSystem.customCreeds
+        ? Array.from(sim.religionSystem.customCreeds.entries()).map(([k, v]) => [k, { ...v }])
+        : []
     },
     infrastructure: sim.infrastructureSystem.serialize(),
     animals: sim.animalSystem.serialize(),
@@ -69,6 +72,13 @@ export function serializeSimulation(sim) {
     espionage: sim.espionageSystem ? sim.espionageSystem.serialize() : null,
     fortifications: sim.fortificationSystem ? sim.fortificationSystem.serialize() : null,
     fallenHeroes: Array.isArray(sim.fallenHeroes) ? sim.fallenHeroes.map((h) => ({ ...h })) : [],
+    fallenSettlements: Array.isArray(sim.fallenSettlements) ? sim.fallenSettlements.map((fs) => ({
+      ...fs,
+      center: fs.center ? { ...fs.center } : { x: 0, y: 0 },
+      notables: Array.isArray(fs.notables) ? [...fs.notables] : [],
+      stats: fs.stats ? { ...fs.stats } : {}
+    })) : [],
+    spectralSpirits: Array.isArray(sim.spectralSpirits) ? sim.spectralSpirits.map((sp) => ({ ...sp })) : [],
     deadDossiers: Array.isArray(sim._deadDossiers) ? sim._deadDossiers.map((d) => ({
       ...d,
       traits: d.traits ? { ...d.traits } : {},
@@ -97,7 +107,9 @@ export function serializeSimulation(sim) {
 }
 
 export function deserializeSimulation(SimulationClass, data) {
-  const sim = new SimulationClass(data.seed, 128, 128, { skipInit: true, maxAgents: data.maxAgents ?? 360 });
+  const w = data.world?.width || 160;
+  const h = data.world?.height || 160;
+  const sim = new SimulationClass(data.seed, w, h, { skipInit: true, maxAgents: data.maxAgents ?? 360 });
   sim.birthsThisSession = data.birthsThisSession || 0;
   sim.deathsThisSession = data.deathsThisSession || 0;
   if (data.scenario) sim._scenario = data.scenario;
@@ -129,6 +141,7 @@ export function deserializeSimulation(SimulationClass, data) {
     sim.world.skullMonuments = Array.isArray(data.world.skullMonuments) ? data.world.skullMonuments.map((m) => ({ ...m })) : [];
     sim.world.nextMonumentId = data.world.nextMonumentId || (sim.world.skullMonuments.length + 1);
     sim.world._radiationActive = sim.world.radiationTiles.some((v) => v > 0);
+    sim.world._scorchedActive = sim.world.scorchedTiles.some((v) => v > 0);
     sim.world.bridgeTiles = new Uint8Array(data.world.bridgeTiles || new Uint8Array(sim.world.width * sim.world.height));
     sim._fireActive = data.fireActive !== undefined ? data.fireActive : (sim.world.countFires() > 0);
     sim.burningTileCount = data.burningTileCount !== undefined ? data.burningTileCount : sim.world.countFires();
@@ -201,6 +214,9 @@ export function deserializeSimulation(SimulationClass, data) {
   if (data.religion) {
     sim.religionSystem.priests = new Set(data.religion.priests);
     sim.religionSystem.activeRituals = new Map(data.religion.activeRituals);
+    sim.religionSystem.customCreeds = Array.isArray(data.religion.customCreeds)
+      ? new Map(data.religion.customCreeds.map(([k, v]) => [k, { ...v }]))
+      : new Map();
   }
   if (data.infrastructure) {
     sim.infrastructureSystem = InfrastructureSystem.deserialize(data.infrastructure, sim);
@@ -254,6 +270,17 @@ export function deserializeSimulation(SimulationClass, data) {
   }
   if (Array.isArray(data.fallenHeroes)) {
     sim.fallenHeroes = data.fallenHeroes.map((h) => ({ ...h }));
+  }
+  if (Array.isArray(data.fallenSettlements)) {
+    sim.fallenSettlements = data.fallenSettlements.map((fs) => ({
+      ...fs,
+      center: fs.center ? { ...fs.center } : { x: 0, y: 0 },
+      notables: Array.isArray(fs.notables) ? [...fs.notables] : [],
+      stats: fs.stats ? { ...fs.stats } : {}
+    }));
+  }
+  if (Array.isArray(data.spectralSpirits)) {
+    sim.spectralSpirits = data.spectralSpirits.map((sp) => ({ ...sp }));
   }
   if (Array.isArray(data.deadDossiers)) {
     sim._deadDossiers = data.deadDossiers.map((d) => ({

@@ -656,12 +656,12 @@ export class WarfareSystem {
               soldier.combat.health = soldier.health;
             }
             const rec = this.sim.economySystem?.getAgentJob?.(sId);
-            const isProfessional = soldier.job === 'soldier' || (rec && rec.job === 'soldier');
+            const isProfessional = rec ? rec.job === 'soldier' : soldier.job === 'soldier';
             if (isProfessional) {
               soldier.job = 'soldier';
-              soldier.jobTitle = this.sim.economySystem.jobDefinitions.soldier?.name || 'Soldier';
-              if (rec && rec.job !== 'soldier') {
-                this.sim.economySystem.assignJob?.(soldier, ['soldier']);
+              soldier.jobTitle = this.sim.economySystem.jobDefinitions?.soldier?.name || 'Soldier';
+              if (!rec) {
+                this.sim.economySystem?.assignJob?.(soldier, ['soldier']);
               }
             } else if (rec && rec.job !== 'soldier') {
               soldier.job = rec.job;
@@ -785,6 +785,14 @@ export class WarfareSystem {
       soldier.militaryDuty = true;
       soldier.warbandId = wbId;
       soldier.isRebel = isRebel;
+      if (soldier.job !== 'soldier') {
+        this.sim.economySystem?.agentJobs?.set(soldier.id, {
+          job: soldier.job || 'unemployed',
+          skillLevel: 1,
+          experience: 0,
+          assignedAt: now
+        });
+      }
       soldier.job = "soldier";
       soldier.hasWeapon = true;
       soldier.hasShield = eraId < 5;
@@ -934,8 +942,8 @@ export class WarfareSystem {
     const cap = this.sim.maxAgents ?? 360;
     if ((this.sim.agents?.length || 0) >= cap + 10) return null;
 
-    const W = world.width || 128;
-    const H = world.height || 128;
+    const W = world.width || 160;
+    const H = world.height || 160;
 
     // Pick closest walkable map border coordinate near the target settlement
     let bestEdge = null;
@@ -2012,6 +2020,12 @@ export class WarfareSystem {
         const totalWarDead = (war.casualties[war.attackerId] || 0) + (war.casualties[war.defenderId] || 0);
         if ((totalWarDead >= 3 && (totalWarDead % 3) === 0) || defender.id === victimBand?.commanderId) {
           this.sim.world?.addSkullMonument?.(battleName, defender.x, defender.y, 1, "battle", tickNow);
+        }
+        if (attSet && defender.id === victimBand?.commanderId) {
+          if (!attSet.stats) {
+            attSet.stats = { births: 0, deaths: 0, buildingsBuilt: 0, warsFought: 0, battlesWon: 0, peakPopulation: attSet.population || 0 };
+          }
+          attSet.stats.battlesWon = (attSet.stats.battlesWon || 0) + 1;
         }
       }
     }

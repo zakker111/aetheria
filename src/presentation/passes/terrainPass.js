@@ -425,20 +425,43 @@ export function render25DRoadsAndBridges(r, minX, maxX, minY, maxY) {
           ctx.stroke();
         }
       } else if (isRoad) {
-        r.worldToScreenFast(x + 0.15, y + 0.15, elev, pN);
-        r.worldToScreenFast(x + 0.85, y + 0.15, elev, pE);
-        r.worldToScreenFast(x + 0.85, y + 0.85, elev, pS);
-        r.worldToScreenFast(x + 0.15, y + 0.85, elev, pW);
+        const roadTier = world.roadTiles ? world.roadTiles[idx] : 1;
+        if (roadTier >= 2) {
+          r.worldToScreenFast(x + 0.08, y + 0.08, elev, pN);
+          r.worldToScreenFast(x + 0.92, y + 0.08, elev, pE);
+          r.worldToScreenFast(x + 0.92, y + 0.92, elev, pS);
+          r.worldToScreenFast(x + 0.08, y + 0.92, elev, pW);
 
-        const traffic = world.footTraffic ? world.footTraffic[idx] : 0;
-        ctx.fillStyle = traffic >= 15 ? "rgba(180, 160, 130, 0.82)" : "rgba(195, 180, 155, 0.65)";
-        ctx.beginPath();
-        ctx.moveTo(pN.x, pN.y);
-        ctx.lineTo(pE.x, pE.y);
-        ctx.lineTo(pS.x, pS.y);
-        ctx.lineTo(pW.x, pW.y);
-        ctx.closePath();
-        ctx.fill();
+          ctx.fillStyle = "rgba(148, 163, 184, 0.9)";
+          ctx.beginPath();
+          ctx.moveTo(pN.x, pN.y);
+          ctx.lineTo(pE.x, pE.y);
+          ctx.lineTo(pS.x, pS.y);
+          ctx.lineTo(pW.x, pW.y);
+          ctx.closePath();
+          ctx.fill();
+
+          if (zoom >= 6) {
+            ctx.strokeStyle = "rgba(226, 232, 240, 0.55)";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          }
+        } else {
+          r.worldToScreenFast(x + 0.15, y + 0.15, elev, pN);
+          r.worldToScreenFast(x + 0.85, y + 0.15, elev, pE);
+          r.worldToScreenFast(x + 0.85, y + 0.85, elev, pS);
+          r.worldToScreenFast(x + 0.15, y + 0.85, elev, pW);
+
+          const traffic = world.footTraffic ? world.footTraffic[idx] : 0;
+          ctx.fillStyle = traffic >= 15 ? "rgba(180, 160, 130, 0.82)" : "rgba(195, 180, 155, 0.65)";
+          ctx.beginPath();
+          ctx.moveTo(pN.x, pN.y);
+          ctx.lineTo(pE.x, pE.y);
+          ctx.lineTo(pS.x, pS.y);
+          ctx.lineTo(pW.x, pW.y);
+          ctx.closePath();
+          ctx.fill();
+        }
       }
 
       if (isFire) {

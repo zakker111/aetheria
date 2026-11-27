@@ -42,8 +42,8 @@ export class FortificationSystem {
   }
 
   _ensureWallGrid() {
-    const w = this.sim?.world?.width || 128;
-    const h = this.sim?.world?.height || 128;
+    const w = this.sim?.world?.width || 160;
+    const h = this.sim?.world?.height || 160;
     if (!this._wallGrid || this._wallGridW !== w || this._wallGridH !== h) {
       this._wallGridW = w;
       this._wallGridH = h;
@@ -73,7 +73,7 @@ export class FortificationSystem {
   }
 
   _tileIdx(x, y) {
-    const w = this.sim?.world?.width || 128;
+    const w = this.sim?.world?.width || 160;
     return Math.floor(y) * w + Math.floor(x);
   }
 
@@ -760,10 +760,86 @@ export class FortificationSystem {
           break;
         }
       }
-      if (repairedOne && s.stockpile && (s.stockpile.wood || 0) > 1) {
-        s.stockpile.wood = Math.max(0, s.stockpile.wood - 1);
+      if (repairedOne && s.stockpile) {
+        if ((tier.key === 'stone_wall' || tier.key === 'bastion') && (s.stockpile.ore || 0) > 8) {
+          s.stockpile.ore = Math.max(0, s.stockpile.ore - 1);
+        } else if ((s.stockpile.wood || 0) > 8) {
+          s.stockpile.wood = Math.max(0, s.stockpile.wood - 1);
+        }
       }
     }
+  }
+
+  cleanObsoleteWalls(tick = 0) {
+    if (!this.sim?.settlementSystem || this.segments.size === 0) return 0;
+    const settlements = this.sim.settlementSystem.settlements;
+    if (!settlements) return 0;
+
+    const underAttackIds = new Set();
+    const warbands = this.sim.warfareSystem?.warbands;
+    if (warbands) {
+      for (const wb of warbands.values()) {
+        if (wb.active && (wb.state === 'breaching' || wb.state === 'sieging' || wb.state === 'attacking') && wb.targetSettlementId != null) {
+          underAttackIds.add(wb.targetSettlementId);
+        }
+      }
+    }
+
+    let removed = 0;
+    const grid = this._ensureWallGrid();
+
+    for (const [sId, list] of Array.from(this.segmentsBySettlement.entries())) {
+      const s = settlements.get(sId);
+      if (!s || s.ruined || !s.center || underAttackIds.has(sId)) continue;
+      const pop = s.population || s.agentIds?.size || 0;
+      if (pop < 4) continue;
+      const meta = this.settlementMeta.get(sId);
+      const currentRadius = meta?.radius || null;
+
+      const kept = [];
+      for (let i = 0; i < list.length; i++) {
+        const seg = list[i];
+        if (!seg || seg.settlementId !== sId) {
+          if (seg) kept.push(seg);
+          continue;
+        }
+
+        const dx = seg.x - s.center.x;
+        const dy = seg.y - s.center.y;
+        const dist = Math.hypot(dx, dy);
+
+        const buildingCovered = this._hasBuildingAt(seg.x, seg.y);
+        const insideCore = dist < 3.5;
+        const obsoleteInnerRing = currentRadius != null && dist < Math.max(4, currentRadius - 2);
+        const staleBreach = seg.state === 'breach' && seg.breachedAtTick != null && (tick - seg.breachedAtTick) >= 180;
+
+        if (buildingCovered || insideCore || obsoleteInnerRing || staleBreach) {
+          this.segments.delete(seg.tileIdx);
+          if (grid && seg.tileIdx >= 0 && seg.tileIdx < grid.length) {
+            grid[seg.tileIdx] = 0;
+          }
+          if (s.stockpile) {
+            if (seg.tierKey === 'stone_wall' || seg.tierKey === 'bastion') {
+              s.stockpile.ore = (s.stockpile.ore || 0) + 1;
+            } else {
+              s.stockpile.wood = (s.stockpile.wood || 0) + 1;
+            }
+          }
+          removed++;
+        } else {
+          kept.push(seg);
+        }
+      }
+      if (kept.length !== list.length) {
+        if (kept.length === 0) this.segmentsBySettlement.delete(sId);
+        else this.segmentsBySettlement.set(sId, kept);
+      }
+    }
+
+    if (removed > 0 && this.sim) {
+      this.sim._occStamp = -1;
+    }
+    return removed;
   }
 
   update(tick) {
@@ -771,6 +847,9 @@ export class FortificationSystem {
 
     this._updateTowerDefense(tick);
     this._repairWalls(tick);
+    if (tick >= 100 && tick % 100 === 0) {
+      this.cleanObsoleteWalls(tick);
+    }
 
     // Autonomous perimeter wall planning every 140 ticks once towns mature
     if (tick < 160 || tick - this.lastUpdateTick < 140) return;

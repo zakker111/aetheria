@@ -75,10 +75,13 @@ export function buildSettlementInspectPayload(
     (v: any) => v.settlementId === sId
   ).length;
 
+  const tickNow = sim.clock?.tick ?? 0;
+
   return {
     kind: 'settlement',
     entity: {
       ...settlement,
+      currentTick: tickNow,
       age: ageSummary,
       nuclearProgram,
       guilds,
@@ -96,10 +99,43 @@ export function buildBuildingInspectPayload(sim: any, building: any): InspectedE
       : null;
   const upgradeReq =
     typeof sim.getUpgradeRequirements === 'function' ? sim.getUpgradeRequirements(building) : null;
+  const tickNow = sim.clock?.tick ?? 0;
+  const ruinAgeTicks =
+    building.isRuined && building.ruinedAtTick != null
+      ? Math.max(0, tickNow - building.ruinedAtTick)
+      : 0;
+
+  const bType = building.buildingType || building.type;
+  let interredSummaries: any[] | undefined = undefined;
+  if (bType === 'cemetery' && Array.isArray(building.interredAgentIds)) {
+    interredSummaries = building.interredAgentIds
+      .slice()
+      .reverse()
+      .slice(0, 30)
+      .map((aid: number) => {
+        const d = typeof sim.getAgentDossier === 'function' ? sim.getAgentDossier(aid) : null;
+        if (!d) return null;
+        return {
+          id: d.id,
+          fullName: d.fullName || d.name,
+          age: Math.round(d.age ?? 0),
+          deathCause: d.deathCause || 'natural causes',
+          deathDetail: d.deathDetail || null,
+          deathTick: d.deathTick ?? null,
+        };
+      })
+      .filter(Boolean);
+  }
 
   return {
     kind: 'building',
-    entity: { ...building, settlementName: sName },
+    entity: {
+      ...building,
+      settlementName: sName,
+      currentTick: tickNow,
+      ruinAgeTicks,
+      ...(interredSummaries ? { interredSummaries } : {}),
+    },
     upgradeReq,
   };
 }
@@ -216,23 +252,25 @@ export function buildWorldHudSnapshot(sim: any, includeSocieties: boolean): Worl
     const diplomacy = sim.diplomacySystem;
     if (diplomacy) {
       const tickNow = sim.clock?.tick ?? 0;
-      wars = (diplomacy.activeWars || []).map((w: any) => ({
+      const activeWars = Array.isArray(diplomacy.activeWars) ? diplomacy.activeWars : [];
+      wars = activeWars.map((w: any) => ({
         attackerId: w.attackerId,
         attackerName: w.attackerName,
         defenderId: w.defenderId,
         defenderName: w.defenderName,
         casusBelli: w.casusBelli,
         whySummary: w.whySummary,
-        drivers: w.drivers,
+        drivers: Array.isArray(w.drivers) ? w.drivers.slice(0, 6) : [],
         warScore: diplomacy.calculateWarScore ? diplomacy.calculateWarScore(w) : 0,
         totalWar: Boolean(w.totalWar),
         casualties: w.casualties || {},
         plundered: w.plundered || { food: 0, wood: 0, ore: 0 },
       }));
 
-      treaties = (diplomacy.treaties || []).map((tr: any) => ({
+      const rawTreaties = Array.isArray(diplomacy.treaties) ? diplomacy.treaties : [];
+      treaties = rawTreaties.map((tr: any) => ({
         title: tr.title || 'Defensive Alliance',
-        settlements: tr.settlements,
+        settlements: Array.isArray(tr.settlements) ? tr.settlements : [],
       }));
 
       const allSettlements = Array.from(settlementMap.values());
@@ -265,10 +303,11 @@ export function buildWorldHudSnapshot(sim: any, includeSocieties: boolean): Worl
   }
 
   const speed = sim.clock?.speed ?? 0;
+  const rawChronicle = sim.chronicleSystem?.getHighlights ? sim.chronicleSystem.getHighlights(80) : [];
 
   return {
     time,
-    agentCount: sim.agents ? sim.agents.length : 0,
+    agentCount: Array.isArray(sim.agents) ? sim.agents.length : 0,
     births: sim.birthsThisSession || 0,
     deaths: sim.deathsThisSession || 0,
     avgDeathAge: sim.mortalityStats?.averageAgeAtDeath || 0,
@@ -291,6 +330,6 @@ export function buildWorldHudSnapshot(sim: any, includeSocieties: boolean): Worl
     treaties,
     relations,
     diplomaticHistory,
-    chronicleEntries: sim.chronicleSystem?.getHighlights ? sim.chronicleSystem.getHighlights(80) : [],
+    chronicleEntries: Array.isArray(rawChronicle) ? rawChronicle : [],
   };
 }

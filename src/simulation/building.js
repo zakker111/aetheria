@@ -10,6 +10,7 @@ export class Building {
     this.buildingType = buildingType; // "house", "farm", "windmill", "library", etc.
     this.constructionProgress = 0;
     this.complete = false;
+    this.isComplete = false;
     this.ownerId = null;
     this.storage = {};
     // Storage capacity: settlements are limited in how much food/wood/stone/
@@ -19,6 +20,9 @@ export class Building {
       castle: 240,
       tower: 160,
       barracks: 150,
+      church: 160,
+      cemetery: 140,
+      shrine: 90,
       granary: 130,
       warehouse: 150,
       windmill: 120,
@@ -62,6 +66,7 @@ export class Building {
     this.upgradedByName = null;
     this.upgradeHistory = [];
     this.dedication = null;
+    this.interredAgentIds = [];
     // Apply storage capacity for the building type (drives warehouse demand)
     const cap = STORAGE_CAPACITY[buildingType];
     if (cap) this.capacity = cap;
@@ -178,6 +183,7 @@ export class Building {
       upgradedByName: this.upgradedByName ?? null,
       upgradeHistory: Array.isArray(this.upgradeHistory) ? this.upgradeHistory.map(u => ({ ...u })) : [],
       dedication: this.dedication ?? null,
+      interredAgentIds: Array.isArray(this.interredAgentIds) ? [...this.interredAgentIds] : [],
       storage: { ...this.storage }
     };
   }
@@ -213,6 +219,7 @@ export class Building {
     if (data.upgradedByName != null) building.upgradedByName = data.upgradedByName;
     if (Array.isArray(data.upgradeHistory)) building.upgradeHistory = data.upgradeHistory.map(u => ({ ...u }));
     if (data.dedication != null) building.dedication = data.dedication;
+    if (Array.isArray(data.interredAgentIds)) building.interredAgentIds = [...data.interredAgentIds];
     building.storage = { ...data.storage };
     return building;
   }

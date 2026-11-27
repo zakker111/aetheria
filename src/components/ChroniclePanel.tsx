@@ -150,7 +150,7 @@ const ChroniclePanelComponent: React.FC<ChroniclePanelProps> = ({
           )
         ) : events.length === 0 ? (
           <div className="text-slate-400 italic text-[11px]">
-            World awakened with 128×128 terrain and biomes.
+            World awakened with 160×160 terrain and biomes.
           </div>
         ) : (
           events.map((evt, idx) => (

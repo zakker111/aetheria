@@ -4,6 +4,8 @@ interface DynastiesTabProps {
   simulation: any;
   dynasties: any[];
   settlements: any[];
+  onRenameSettlement?: (settlementId: number, newName: string) => void;
+  onRenameAgent?: (agentId: number, newName: string) => void;
   onPanTo?: (x: number, y: number) => void;
   onRefresh: () => void;
 }
@@ -12,12 +14,16 @@ export const DynastiesTab: React.FC<DynastiesTabProps> = ({
   simulation,
   dynasties,
   settlements,
+  onRenameSettlement,
+  onRenameAgent,
   onPanTo,
   onRefresh,
 }) => {
   const [selectedDynastyId, setSelectedDynastyId] = useState<number | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
   const [marriageTargetDynastyId, setMarriageTargetDynastyId] = useState<number | null>(null);
+  const [editKind, setEditKind] = useState<'monarch' | 'settlement' | null>(null);
+  const [draftName, setDraftName] = useState('');
 
   const currentDynasty = selectedDynastyId
     ? dynasties.find((d) => d.id === selectedDynastyId) || dynasties[0]
@@ -111,9 +117,66 @@ export const DynastiesTab: React.FC<DynastiesTabProps> = ({
             {/* Succession Law Switcher */}
             <div className="border-t border-white/8 pt-2.5">
               <div className="text-[11px] text-slate-500 font-semibold">REIGNING MONARCH</div>
-              <div className="text-sm font-bold text-slate-50 mt-0.5">
-                {currentDynasty.monarchTitle} {currentDynasty.monarchName}
-              </div>
+              {editKind === 'monarch' ? (
+                <div className="flex items-center gap-1 mt-1">
+                  <input
+                    type="text"
+                    value={draftName}
+                    maxLength={40}
+                    autoFocus
+                    onChange={(ev) => setDraftName(ev.target.value)}
+                    onKeyDown={(ev) => {
+                      if (ev.key === 'Enter' && draftName.trim() && currentDynasty.monarchId != null) {
+                        onRenameAgent?.(currentDynasty.monarchId, draftName.trim());
+                        setEditKind(null);
+                        onRefresh();
+                      } else if (ev.key === 'Escape') {
+                        setEditKind(null);
+                      }
+                    }}
+                    className="flex-1 min-w-0 px-2 py-0.5 rounded bg-slate-900 border border-sky-400/60 text-slate-50 text-xs outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (draftName.trim() && currentDynasty.monarchId != null) {
+                        onRenameAgent?.(currentDynasty.monarchId, draftName.trim());
+                        onRefresh();
+                      }
+                      setEditKind(null);
+                    }}
+                    className="px-2 py-0.5 rounded bg-sky-400 text-slate-950 text-[10px] font-bold border-0 cursor-pointer"
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditKind(null)}
+                    className="px-1.5 py-0.5 rounded bg-slate-700 text-slate-200 text-[10px] border-0 cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2 mt-0.5">
+                  <div className="text-sm font-bold text-slate-50 truncate">
+                    {currentDynasty.monarchTitle} {currentDynasty.monarchName}
+                  </div>
+                  {onRenameAgent && currentDynasty.monarchId != null && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDraftName(currentDynasty.monarchName || '');
+                        setEditKind('monarch');
+                      }}
+                      title="Rename monarch"
+                      className="px-1.5 py-0.5 rounded bg-slate-900/80 border border-white/15 text-slate-300 hover:text-white text-[10px] cursor-pointer shrink-0"
+                    >
+                      ✏️
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="flex gap-1 mt-2 bg-slate-900 p-0.5 rounded-md">
                 <button
                   onClick={() => handleSetSuccessionLaw(currentDynasty.id, 'primogeniture')}
@@ -277,13 +340,71 @@ export const DynastiesTab: React.FC<DynastiesTabProps> = ({
               Click any noble to inspect title, age, succession position, or pan to map.
             </div>
           </div>
-          {currentSettlement && onPanTo && (
-            <button
-              onClick={() => onPanTo(currentSettlement.center.x, currentSettlement.center.y)}
-              className="py-1.5 px-3 bg-sky-400/15 border border-sky-400/40 text-sky-400 rounded-md text-xs font-semibold cursor-pointer hover:bg-sky-400/25 whitespace-nowrap"
-            >
-              📍 Pan to Capital ({currentSettlement.name})
-            </button>
+          {currentSettlement && (
+            <div className="flex items-center gap-2 flex-wrap">
+              {editKind === 'settlement' ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={draftName}
+                    maxLength={40}
+                    autoFocus
+                    onChange={(ev) => setDraftName(ev.target.value)}
+                    onKeyDown={(ev) => {
+                      if (ev.key === 'Enter' && draftName.trim()) {
+                        onRenameSettlement?.(currentSettlement.id, draftName.trim());
+                        setEditKind(null);
+                        onRefresh();
+                      } else if (ev.key === 'Escape') {
+                        setEditKind(null);
+                      }
+                    }}
+                    className="w-36 px-2 py-1 rounded bg-slate-900 border border-sky-400/60 text-slate-50 text-xs outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (draftName.trim()) {
+                        onRenameSettlement?.(currentSettlement.id, draftName.trim());
+                        onRefresh();
+                      }
+                      setEditKind(null);
+                    }}
+                    className="px-2 py-1 rounded bg-sky-400 text-slate-950 text-xs font-bold border-0 cursor-pointer"
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditKind(null)}
+                    className="px-2 py-1 rounded bg-slate-700 text-slate-200 text-xs border-0 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                onRenameSettlement && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDraftName(currentSettlement.name || '');
+                      setEditKind('settlement');
+                    }}
+                    className="py-1.5 px-2.5 bg-slate-800 border border-white/15 text-slate-200 rounded-md text-xs font-semibold cursor-pointer hover:bg-slate-700 whitespace-nowrap"
+                  >
+                    ✏️ Rename {currentSettlement.name}
+                  </button>
+                )
+              )}
+              {onPanTo && (
+                <button
+                  onClick={() => onPanTo(currentSettlement.center.x, currentSettlement.center.y)}
+                  className="py-1.5 px-3 bg-sky-400/15 border border-sky-400/40 text-sky-400 rounded-md text-xs font-semibold cursor-pointer hover:bg-sky-400/25 whitespace-nowrap"
+                >
+                  📍 Pan to Capital ({currentSettlement.name})
+                </button>
+              )}
+            </div>
           )}
         </div>
 

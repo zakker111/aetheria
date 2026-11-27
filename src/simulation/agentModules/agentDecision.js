@@ -393,6 +393,34 @@ export function generateGoals(agent, simulation, perception = null) {
         agent.goals.push({ type: "pray_at_temple", priority: isPriest ? 55 : 34, target: settlement.center });
       }
 
+      if (isPriest && ((agent.id * 11 + t) % 20) === 0) {
+        agent.goals.push({ type: "conjure_fallen", priority: 58, target: settlement.center });
+      }
+
+      if (!isChild && !isGuard && !agent.militaryDuty && !agent.captive &&
+          agent.needs.food > 45 && agent.needs.water > 45 &&
+          ((agent.id * 19 + t) % 45) === 0 && simulation.settlementSystem?.settlements?.size > 1) {
+        let bestNeighbor = null;
+        let bestDist = Infinity;
+        for (const other of simulation.settlementSystem.settlements.values()) {
+          if (!other || other.id === settlement.id || other.ruined || !other.center) continue;
+          const rel = simulation.diplomacySystem?.getRelation?.(settlement.id, other.id);
+          if (rel?.status === "war") continue;
+          const d = Math.hypot(other.center.x - agent.x, other.center.y - agent.y);
+          if (d <= 55 && d < bestDist) {
+            bestDist = d;
+            bestNeighbor = other;
+          }
+        }
+        if (bestNeighbor) {
+          agent.goals.push({
+            type: "wander_to_town",
+            priority: 39,
+            target: { x: bestNeighbor.center.x, y: bestNeighbor.center.y, settlementId: bestNeighbor.id }
+          });
+        }
+      }
+
       if (!isChild && ((agent.id * 9 + t) % 15) === 0) {
         agent.goals.push({ type: "watch_crafts", priority: 30, target: settlement.center });
       }
@@ -880,10 +908,26 @@ export function generateActions(agent, perception, world, simulation) {
       }
 
       case "pray_at_temple": {
-        const temple = agent.findSettlementBuilding(simulation, goal.target, ["temple"]);
+        const temple = agent.findSettlementBuilding(simulation, goal.target, ["temple", "church", "shrine"]);
         const target = temple || agent.pickTempleSpot(simulation, goal.target);
         if (target) {
           actions.push({ type: "pray_at_temple", target, score: goal.priority });
+        }
+        break;
+      }
+
+      case "conjure_fallen": {
+        const cem = agent.findSettlementBuilding(simulation, goal.target, ["cemetery"]);
+        const sacred = cem || agent.findSettlementBuilding(simulation, goal.target, ["temple", "church", "shrine"]) || agent.pickTempleSpot(simulation, goal.target);
+        if (sacred) {
+          actions.push({ type: "conjure_fallen", target: sacred, score: goal.priority });
+        }
+        break;
+      }
+
+      case "wander_to_town": {
+        if (goal.target) {
+          actions.push({ type: "wander_to_town", target: goal.target, score: goal.priority });
         }
         break;
       }

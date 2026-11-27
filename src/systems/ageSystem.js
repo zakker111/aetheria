@@ -37,6 +37,28 @@ export class AgeSystem {
     agePopulation() {
         const agents = Array.isArray(this.sim.agents) ? this.sim.agents : Array.from(this.sim.agents.values());
         const expired = [];
+        const hazards = [];
+
+        const rng = typeof this.sim?._rng === 'function' ? this.sim._rng() : null;
+        const season = this.sim?.clock?.getSeason?.() || 'spring';
+        const isWinter = season === 'winter';
+
+        // Per-settlement population & apothecary mitigation cache (zero RNG)
+        const popBySettlement = new Map();
+        for (let i = 0; i < agents.length; i++) {
+            const a = agents[i];
+            if (a && a.alive && a.settlementId != null) {
+                popBySettlement.set(a.settlementId, (popBySettlement.get(a.settlementId) || 0) + 1);
+            }
+        }
+        const apothecaryBySettlement = new Map();
+        if (Array.isArray(this.sim.buildings)) {
+            for (const b of this.sim.buildings) {
+                if (b && b.complete && !b.isRuined && b.buildingType === 'apothecary' && b.settlementId != null) {
+                    apothecaryBySettlement.set(b.settlementId, (apothecaryBySettlement.get(b.settlementId) || 0) + (b.level || 1));
+                }
+            }
+        }
 
         for (let i = 0; i < agents.length; i++) {
             const agent = agents[i];
@@ -55,11 +77,107 @@ export class AgeSystem {
             } else if (agent.lifeStage === 'adult' && agent.age >= this.ELDER_AGE) {
                 this.onBecomeElder(agent);
             }
+
+            // Seeded annual hazards for non-expired citizens (protect tiny struggling villages <= 4 pop)
+            if (rng) {
+                const sPop = agent.settlementId != null ? (popBySettlement.get(agent.settlementId) || 0) : 6;
+                if (sPop <= 4) continue;
+
+                const apothecaryLevel = agent.settlementId != null ? (apothecaryBySettlement.get(agent.settlementId) || 0) : 0;
+                const medicineMitigation = 1 + apothecaryLevel * 1.4;
+                const crowdingFactor = sPop >= 16 ? 1.35 : (sPop >= 10 ? 1.15 : 1.0);
+                const winterFactor = isWinter ? 1.5 : 1.0;
+
+                const age = agent.age || 0;
+                const baseDisease = age >= this.ELDER_AGE ? 0.010 : (age < this.ADULT_AGE ? 0.0025 : 0.0038);
+                const diseaseProb = (baseDisease * winterFactor * crowdingFactor) / medicineMitigation;
+
+                const roll = rng.next();
+                if (roll < diseaseProb) {
+                    const pool = isWinter
+                        ? ['Winter lung fever', 'Bitter hearth chill', 'Frostbite gangrene', 'Seasonal chest rot']
+                        : ['Marsh ague', 'Wasting fever', 'Camp dysentery', 'Sweating sickness', 'Spotted pox'];
+                    const detail = pool[Math.floor(rng.next() * pool.length)];
+                    hazards.push({ agent, cause: 'disease', detail });
+                    continue;
+                }
+
+                // Occupational accident for working non-military adults
+                let accidentProb = 0;
+                if (agent.lifeStage === 'adult' && !agent.militaryDuty && agent.job && agent.job !== 'unemployed') {
+                    accidentProb = (agent.job === 'miner' || agent.job === 'lumberjack' || agent.job === 'hunter')
+                        ? 0.0030
+                        : 0.0018;
+                }
+                if (accidentProb > 0 && roll < diseaseProb + accidentProb) {
+                    const detail = this._pickAccidentDetail(agent.job, rng);
+                    hazards.push({ agent, cause: 'accident', detail });
+                    continue;
+                }
+
+                // Very rare procedurally generated funny misadventure (ages 10+)
+                if (age >= 10) {
+                    const recklessBoost = ((agent.personality?.curious || 0) > 0.7 || (agent.personality?.brave || 0) > 0.75) ? 1.4 : 1.0;
+                    const misadventureProb = 0.0015 * recklessBoost;
+                    if (roll < diseaseProb + accidentProb + misadventureProb) {
+                        const detail = this._generateMisadventureDetail(rng);
+                        hazards.push({ agent, cause: 'misadventure', detail });
+                        continue;
+                    }
+                }
+            }
         }
 
         for (let i = 0; i < expired.length; i++) {
-            this.handleDeath(expired[i], 'old_age');
+            this.handleDeath(expired[i], 'old_age', 'Passed peacefully of old age');
         }
+        for (let i = 0; i < hazards.length; i++) {
+            const h = hazards[i];
+            this.handleDeath(h.agent, h.cause, h.detail);
+        }
+    }
+
+    _pickAccidentDetail(job, rng) {
+        const byJob = {
+            miner: ['Deep shaft cave-in', 'Firedamp tunnel blast', 'Collapsed ore hoist'],
+            lumberjack: ['Felled by a falling ancient oak', 'Pinned beneath rolling logs', 'Sawmill kickback injury'],
+            builder: ['Scaffolding collapse', 'Crushed by a dropped masonry block', 'Stepped off an unfinished roofline'],
+            hunter: ['Gored by a cornered wild boar', 'Sprung bear trap mishap', 'Fell from a mossy crag while stalking'],
+            craftsman: ['Forge crucible burst', 'Kiln overheat collapse', 'Chisel & anvil splinter wound'],
+            farmer: ['Grain wagon overturn', 'Kicked by a startled plow ox', 'Thresher blade mishap'],
+            gatherer: ['Ate suspiciously bright forest berries', 'Slipped down a slick ravine', 'Bitten by a riverbank viper'],
+            priest: ['Brazier incense asphyxiation', 'Bell-tower rope snap', 'Collapsed sanctuary stone'],
+        };
+        const pool = byJob[job] || ['Slip on wet cobblestones', 'Runaway cart collision', 'Hearth grease fire'];
+        return pool[Math.floor(rng.next() * pool.length)];
+    }
+
+    _generateMisadventureDetail(rng) {
+        const actions = [
+            'Tried to juggle lit torches',
+            'Chased a runaway wheel of cheese',
+            'Attempted to hug a suspiciously fluffy wild bear',
+            'Tested whether lightning strikes twice',
+            'Tried to teach a stubborn mule to swim',
+            'Entered an intense staring contest with a badger',
+            'Attempted to brew ale out of swamp mushrooms',
+            'Tried to ride a greased barrel down the watchtower stairs',
+            'Dared a rival to catch a falling anvil',
+            'Snoozed inside a grain chute during harvest',
+            'Tried to pet a wild bull moose',
+            'Attempted a heroic backflip off the granary roof',
+        ];
+        const twists = [
+            'with predictably catastrophic results',
+            'directly into a shallow town well',
+            'moments before sunset',
+            'to the lasting bewilderment of the town elders',
+            'while wearing ceremonial wooden clogs',
+            'against everyone’s shouted advice',
+        ];
+        const a = actions[Math.floor(rng.next() * actions.length)];
+        const t = twists[Math.floor(rng.next() * twists.length)];
+        return `${a} ${t}`;
     }
 
     onBecomeAdult(agent) {
@@ -103,7 +221,7 @@ export class AgeSystem {
         });
     }
 
-    handleDeath(agent, cause) {
+    handleDeath(agent, cause, detail = null) {
         // Notify living relatives via RelationshipSystem
         if (this.sim.relationshipSystem?.getRelatives) {
             const rels = this.sim.relationshipSystem.getRelatives(agent.id);
@@ -136,13 +254,26 @@ export class AgeSystem {
 
         agent.alive = false;
         agent.deathCause = cause || 'old_age';
+        if (detail) agent.deathDetail = detail;
+
+        if (typeof agent.addLifeEvent === 'function' && (!agent.lifeHistory || !agent.lifeHistory.some(e => e.kind === 'DEATH'))) {
+            const iconMap = { disease: '🤒', accident: '⚠️', misadventure: '🤪', old_age: '🕯️' };
+            const icon = iconMap[agent.deathCause] || '🕯️';
+            const ageYr = Math.floor(agent.age || 0);
+            const text = agent.deathDetail
+                ? `Died at age ${ageYr} (${agent.deathCause.replace(/_/g, ' ')}): ${agent.deathDetail}`
+                : `Died of ${agent.deathCause.replace(/_/g, ' ')} at age ${ageYr}`;
+            agent.addLifeEvent('DEATH', text, this.sim?.clock?.tick ?? 0, icon, true);
+        }
+
         this.sim.removeAgent(agent.id, agent.deathCause);
         
         this.eventBus.emit('agent:died', {
             id: agent.id,
             name: agent.name,
             age: agent.age,
-            cause: agent.deathCause
+            cause: agent.deathCause,
+            detail: agent.deathDetail || null
         });
     }
 
@@ -191,8 +322,8 @@ export class AgeSystem {
             } else if ((agent.id * 17 + currentTick) % 20 === 0) {
                 const jx = (((agent.id * 13 + currentTick) % 3) - 1) * 0.5;
                 const jy = (((agent.id * 29 + currentTick) % 3) - 1) * 0.5;
-                const nx = Math.max(2, Math.min((this.sim.world?.width || 128) - 2, agent.x + jx));
-                const ny = Math.max(2, Math.min((this.sim.world?.height || 128) - 2, agent.y + jy));
+                const nx = Math.max(2, Math.min((this.sim.world?.width || 160) - 2, agent.x + jx));
+                const ny = Math.max(2, Math.min((this.sim.world?.height || 160) - 2, agent.y + jy));
                 if (!this.sim.world || this.sim.world.isWalkable(Math.floor(nx), Math.floor(ny))) {
                     agent.x = nx;
                     agent.y = ny;

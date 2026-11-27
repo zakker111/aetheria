@@ -8,6 +8,8 @@ export const ACTION_DESCRIPTIONS: Record<string, string> = {
   gather_at_hearth: '🔥 Gathering around village hearth',
   visit_market: '🛍️ Browsing market square',
   pray_at_temple: '🙏 Praying at temple',
+  conjure_fallen: '👻 Conjuring ancestral spirits',
+  wander_to_town: '🏘️ Visiting neighboring town',
   watch_crafts: '🔨 Watching blacksmith forge',
   train_at_barracks: '🛡️ Practicing combat drills',
   patrol_settlement: '🛡️ Patrolling town perimeter',

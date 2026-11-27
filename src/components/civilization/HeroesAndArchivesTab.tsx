@@ -10,8 +10,10 @@ interface HeroesAndArchivesTabProps {
   onExportWorld?: () => void;
   onExportChronicle?: () => void;
   onImportWorld?: (file: File) => void;
+  onRenameAgent?: (agentId: number, newName: string) => void;
   onPanTo?: (x: number, y: number) => void;
   onFollowAgent?: (id: number) => void;
+  onRefresh?: () => void;
   onClose: () => void;
 }
 
@@ -25,8 +27,10 @@ export const HeroesAndArchivesTab: React.FC<HeroesAndArchivesTabProps> = ({
   onExportWorld,
   onExportChronicle,
   onImportWorld,
+  onRenameAgent,
   onPanTo,
   onFollowAgent,
+  onRefresh,
   onClose,
 }) => {
   const [archiveEraFilter, setArchiveEraFilter] = useState<number | null>(null);
@@ -34,7 +38,13 @@ export const HeroesAndArchivesTab: React.FC<HeroesAndArchivesTabProps> = ({
   const [peopleFilter, setPeopleFilter] = useState<'all' | 'legends' | 'builders' | 'heirlooms'>('all');
   const [peopleSettlementFilter, setPeopleSettlementFilter] = useState<string>('all');
   const [selectedHouseSurname, setSelectedHouseSurname] = useState<string | null>(null);
+  const [editingAgentId, setEditingAgentId] = useState<number | null>(null);
+  const [draftAgentName, setDraftAgentName] = useState('');
   const archiveFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const fallenSettlements: any[] = Array.isArray(simulation.fallenSettlements)
+    ? simulation.fallenSettlements
+    : [];
 
   const roster = simulation.getHistoricalPeopleRoster?.() || null;
   const rawLivingLegends: any[] =
@@ -346,11 +356,61 @@ export const HeroesAndArchivesTab: React.FC<HeroesAndArchivesTabProps> = ({
                     }`}
                   >
                     <div className="flex justify-between items-start gap-2">
-                      <div className="min-w-0">
-                        <div className="font-bold text-sm text-slate-50 truncate">
-                          {h.isMonarch ? '👑 ' : ''}
-                          {displayName}
-                        </div>
+                      <div className="min-w-0 flex-1">
+                        {editingAgentId === h.id ? (
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="text"
+                              value={draftAgentName}
+                              maxLength={40}
+                              autoFocus
+                              onChange={(ev) => setDraftAgentName(ev.target.value)}
+                              onKeyDown={(ev) => {
+                                if (ev.key === 'Enter' && draftAgentName.trim()) {
+                                  onRenameAgent?.(h.id, draftAgentName.trim());
+                                  setEditingAgentId(null);
+                                  onRefresh?.();
+                                } else if (ev.key === 'Escape') {
+                                  setEditingAgentId(null);
+                                }
+                              }}
+                              className="flex-1 min-w-0 px-1.5 py-0.5 rounded bg-slate-900 border border-sky-400/60 text-slate-50 text-xs outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (draftAgentName.trim()) {
+                                  onRenameAgent?.(h.id, draftAgentName.trim());
+                                  onRefresh?.();
+                                }
+                                setEditingAgentId(null);
+                              }}
+                              className="px-1.5 py-0.5 rounded bg-sky-400 text-slate-950 text-[10px] font-bold border-0 cursor-pointer"
+                            >
+                              Save
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="font-bold text-sm text-slate-50 truncate flex items-center gap-1.5">
+                            <span className="truncate">
+                              {h.isMonarch ? '👑 ' : ''}
+                              {displayName}
+                            </span>
+                            {onRenameAgent && (
+                              <button
+                                type="button"
+                                title="Rename citizen"
+                                onClick={() => {
+                                  setDraftAgentName(`${h.name}${h.surname ? ` ${h.surname}` : ''}`);
+                                  setEditingAgentId(h.id);
+                                }}
+                                className="px-1 py-0.5 rounded bg-slate-900/70 border border-white/10 text-slate-400 hover:text-white text-[10px] cursor-pointer shrink-0"
+                              >
+                                ✏️
+                              </button>
+                            )}
+                          </div>
+                        )}
                         <div className="text-[11px] text-slate-400 font-mono-tabular mt-0.5">
                           {homeName} · {h.jobTitle || 'Citizen'} · Age {Math.floor(h.age || 0)} · Gen{' '}
                           {h.generation ?? 1}
@@ -641,7 +701,7 @@ export const HeroesAndArchivesTab: React.FC<HeroesAndArchivesTabProps> = ({
                     </div>
                     <div className="text-[11px] text-slate-400 font-mono-tabular">
                       {h.settlementName} · {h.kills || 0} Kills · {h.buildingsBuilt || 0} Built ·
-                      Died Age {h.age} ({String(h.deathCause || h.cause || 'natural').replace(/_/g, ' ')})
+                      Died Age {h.age} ({String(h.deathCause || h.cause || 'natural').replace(/_/g, ' ')}{h.deathDetail ? ` — ${h.deathDetail}` : ''})
                     </div>
                     {(h.heirloom || h.legendaryWeapon) && (
                       <div className="text-[11px] text-amber-500">
@@ -660,6 +720,68 @@ export const HeroesAndArchivesTab: React.FC<HeroesAndArchivesTabProps> = ({
           ) : (
             <div className="text-slate-500 text-xs">
               No fallen citizens or legends recorded yet.
+            </div>
+          )}
+        </div>
+
+        {/* Fallen Settlements & Lost Realms Archive */}
+        <div>
+          <h3 className="mt-2 mb-1 text-[15px] font-bold text-slate-50">
+            Fallen Settlements &amp; Lost Realms ({fallenSettlements.length})
+          </h3>
+          {fallenSettlements.length > 0 ? (
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-2.5 mt-2">
+              {fallenSettlements.map((fs: any) => {
+                const st = fs.stats || {};
+                const isMerged = fs.outcome === 'merged';
+                return (
+                  <div
+                    key={`fallen_set_${fs.id}_${fs.endedAt || 0}`}
+                    className={`p-3 rounded-lg bg-slate-900/70 border flex flex-col gap-1.5 ${
+                      isMerged ? 'border-sky-400/25' : 'border-red-400/25'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="min-w-0">
+                        <div className="font-bold text-[13px] text-slate-100 truncate">
+                          {fs.tierIcon || '🏚️'} {fs.name}
+                        </div>
+                        <div className="text-[11px] text-slate-400 font-mono-tabular">
+                          {fs.eraIcon || '🪨'} {fs.eraName || 'Tribal Era'} · {fs.faithIcon || '✨'} {fs.faithName || 'Folk'} · Ended Y{fs.endedYear || 1}
+                        </div>
+                      </div>
+                      {onPanTo && fs.center && (
+                        <button
+                          onClick={() => {
+                            onPanTo(fs.center.x, fs.center.y);
+                            onClose();
+                          }}
+                          className="py-1 px-2 bg-amber-500/14 border border-amber-500/35 rounded text-amber-400 text-[10px] font-semibold cursor-pointer shrink-0 hover:bg-amber-500/25"
+                        >
+                          Locate
+                        </button>
+                      )}
+                    </div>
+                    <div className={`text-[11px] font-semibold ${isMerged ? 'text-sky-300' : 'text-red-300'}`}>
+                      {isMerged
+                        ? `🤝 United with ${fs.absorbedByName || 'Neighboring Realm'}`
+                        : `🏚️ ${fs.reason || 'Collapsed into Ruins'}`}
+                    </div>
+                    <div className="text-[11px] text-slate-300 font-mono-tabular">
+                      👥 Peak {fs.peakPopulation || st.peakPopulation || 0} · 👶 +{st.births || 0} / 🕯️ -{st.deaths || 0} · 🏗️ {st.buildingsBuilt || 0} Built · ⚔️ {st.warsFought || 0} Wars ({st.battlesWon || 0} Won)
+                    </div>
+                    {Array.isArray(fs.notables) && fs.notables.length > 0 && (
+                      <div className="text-[10px] text-slate-400 truncate">
+                        Notable Leaders: {fs.notables.join(', ')}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-slate-500 text-xs">
+              All founded realms remain standing so far.
             </div>
           )}
         </div>

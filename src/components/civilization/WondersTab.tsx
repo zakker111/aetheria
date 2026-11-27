@@ -13,7 +13,7 @@ interface WondersTabProps {
 
 export const WondersTab: React.FC<WondersTabProps> = ({
   simulation,
-  settlements,
+  settlements: rawSettlements,
   onAdvanceWonder,
   onCommissionWonder,
   onLaunchSpyOp,
@@ -21,6 +21,7 @@ export const WondersTab: React.FC<WondersTabProps> = ({
   onClose,
   onRefresh,
 }) => {
+  const settlements = Array.isArray(rawSettlements) ? rawSettlements : [];
   const [spyFromId, setSpyFromId] = useState<number | null>(null);
   const [spyTargetId, setSpyTargetId] = useState<number | null>(null);
 
@@ -241,7 +242,7 @@ export const WondersTab: React.FC<WondersTabProps> = ({
           })()}
 
         <div className="flex flex-col gap-2">
-          {(simulation.espionageSystem?.operationsLog || [])
+          {(Array.isArray(simulation?.espionageSystem?.operationsLog) ? simulation.espionageSystem.operationsLog : [])
             .slice()
             .reverse()
             .slice(0, 18)

@@ -613,3 +613,51 @@ export function renderVisualEffects(r, visualRng) {
     }
   }
 }
+
+export function renderSpectralSpirits(r) {
+  const spirits = r.simulation?.spectralSpirits;
+  if (!spirits || spirits.length === 0) return;
+  const ctx = r.ctx;
+  const zoom = r.camera.zoom;
+  const now = r._frameNow;
+
+  for (let i = 0; i < spirits.length; i++) {
+    const sp = spirits[i];
+    if (!sp) continue;
+    const screen = r.worldToScreen(sp.x, sp.y);
+    if (screen.x < -60 || screen.y < -60 || screen.x > r.canvas.width + 60 || screen.y > r.canvas.height + 60) {
+      continue;
+    }
+    const hoverY = screen.y - Math.max(8, zoom * 0.55) + Math.sin(now * 0.005 + (sp.id || i)) * 4;
+    const rad = Math.max(5, zoom * 0.42);
+
+    ctx.save();
+    const glow = ctx.createRadialGradient(screen.x, hoverY, 1, screen.x, hoverY, rad * 2.2);
+    glow.addColorStop(0, "rgba(103, 232, 249, 0.72)");
+    glow.addColorStop(0.55, "rgba(167, 139, 250, 0.32)");
+    glow.addColorStop(1, "rgba(56, 189, 248, 0)");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(screen.x, hoverY, rad * 2.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(224, 242, 254, 0.88)";
+    ctx.beginPath();
+    ctx.arc(screen.x, hoverY - rad * 0.15, rad * 0.65, Math.PI, 0);
+    ctx.lineTo(screen.x + rad * 0.65, hoverY + rad * 0.7);
+    ctx.lineTo(screen.x + rad * 0.2, hoverY + rad * 0.42);
+    ctx.lineTo(screen.x, hoverY + rad * 0.75);
+    ctx.lineTo(screen.x - rad * 0.25, hoverY + rad * 0.42);
+    ctx.lineTo(screen.x - rad * 0.65, hoverY + rad * 0.7);
+    ctx.closePath();
+    ctx.fill();
+
+    if (zoom >= 9 && sp.name) {
+      ctx.font = "bold 10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(186, 230, 253, 0.95)";
+      ctx.fillText(`👻 ${sp.name}`, screen.x, hoverY - rad * 1.1);
+    }
+    ctx.restore();
+  }
+}

@@ -24,6 +24,9 @@ export const BUILDING_TYPES = {
   HOUSE: 'house',
   WORKSHOP: 'workshop',
   TEMPLE: 'temple',
+  SHRINE: 'shrine',
+  CHURCH: 'church',
+  CEMETERY: 'cemetery',
   BARRACKS: 'barracks',
   MARKET: 'market',
   FARM: 'farm',
@@ -68,6 +71,9 @@ export const STORAGE_CAPACITY = {
   warehouse: 250,
   dock: 80,
   temple: 20,
+  shrine: 10,
+  church: 30,
+  cemetery: 15,
   barracks: 30,
   castle: 120,
   tower: 20,
@@ -102,7 +108,10 @@ export const BUILD_COSTS = {
   dock:          { plank: 4 },
   windmill:      { plank: 4 },
   workshop:      { plank: 4 },
+  shrine:        { plank: 2 },
+  cemetery:      { plank: 3, iron_ingot: 1 },
   temple:        { plank: 4, iron_ingot: 2 },
+  church:        { plank: 5, iron_ingot: 2 },
   tower:         { plank: 4, iron_ingot: 2 },
   barracks:      { plank: 4, iron_ingot: 2 },
   inn:           { plank: 4, iron_ingot: 1 },
@@ -202,6 +211,51 @@ export const BUILDING_METADATA = {
       'Supports town rituals & belief spread',
       '+45% sanctuary aura & faith cohesion',
       '+90% sanctuary aura & pilgrimage pull'
+    ]
+  },
+  shrine: {
+    name: 'Wayside Shrine',
+    icon: '🪔',
+    minEra: 1,
+    maxLevel: 3,
+    upgradeEras: { 2: 2, 3: 4 },
+    upgradeCosts: { 2: { wood: 10, ore: 4 }, 3: { wood: 16, ore: 8 } },
+    levelNames: ['Timber Shrine', 'Stone Sanctuary', 'Sacred Lantern Altar'],
+    roleSummary: 'Humble neighborhood altar nurturing citizen faith & quiet devotion.',
+    levelBonuses: [
+      'Restores nearby citizen faith & inspires piety',
+      '+45% devotion aura · Deeper sanctuary peace',
+      '+90% devotion aura · Radiant neighborhood lantern'
+    ]
+  },
+  church: {
+    name: 'Parish Church',
+    icon: '⛪',
+    minEra: 2,
+    maxLevel: 3,
+    upgradeEras: { 2: 3, 3: 5 },
+    upgradeCosts: { 2: { wood: 20, ore: 12 }, 3: { wood: 30, ore: 20 } },
+    levelNames: ['Stone Chapel', 'Bell-Tower Church', 'Grand Abbey'],
+    roleSummary: 'Bell-tower parish hall anchoring congregation sermons, charity & priesthood.',
+    levelBonuses: [
+      'Hosts sermons & accelerates priest ordination',
+      '+45% parish aura & charitable morale boost',
+      '+90% grand abbey faith & communion pull'
+    ]
+  },
+  cemetery: {
+    name: 'Hallowed Cemetery',
+    icon: '🪦',
+    minEra: 1,
+    maxLevel: 3,
+    upgradeEras: { 2: 3, 3: 5 },
+    upgradeCosts: { 2: { wood: 12, ore: 8 }, 3: { wood: 20, ore: 14 } },
+    levelNames: ['Memorial Yard', 'Walled Necropolis', 'Hallowed Mausoleum'],
+    roleSummary: 'Interred resting grounds preserving citizen memorials & ancestral spirit rites.',
+    levelBonuses: [
+      'Inters fallen citizens & enables spirit conjuring',
+      'Preserves expanded memorials & longer spirit vigils',
+      'Sanctifies heroic mausoleum tombs & stronger ancestor blessings'
     ]
   },
   market: {

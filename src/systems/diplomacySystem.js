@@ -318,6 +318,13 @@ export class DiplomacySystem {
     const dist = Math.hypot(s1.center.x - s2.center.x, s1.center.y - s2.center.y);
     if (dist < 30) baseScore -= 10; // Natural border friction
 
+    const f1 = this.sim.religionSystem?.getDominantFaith?.(s1) || s1.culture?.beliefId || null;
+    const f2 = this.sim.religionSystem?.getDominantFaith?.(s2) || s2.culture?.beliefId || null;
+    const compat = (f1 && f2 && this.sim.religionSystem?.getCreedCompatibility)
+      ? this.sim.religionSystem.getCreedCompatibility(f1, f2)
+      : 0;
+    baseScore += Math.round(compat * 16);
+
     baseScore = Math.max(15, Math.min(95, Math.round(baseScore)));
 
     let status = DIPLOMATIC_STATUS.PEACE;
@@ -713,6 +720,14 @@ export class DiplomacySystem {
         const grudge = Math.max(g12, g21);
         if (grudge > 0) rel.score -= grudge * 0.09;
 
+        const faith1 = this.sim.religionSystem?.getDominantFaith?.(s1) || s1.culture?.beliefId || null;
+        const faith2 = this.sim.religionSystem?.getDominantFaith?.(s2) || s2.culture?.beliefId || null;
+        if (faith1 && faith2 && this.sim.religionSystem?.getCreedCompatibility) {
+          const compat = this.sim.religionSystem.getCreedCompatibility(faith1, faith2);
+          if (compat >= 0.4) rel.score += 0.14;
+          else if (compat <= -0.45) rel.score -= 0.18;
+        }
+
         rel.score = Math.max(0, Math.min(100, rel.score));
 
         // State transitions
@@ -1106,24 +1121,30 @@ export class DiplomacySystem {
           score: 20 + (25 - rel.score) * 1.5 });
       }
 
-      // 3) Religious difference — zealous attacker vs heretic neighbor of a different faith
+      // 3) Religious difference — zealous attacker vs incompatible heretic neighbor
       const attFaith = att.id === s1.id ? faith1 : faith2;
       const defFaith = att.id === s1.id ? faith2 : faith1;
       if (attFaith && defFaith && attFaith !== defFaith) {
-        let zealSum = 0, zealN = 0;
-        for (const agent of this.sim.agents.values()) {
-          if (!agent.alive || agent.settlementId !== att.id) continue;
-          if (agent.religion?.beliefId === attFaith) {
-            zealSum += agent.religion.faith ?? 50;
-            zealN++;
+        const compat = this.sim.religionSystem?.getCreedCompatibility?.(attFaith, defFaith) ?? 0;
+        if (compat <= 0.15) {
+          let zealSum = 0, zealN = 0;
+          for (const agent of this.sim.agents.values()) {
+            if (!agent.alive || agent.settlementId !== att.id) continue;
+            if (agent.religion?.beliefId === attFaith) {
+              zealSum += agent.religion.faith ?? 50;
+              zealN++;
+            }
           }
-        }
-        const zeal = zealN > 0 ? zealSum / zealN : 0;
-        if (zeal >= 55) {
-          candidates.push({ attackerId: att.id, defenderId: def.id,
-            reason: "Holy War — Crusade Against Heretics",
-            drivers: [`Competing creeds (${attFaith} vs ${defFaith})`, `Zeal ${Math.round(zeal)}%`],
-            score: 28 + (zeal - 55) * 1.2 });
+          const zeal = zealN > 0 ? zealSum / zealN : 0;
+          if (zeal >= 55) {
+            const clashBoost = compat < 0 ? Math.round(Math.abs(compat) * 18) : 0;
+            const c1Name = this.sim.religionSystem?.getCreed?.(attFaith)?.name || attFaith;
+            const c2Name = this.sim.religionSystem?.getCreed?.(defFaith)?.name || defFaith;
+            candidates.push({ attackerId: att.id, defenderId: def.id,
+              reason: "Holy War — Crusade Against Heretics",
+              drivers: [`Competing creeds (${c1Name} vs ${c2Name})`, `Zeal ${Math.round(zeal)}%`],
+              score: 28 + clashBoost + (zeal - 55) * 1.2 });
+          }
         }
       }
 
@@ -1169,6 +1190,13 @@ export class DiplomacySystem {
     rel.status = DIPLOMATIC_STATUS.WAR;
     rel.score = Math.min(rel.score, 5);
     if (this.grievances.has(attackerId)) this.grievances.get(attackerId).delete(defenderId);
+
+    for (const sObj of [sA, sD]) {
+      if (!sObj.stats) {
+        sObj.stats = { births: 0, deaths: 0, buildingsBuilt: 0, warsFought: 0, battlesWon: 0, peakPopulation: sObj.population || 0 };
+      }
+      sObj.stats.warsFought = (sObj.stats.warsFought || 0) + 1;
+    }
 
     const isHolyWar = casusBelli.includes("Holy War");
     const eraA = this.sim.civilizationAgeSystem?.getSettlementAge?.(attackerId)?.ageId || 1;
@@ -1451,6 +1479,12 @@ export class DiplomacySystem {
 
     // Execute concrete treaty terms
     const victor = victorId ? this.sim.settlementSystem.settlements.get(victorId) : null;
+    if (victor) {
+      if (!victor.stats) {
+        victor.stats = { births: 0, deaths: 0, buildingsBuilt: 0, warsFought: 0, battlesWon: 0, peakPopulation: victor.population || 0 };
+      }
+      victor.stats.battlesWon = (victor.stats.battlesWon || 0) + 1;
+    }
     const defeatedId = victorId ? (victorId === id1 ? id2 : id1) : null;
     const defeated = defeatedId ? this.sim.settlementSystem.settlements.get(defeatedId) : null;
 

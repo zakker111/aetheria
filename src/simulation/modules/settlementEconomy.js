@@ -102,6 +102,11 @@ export function updateEnvironment(sim) {
     }
   }
 
+  // Natural terrain healing: scorched ash fades back to green after fires die out.
+  if (sim.world._scorchedActive && sim.world.scorchedTiles) {
+    sim.world.updateScorchRecovery?.(sim.clock.tick);
+  }
+
   // Perf: fire layer only matters while something burns. Skip the full-map
   // scan entirely when there are no active fires (common case). Fires can
   // only be created via world.startFire(), which sets _fireActive.
@@ -329,7 +334,7 @@ export function updateSettlements(sim) {
         }
       }
 
-      let houses = 0, workshops = 0, farms = 0, temples = 0, towers = 0;
+      let houses = 0, workshops = 0, farms = 0, temples = 0, shrines = 0, churches = 0, cemeteries = 0, towers = 0;
       let granaries = 0, markets = 0, barracksCount = 0, warehouses = 0;
       let windmills = 0, inns = 0, libraries = 0, apothecaries = 0, banks = 0;
       let factories = 0, researchLabs = 0, radarStations = 0, nuclearPlants = 0, missileSilos = 0;
@@ -345,6 +350,9 @@ export function updateSettlements(sim) {
             case "workshop": workshops++; break;
             case "farm": farms++; break;
             case "temple": temples++; break;
+            case "shrine": shrines++; break;
+            case "church": churches++; break;
+            case "cemetery": cemeteries++; break;
             case "tower": case "castle": towers++; break;
             case "granary": granaries++; break;
             case "market": markets++; break;
@@ -361,6 +369,25 @@ export function updateSettlements(sim) {
             case "nuclear_plant": nuclearPlants++; break;
             case "missile_silo": missileSilos++; break;
           }
+        }
+      }
+
+      // Periodic civic & hearth upkeep: populated settlements consume real wood, rations, and industrial ore from surplus
+      if (sim.clock.tick % 100 === 0 && !settlement.ruined && settlement.stockpile && pop >= 6) {
+        const stock = settlement.stockpile;
+        const woodUpkeep = Math.min(Math.max(0, Math.floor((stock.wood || 0) - 10)), 1 + Math.floor(pop / 18));
+        if (woodUpkeep > 0) {
+          stock.wood -= woodUpkeep;
+        }
+        if (pop >= 12) {
+          if ((stock.food || 0) > 12) {
+            stock.food -= 1;
+          } else if ((stock.bread || 0) > 12) {
+            stock.bread -= 1;
+          }
+        }
+        if (factories > 0 && (stock.ore || 0) > 6) {
+          stock.ore -= Math.min(factories, Math.floor(stock.ore - 6));
         }
       }
 
@@ -400,8 +427,14 @@ export function updateSettlements(sim) {
         } else if (timberAvail < 8 && nonRuined >= 3) {
           // Preserve minimal timber reserve before queuing non-essential expansion
           neededType = null;
+        } else if (shrines === 0 && temples === 0 && churches === 0 && pop >= 4) {
+          neededType = "shrine";
         } else if (temples === 0 && pop >= 6) {
           neededType = "temple";
+        } else if (cemeteries === 0 && (pop >= 7 || ((sim._deadDossiers?.length || 0) >= 1 && pop >= 5))) {
+          neededType = "cemetery";
+        } else if (churches === 0 && ageId >= 2 && pop >= 9) {
+          neededType = "church";
         } else if (granaries < targetGranaries) {
           neededType = "granary";
         } else if (markets < targetMarkets) {
@@ -501,7 +534,7 @@ export function updateSettlements(sim) {
           "farm", "granary", "windmill", "workshop", "house", "inn",
           "library", "apothecary", "market", "bank", "tower", "castle",
           "barracks", "factory", "research_lab", "nuclear_plant",
-          "radar_station", "missile_silo", "temple", "warehouse", "dock",
+          "radar_station", "missile_silo", "shrine", "temple", "church", "cemetery", "warehouse", "dock",
           "monument_cairn", "monument_pyramid", "monument_colosseum",
           "monument_citadel", "monument_foundry", "monument_monolith", "monument_atomic_dome"
         ];
@@ -771,7 +804,7 @@ export function updateCareerChanges(sim) {
       typeof rec.assignedAt === "number" ? rec.assignedAt : -1);
     if (assignedAt < 0 || sim.clock.tick - assignedAt < 600) continue;
 
-    if (rec.job === "soldier" || agent.job === "soldier") continue;
+    if (agent.militaryDuty) continue;
 
     const p26 = agent.personality;
     const restlessness = (p26.curious ?? 0.5) * 0.5
@@ -796,18 +829,20 @@ export function updateCareerChanges(sim) {
     } else if (rec.job === "farmer" || rec.job === "gatherer" || rec.job === "lumberjack") {
       if (demand.needsFood.has(homeSid)) continue;
     } else if (rec.job === "soldier") {
-      const adultsHere = sim.settlementSystem.getAgentSettlement(agent.id)
-        ? [...sim.settlementSystem.getAgentSettlement(agent.id).agentIds]
-            .filter((id) => { const x = sim._agentById(id); return x && x.alive && x.lifeStage === "adult"; }).length
-        : 0;
-      const quotaHere = Math.floor(adultsHere / 8);
-      let underArmsHere = 0;
       const stt = sim.settlementSystem.getAgentSettlement(agent.id);
-      if (stt) for (const id of stt.agentIds) {
-        const x = sim._agentById(id);
-        if (x && x.alive && x.lifeStage === "adult" && (x.job === "soldier" || x.militaryDuty)) underArmsHere++;
+      let adultsHere = 0;
+      let underArmsHere = 0;
+      if (stt) {
+        for (const id of stt.agentIds) {
+          const x = sim._agentById(id);
+          if (x && x.alive && x.lifeStage === "adult") {
+            adultsHere++;
+            if (x.job === "soldier" || x.militaryDuty) underArmsHere++;
+          }
+        }
       }
-      if (underArmsHere <= quotaHere) continue;
+      const quotaHere = Math.floor(adultsHere / 8);
+      if (underArmsHere <= Math.max(1, quotaHere)) continue;
     }
     if (pool.length === 0) continue;
 
@@ -892,21 +927,27 @@ export function updatePioneers(sim) {
     }
   }
 
-  // Autonomous organic frontier splintering after world init (keeps tick 0 at 3 cities)
+  // Autonomous organic frontier, elder-led, & disgruntled splintering after world init (keeps tick 0 at 3 cities)
   if (sim.clock.tick >= 120 && sim.clock.tick % 100 === 0 && ssys.settlements.size < 6) {
     const sortedCities = [...ssys.settlements.values()]
-      .filter((s) => s && !s.ruined && (s.population || s.agentIds?.size || 0) >= 16)
+      .filter((s) => s && !s.ruined && (s.population || s.agentIds?.size || 0) >= 12)
       .sort((a, b) => a.id - b.id);
     for (const origin of sortedCities) {
+      const originPop = origin.population || origin.agentIds?.size || 0;
       const candidates = [];
       for (const aid of origin.agentIds || []) {
         const a = sim._agentById(aid);
-        if (a && a.alive && a.lifeStage === "adult" && !a.isMonarch && !a.militaryDuty && !a.captive && !a.isRebel) {
+        if (a && a.alive && (a.lifeStage === "adult" || a.lifeStage === "elder") && !a.isMonarch && !a.militaryDuty && !a.captive && !a.isRebel) {
           candidates.push(a);
         }
       }
       candidates.sort((a, b) => a.id - b.id);
       if (candidates.length < 3) continue;
+
+      const elderOrDisgruntled = candidates.filter(
+        (a) => (a.age || 0) >= 58 || (a.needs?.morale ?? 100) < 48 || (a.needs?.social ?? 100) < 35
+      );
+      if (originPop < 16 && elderOrDisgruntled.length === 0) continue;
 
       let fx = null, fy = null;
       for (let attempt = 0; attempt < 24; attempt++) {
@@ -925,7 +966,17 @@ export function updatePioneers(sim) {
       }
       if (fx === null) continue;
 
-      const colonists = candidates.slice(0, 3);
+      let colonists;
+      let splinterReason = "frontier";
+      if (elderOrDisgruntled.length > 0) {
+        const leader = elderOrDisgruntled[0];
+        if ((leader.age || 0) >= 58) splinterReason = "elder";
+        else splinterReason = "disgruntled";
+        colonists = [leader, ...candidates.filter((c) => c.id !== leader.id)].slice(0, 3);
+      } else {
+        colonists = candidates.slice(0, 3);
+      }
+
       for (const col of colonists) {
         origin.agentIds.delete(col.id);
         ssys.agentSettlementMap.delete(col.id);
@@ -945,7 +996,12 @@ export function updatePioneers(sim) {
       if (colony) {
         for (const col of colonists) {
           if (typeof col.addLifeEvent === "function") {
-            col.addLifeEvent("FOUNDING", `Settled splinter kingdom ${colony.name} from ${origin.name}`, sim.clock.tick, "🏕️", true);
+            const eventMsg = splinterReason === "elder"
+              ? `Followed elder pioneers to found ${colony.name} away from ${origin.name}`
+              : splinterReason === "disgruntled"
+                ? `Departed ${origin.name} in discontent to settle ${colony.name}`
+                : `Settled splinter kingdom ${colony.name} from ${origin.name}`;
+            col.addLifeEvent("FOUNDING", eventMsg, sim.clock.tick, "🏕️", true);
           }
         }
         if (sim.diplomacySystem) {
@@ -957,14 +1013,26 @@ export function updatePioneers(sim) {
           sim.diplomacySystem.seedFeud(colony.id, origin.id, 65);
         }
         if (sim.chronicleSystem?.add) {
-          sim.chronicleSystem.add("founding", `🚩 Frontier colonists from ${origin.name} broke away to establish ${colony.name}!`, {
-            icon: "🚩",
+          const leaderName = colonists[0]?.name || "Pioneers";
+          const chronicleMsg = splinterReason === "elder"
+            ? `👴 Elder ${leaderName} led pioneers from ${origin.name} to found ${colony.name}!`
+            : splinterReason === "disgruntled"
+              ? `🔥 Disgruntled citizens led by ${leaderName} broke away from ${origin.name} to establish ${colony.name}!`
+              : `🚩 Frontier colonists from ${origin.name} broke away to establish ${colony.name}!`;
+          sim.chronicleSystem.add("founding", chronicleMsg, {
+            icon: splinterReason === "elder" ? "👴" : "🚩",
             x: fx,
             y: fy
           });
         }
         sim.eventBus.emit("SETTLEMENT_FOUNDED", {
-          id: colony.id, name: colony.name, x: fx, y: fy, population: colonists.length, splinterFrom: origin.name
+          id: colony.id,
+          name: colony.name,
+          x: fx,
+          y: fy,
+          population: colonists.length,
+          splinterFrom: origin.name,
+          splinterReason
         });
       }
       break;
@@ -1137,8 +1205,8 @@ export function commissionSettlementBuilding(sim, settlementId, buildingType, { 
     return { ok: false, reason: `${meta.name} unlocks in Era ${meta.minEra}` };
   }
 
-  const W = sim.world.width || 128;
-  const H = sim.world.height || 128;
+  const W = sim.world.width || 160;
+  const H = sim.world.height || 160;
   let chosenX = null;
   let chosenY = null;
   for (let r = 2; r <= 12 && chosenX === null; r++) {
@@ -1149,7 +1217,7 @@ export function commissionSettlementBuilding(sim, settlementId, buildingType, { 
       const by = Math.floor(settlement.center.y + Math.sin(ang) * r);
       if (bx < 4 || by < 4 || bx >= W - 4 || by >= H - 4) continue;
       if (!sim.world.isWalkable(bx, by)) continue;
-      if (sim.fortificationSystem?.segments?.has(`${bx},${by}`)) continue;
+      if (sim.fortificationSystem?.getSegmentAt?.(bx, by)) continue;
       const nearBld = sim.buildings.some((b) => b && !b.isRuined && Math.hypot(b.x - bx, b.y - by) < 1.6);
       if (nearBld) continue;
       chosenX = bx;

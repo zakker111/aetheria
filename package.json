@@ -22,7 +22,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:full",
-    "test:fast": "node tests/phase6_coastal_river.mjs && node tests/phase7_lakes_bridges.mjs && node tests/combat_lethality_lore.mjs && node tests/spawning_and_diplomacy.mjs && node tests/fortifications_siege_breach.mjs && node tests/phase6_succession_heroes.mjs && node tests/deep_structures_ecology_diplomacy.mjs && node tests/modern_nuclear_total_war.mjs && node tests/chaos_diplomacy_nukes_history.mjs && node tests/war_phase3b.mjs && node tests/wonders_espionage_archive.mjs && node tests/era_buildings_upgrades.mjs && node tests/determinism.mjs",
+    "test:fast": "node tests/phase6_coastal_river.mjs && node tests/phase7_lakes_bridges.mjs && node tests/combat_lethality_lore.mjs && node tests/spawning_and_diplomacy.mjs && node tests/fortifications_siege_breach.mjs && node tests/phase6_succession_heroes.mjs && node tests/deep_structures_ecology_diplomacy.mjs && node tests/modern_nuclear_total_war.mjs && node tests/chaos_diplomacy_nukes_history.mjs && node tests/war_phase3b.mjs && node tests/wonders_espionage_archive.mjs && node tests/era_buildings_upgrades.mjs && node tests/phase13_features.mjs && node tests/phase14_features.mjs && node tests/determinism.mjs",
     "test:deep": "node tests/dynasty_warfare.mjs && node tests/city_expansion_era_landmarks.mjs && node tests/scenario_warring.mjs && node tests/historical_lives_and_people.mjs && node tests/phase8_tactical_mergers.mjs && node tests/stress_population.mjs && node tests/soak.mjs && node tests/gossip.mjs && node tests/warvisible.mjs && node tests/supplychain.mjs && node tests/combatdepth.mjs && node tests/soldiers.mjs",
     "test:full": "npm run test:fast && npm run test:deep"
   },

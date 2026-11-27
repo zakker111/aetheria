@@ -1,6 +1,6 @@
 # 🌍 Aetheria — 2.5D Emergent Civilization & History Simulator
 
-[![Build & Tests](https://img.shields.io/badge/tests-25%2F25%20passing-brightgreen)](#-automated-test-suites)
+[![Build & Tests](https://img.shields.io/badge/tests-27%2F27%20passing-brightgreen)](#-automated-test-suites)
 [![React 19](https://img.shields.io/badge/React-19.3-blue)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.x-blue)](https://www.typescriptlang.org/)
 [![Vite](https://img.shields.io/badge/Vite-8.x-purple)](https://vitejs.dev/)
@@ -43,7 +43,9 @@
 - **Lethal Sieges, City Mergers & Union Civil Wars**: Clashes and storming assaults generate real mortal casualties and named historic battles; close large peaceful cities can unite into a **Metropolis** (`🌆`) and keep expanding outward across larger urban footprints (`Grand Metropolis`), occasionally sparking dynastic union power struggles and civil wars.
 - **Era 1–6 Upgradable Civic Buildings & Era 1–7 Heritage Landmarks**: Upgrade Farms, Windmills, Granaries, Inns, Libraries, Apothecaries, Castles, Banks, Factories, Research Labs, Air Defense Radars, Nuclear Plants, and Missile Silos through **Lv 1–3**, alongside distinct **Era 1–7 Grand Structures** (`Stonehenge Hearth Circle` through `Orbital & Atomic Complex`) built to endure wars, fires, and outer nuclear shockwaves into the Modern Era.
 - **Cultural Wonders, Espionage Guilds & JSON Archives**: Multi-stage Wonders, Merchant/Masons/Shadow guilds, covert sabotage (`granary`, `bridge`, `warhead`, `revolt`), Era 1–7 chronicle filtering, and downloadable JSON World & Chronicle export/import.
-- **City Walls, Active Watchtowers & Physical Siege Breaches**: Towns fortify with 4-connected octagonal walls (`Timber Palisade` → `Stone Curtain Wall` → `Reinforced Bastion Wall`), friendly/hostile gatehouses, arrow/musket/tracer-firing corner watchtowers, and physical wall breaching where besiegers blast open passable rubble gaps before storming the city.
+- **City Walls, Active Watchtowers & Physical Siege Breaches**: Towns fortify with 4-connected octagonal walls (`Timber Palisade` → `Stone Curtain Wall` → `Reinforced Bastion Wall`), friendly/hostile gatehouses, arrow/musket/tracer-firing corner watchtowers, physical wall breaching, and automatic peacetime salvage of obsolete inner walls and cratered roads.
+- **Procedural Faiths, Cemeteries & Conjured Spirits**: Deterministic procedural creeds with doctrinal tenets (`compat` driving diplomacy & Holy Wars), **Shrines**, **Churches**, and **Cemeteries** interring fallen citizens with inspectable Memorials, plus Priest rituals that conjure glowing **Spectral Ancestor Spirits**.
+- **Paved Stone Roads, Elder/Disgruntled Splinters & World Statistics**: Heavy-traffic Era 2+ avenues upgrade into `1.85x` speed stone roads, citizens visit peaceful neighboring towns, Elder pioneers or disgruntled citizens split off into new colonies, deaths span seasonal disease, accidents, and rare procedural misadventures, and the **World Statistics** dashboard plots interactive SVG pie charts & fallen realm histories alongside inline renaming.
 
 ### ⚓ Coastal, River & Bridge Engineering
 - **Great Lakes & Connected River Watersheds**: Procedural worlds carve expansive organic lakes (up to 28 tiles across) linked naturally high-to-low by meandering 2–4 tile wide rivers, flared lake inlets/outlets, highland feeder tributaries, and gentle riparian valley banks.
@@ -118,13 +120,13 @@ Open your browser and navigate to `http://localhost:3000`.
 
 ## 🧪 Automated Test Suites
 
-Aetheria maintains 25 comprehensive automated test suites enforcing 100% save/load determinism, economic loops, living ecology, deeper structures, Era 1–6 upgradable buildings, Era 1–7 heritage landmarks, continuous city expansion, historical agent lives, heirlooms, warfare rules, Nuclear Age deterrence, fortifications, maritime logistics, bridge engineering, espionage/wonders, carrying capacity, and high-population performance:
+Aetheria maintains 27 comprehensive automated test suites enforcing 100% save/load determinism, economic loops, living ecology, deeper structures, Era 1–6 upgradable buildings, Era 1–7 heritage landmarks, continuous city expansion, historical agent lives, heirlooms, warfare rules, Nuclear Age deterrence, fortifications, maritime logistics, bridge engineering, espionage/wonders, procedural creeds, cemeteries & conjured spirits, paved roads, splinter settlements, and high-population performance:
 
 ```bash
-# Run all 25 automated test suites (CI parity)
+# Run all 27 automated test suites (CI parity)
 npm test
 
-# Run fast verification & determinism tier (13 rapid suites)
+# Run fast verification & determinism tier (15 rapid suites)
 npm run test:fast
 
 # Run deep multi-thousand-tick endurance tier (12 suites)
@@ -167,6 +169,8 @@ npm run build
 | **Historical Lives & People Browser** | `tests/historical_lives_and_people.mjs` | Deterministic surnames, multi-generation inheritance, Era-stamped `lifeHistory`, builder/upgrade attribution, heirlooms, biographies, people roster, and save/load determinism |
 | **Combat Depth & Wounds** | `tests/combatdepth.mjs` | Wound/injury states, deterministic combat resolution, and save/load parity |
 | **Soldier Roles & Formations** | `tests/soldiers.mjs` | Dedicated soldier recruitment, unit roles, morale, and tactical engagement |
+| **Statistics, Era Mines, Raids & Autonomy** | `tests/phase13_features.mjs` | World Statistics SVG snapshots, Era 2/6 mountain deposits, external border raids, ruin clearing, and stalemate peace |
+| **Procedural Faiths, Cemeteries, Paved Roads & Mortality** | `tests/phase14_features.mjs` | Obsolete wall/road salvage, fallen settlements, inline renaming, disease/accident/misadventure deaths, procedural creeds, cemetery burials & conjured spirits, paved stone roads, inter-town visits, and splinter colonies |
 
 ---
 
@@ -222,7 +226,7 @@ git push -u origin main
 │   │   ├── chronicleSystem.js  # Living historical chronicle and event logger
 │   │   └── religionSystem.js   # Beliefs, temples, missionaries, and inquisitions
 │   └── utils/             # Deterministic PRNG, math, spatial hashing & gzipped IndexedDB saveStorage.ts
-├── tests/                 # 25 automated regression & determinism test suites
+├── tests/                 # 27 automated regression & determinism test suites
 ├── index.html             # HTML5 entry point
 ├── package.json           # Scripts and dependencies
 └── vite.config.ts         # Vite bundler configuration (relative base for Pages)

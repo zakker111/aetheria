@@ -34,8 +34,8 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
       const normX = Math.max(0, Math.min(1, clickX / (rect.width || RADAR_SIZE)));
       const normY = Math.max(0, Math.min(1, clickY / (rect.height || RADAR_SIZE)));
 
-      const worldW = simulation.world.width || 128;
-      const worldH = simulation.world.height || 128;
+      const worldW = simulation.world.width || 160;
+      const worldH = simulation.world.height || 160;
 
       onPanTo(normX * worldW, normY * worldH);
     },
@@ -64,8 +64,8 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
     const updateTerrainBuffer = () => {
       const world = simulation?.world;
       if (!world || !tCtx) return;
-      const W = world.width || 128;
-      const H = world.height || 128;
+      const W = world.width || 160;
+      const H = world.height || 160;
       const scaleX = RADAR_SIZE / W;
       const scaleY = RADAR_SIZE / H;
 
@@ -107,8 +107,8 @@ const MiniMapRadarComponent: React.FC<MiniMapRadarProps> = ({
       const world = simulation?.world;
       if (!world) return;
 
-      const W = world.width || 128;
-      const H = world.height || 128;
+      const W = world.width || 160;
+      const H = world.height || 160;
       const scaleX = RADAR_SIZE / W;
       const scaleY = RADAR_SIZE / H;
 

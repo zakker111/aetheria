@@ -13,14 +13,18 @@ interface WarRoomTabProps {
 
 export const WarRoomTab: React.FC<WarRoomTabProps> = ({
   simulation,
-  settlements,
-  wars,
-  warHistory,
-  activeCivilWars,
+  settlements: rawSettlements,
+  wars: rawWars,
+  warHistory: rawWarHistory,
+  activeCivilWars: rawActiveCivilWars,
   onPanTo,
   onClose,
   onRefresh,
 }) => {
+  const settlements = Array.isArray(rawSettlements) ? rawSettlements : [];
+  const wars = Array.isArray(rawWars) ? rawWars : [];
+  const warHistory = Array.isArray(rawWarHistory) ? rawWarHistory : [];
+  const activeCivilWars = Array.isArray(rawActiveCivilWars) ? rawActiveCivilWars : [];
   const handleResolveCivilWar = (dyn: any, outcome: 'loyalist_victory' | 'usurpation') => {
     if (!simulation.dynastySystem?.resolveCivilWar) return;
     simulation.dynastySystem.resolveCivilWar(dyn, outcome);

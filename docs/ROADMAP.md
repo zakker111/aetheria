@@ -38,7 +38,7 @@ Aetheria is an emergent 2.5D isometric civilization and history simulation game 
 - **Great Lakes, Harbors & Bridges (`navalSystem.js`, `infrastructureSystem.js`)**: Organic watersheds, shoreline docks, fishing boats, river cargo barges, amphibious raid longboats, and multi-tile timber bridges.
 - **City Walls, Watchtowers & Siege Breaches (`fortificationSystem.js`)**: Era-scaled 4-connected walls, friendly/hostile gates, active watchtowers, and physical siege breaches into rubble gaps.
 - **Era 1–7 Structures, Wonders & Espionage**: Lv 1–3 civic upgrades, enduring Era 1–7 heritage landmarks, outward urban expansion & Metropolis mergers, 3-stage Cultural Wonders, guild espionage, and Modern/Nuclear Total War deterrence.
-- **Historical Lives & People Browser**: Deterministic multi-generation surnames, Era-stamped `lifeHistory`, builder/upgrade attributions, heirloom inheritance, biographies/epitaphs, and Chancellery (`C`) exploration.
+- **Historical Lives, Religion & Analytics**: Deterministic multi-generation surnames, Era-stamped `lifeHistory`, heirloom inheritance, procedural faiths with doctrinal diplomacy, cemeteries with conjured ancestor spirits, paved Era 2+ avenues, fallen realm histories, inline renaming, and interactive World Statistics SVG charts inside Chancellery (`C`).
 
 ### 6. High-Agent Spatial LOD Architecture
 - **Tier 0 (Focus)**: Full 60Hz cognitive steering and animation.
@@ -48,7 +48,7 @@ Aetheria is an emergent 2.5D isometric civilization and history simulation game 
 
 ---
 
-## 🧪 Automated Test Suites (25/25)
+## 🧪 Automated Test Suites (27/27)
 
 1. `tests/soak.mjs` — 1,000+ tick longevity benchmark ensuring 0 crashes and demographic balance.
 2. `tests/determinism.mjs` — Bit-exact RNG and state progression across identical seeds and save/load resumes.
@@ -75,6 +75,8 @@ Aetheria is an emergent 2.5D isometric civilization and history simulation game 
 23. `tests/historical_lives_and_people.mjs` — Deterministic surnames, inheritance, `lifeHistory`, heirlooms, and people roster.
 24. `tests/combatdepth.mjs` — Battlefield wounds, veteran campaign counters, and deterministic combat recovery.
 25. `tests/soldiers.mjs` — Professional soldier recruitment, population caps, economy tracking, and save/load parity.
+26. `tests/phase13_features.mjs` — World Statistics snapshots, Era 2/6 mountain deposits, external border raids, ruin salvage, and stalemate peace.
+27. `tests/phase14_features.mjs` — Obsolete wall/road salvage, fallen realms archive, inline renaming, diverse mortality causes, procedural creeds, cemeteries & spirits, paved roads, inter-town visits, and splinter settlements.
 
 ---
 

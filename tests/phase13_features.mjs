@@ -226,28 +226,24 @@ console.log('--- Testing Phase 13 Features: Analytics, Faith Tools, Era Mountain
     'cleanObsoleteInfrastructure clears obsolete road tiles buried in heavy craters');
 
   // C) Plausible Peace: Deadlocked stalemate signs White Peace, NOT unearned Conquest & Annexation
-  const war = sim.diplomacySystem.activeWars.find((w) => w.active) || {
-    id: 99,
-    attackerId: s1.id,
-    attackerName: s1.name,
-    defenderId: s2.id,
-    defenderName: s2.name,
-    casualties: { [s1.id]: 4, [s2.id]: 4 },
-    weariness: { [s1.id]: 55, [s2.id]: 55 },
-    plunderedBy: {},
-    startTick: 0,
-    active: true
-  };
+  let war = sim.diplomacySystem.activeWars.find((w) => w.active);
+  if (!war) {
+    war = sim.diplomacySystem.declareWar(s1.id, s2.id, 'Border Dispute (Conquest)');
+  }
   war.casualties[war.attackerId] = 4;
   war.casualties[war.defenderId] = 4;
+  war.weariness = { [war.attackerId]: 55, [war.defenderId]: 55 };
+  war.casusBelli = 'Conquest';
   war.goal = 'conquest';
   war.isConquest = true;
   const attSet = sim.settlementSystem.settlements.get(war.attackerId);
   const defSet = sim.settlementSystem.settlements.get(war.defenderId);
-  sim.diplomacySystem.convenePeaceConference(war, 240);
+  const report = sim.diplomacySystem.convenePeaceConference(war.attackerId, war.defenderId, null, 'War Weariness');
   const latestLog = sim.diplomacySystem.diplomaticHistory[0];
-  assertTrue(attSet.status !== 'annexed' && defSet.status !== 'annexed' && latestLog && !String(latestLog.title || '').includes('Annexation'),
-    `Deadlocked stalemate war signs plausible peace (${latestLog?.title}) without unearned annexation`);
+  assertTrue(
+    Boolean(report && report.terms === 'White Peace Concordat' && attSet.status !== 'annexed' && defSet.status !== 'annexed' && latestLog && !String(latestLog.title || '').includes('Annexation')),
+    `Deadlocked stalemate war signs plausible peace (${report?.terms} / ${latestLog?.title}) without unearned annexation`
+  );
 }
 
 console.log('ALL PHASE 13 FEATURE TESTS PASSED!');
